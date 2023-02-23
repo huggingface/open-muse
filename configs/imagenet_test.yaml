@@ -1,0 +1,70 @@
+experiment:
+    name: "imagenet"
+    project: "muse"
+    output_dir: "imagenet"
+    max_train_examples: 110000000
+    num_eval_images: 1000
+    save_every: 1000
+    log_every: 50
+
+
+model:
+    vq_model:
+        pretrained: "path to vq model"
+
+    transformer:
+        vocab_size: 2025 # (1024 + 1000 + 1 -> Vq + Imagenet + <mask>)
+        hidden_size: 64
+        num_hidden_layers: 2
+        num_attention_heads: 4
+        intermediate_size: 256
+        hidden_dropout: 0.1
+        attention_dropout: 0.1
+        max_position_embeddings: 256
+        initializer_range: 0.02
+        layer_norm_eps: 1e-6
+        use_bias: False
+
+    gradient_checkpointing: True
+
+
+dataset:
+    params:
+        path: "imagenet-1k-" # path to imagenet dataset
+        streaming: True
+        shuffle_buffer_size: 5000
+        batch_size: ${training.batch_size}
+        workers: 1
+        class_mapping: "scripts/metadata/imagenet_idx_to_prompt.json"
+        resolution: 256
+    preprocessing:
+        resolution: 256
+        center_crop: True
+        random_flip: True
+
+
+optimizer:
+    name: adamw
+    params:
+        learning_rate: 0.0001
+        beta1: 0.9
+        beta2: 0.98
+        weight_decay: 0.01
+        epsilon: 0.00000001
+
+
+lr_scheduler:
+    scheduler: "ConstantWithWarmup"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 500
+
+
+training:
+    gradient_accumulation_steps: 1
+    batch_size: 16
+    mixed_precision: bf16
+    use_ema: False
+    seed: 42
+    max_train_steps: 1000
+    num_epochs: 100
