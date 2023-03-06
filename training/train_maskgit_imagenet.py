@@ -207,15 +207,22 @@ def main():
         model.train()
         for step, batch in enumerate(train_dataloader):
             with accelerator.accumulate(model):
-                image_tokens = vq_model.encode(batch["pixel_values"])[1]
+                # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
+                with torch.no_grad():
+                    image_tokens = vq_model.encode(batch["pixel_values"])[1]
+
                 batch_size, seq_len = image_tokens.shape
+
+                # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
 
                 # Sample a random timestep for each image
                 timesteps = torch.rand(batch_size, device=image_tokens.device)
                 # Sample a random mask probability for each image using timestep and cosine schedule
                 mask_prob = cosine_schedule(timesteps)
                 # creat a random mask for each image
+
                 num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+
                 batch_randperm = torch.rand((batch, seq_len), device=image_tokens.device).argsort(dim=-1)
                 mask = batch_randperm < num_token_masked.unsqueeze(-1)
                 # mask images and create input and labels
