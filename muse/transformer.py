@@ -281,6 +281,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 def create_custom_forward(module):
                     def custom_forward(*inputs):
                         return module(*inputs)
+
                     return custom_forward
 
                 hidden_states = checkpoint(create_custom_forward(layer), hidden_states, encoder_hidden_states)
