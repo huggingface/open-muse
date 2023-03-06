@@ -129,7 +129,7 @@ class UpsamplingBlock(nn.Module):
         block_out = self.config.hidden_channels * self.config.channel_mult[self.block_idx]
 
         res_blocks = []
-        for _ in range(self.config.num_res_blocks + 1):
+        for _ in range(self.config.num_res_blocks):
             res_blocks.append(ResnetBlock(block_in, block_out, dropout_prob=self.config.dropout))
             block_in = block_out
         self.block = nn.ModuleList(res_blocks)
@@ -152,14 +152,13 @@ class UpsamplingBlock(nn.Module):
 class Encoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-
+        self.config = config
         # downsampling
         self.conv_in = Conv2dSame(self.config.num_channels, self.config.hidden_channels, kernel_size=3, bias=False)
 
-        curr_res = self.config.resolution
         downsample_blocks = []
         for i_level in range(self.config.num_resolutions):
-            downsample_blocks.append(DownsamplingBlock(self.config, curr_res, block_idx=i_level))
+            downsample_blocks.append(DownsamplingBlock(self.config, block_idx=i_level))
         self.down = nn.ModuleList(downsample_blocks)
 
         # middle
