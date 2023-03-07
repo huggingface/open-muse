@@ -9,7 +9,7 @@ from maskgit.utils import restore_from_path
 
 from muse import MaskGitVQGAN
 
-logger = logging.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def rename_flax_dict(params):
@@ -89,6 +89,7 @@ def rename_flax_dict(params):
         res_name, idx = name.split("_")
         idx = int(idx) - 2
         idx1, idx2 = block_map[int(idx)]
+        idx1 = 4 - idx1
         new_key = key.replace(name, f"up.{idx1}.block.{idx2}")
         new_key = new_key.replace("Conv_0", "conv1")
         new_key = new_key.replace("Conv_1", "conv2")
@@ -101,8 +102,8 @@ def rename_flax_dict(params):
     for i in range(1, 5):
         w = f"decoder.Conv_{i}.kernel"
         b = f"decoder.Conv_{i}.bias"
-        new_w = f"decoder.up.{i}.upsample_conv.kernel"
-        new_b = f"decoder.up.{i}.upsample_conv.bias"
+        new_w = f"decoder.up.{5 - i}.upsample_conv.kernel"
+        new_b = f"decoder.up.{5 - i}.upsample_conv.bias"
         params[new_w] = params.pop(w)
         params[new_b] = params.pop(b)
     keys = list(params.keys())
@@ -141,7 +142,7 @@ def load_flax_weights_in_pytorch_model(pt_model, flax_state):
     missing_keys = set(pt_model_dict.keys())
 
     for flax_key, flax_tensor in flax_state.items():
-        flax_key_tuple = flax_key.split(".")
+        flax_key_tuple = tuple(flax_key.split("."))
 
         # rename flax weights to PyTorch format
         if flax_key_tuple[-1] == "kernel" and flax_tensor.ndim == 4 and ".".join(flax_key_tuple) not in pt_model_dict:
@@ -209,3 +210,4 @@ def convert(flax_model_path, pytorch_dump_folder_path):
 
     pt_model = load_flax_weights_in_pytorch_model(pt_model, params)
     pt_model.save_pretrained(pytorch_dump_folder_path)
+    return pt_model
