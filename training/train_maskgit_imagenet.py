@@ -13,13 +13,11 @@ from accelerate.utils import set_seed
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 from torchvision import transforms
-from tqdm import tqdm
 
 import muse
 from muse import MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
-from muse.training_utils import EMA
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -213,10 +211,13 @@ def main():
 
     logger.info("Begin training")
 
+    if config.training.overfit_one_batch:
+        train_dataloader = [next(iter(train_dataloader))]
+
     now = time.time()
     for epoch in range(first_epoch, config.training.num_train_epochs):
         model.train()
-        if datasets_config.streaming:
+        if datasets_config.streaming and not config.training.overfit_one_batch:
             train_dataset.set_epoch(epoch)
         for batch in train_dataloader:
             with accelerator.accumulate(model):
@@ -248,6 +249,11 @@ def main():
                 inout_ids = torch.cat([class_ids.unsqueeze(-1), inout_ids], dim=-1)
                 # prepend -100 to the labels as we don't want to predict the class ids
                 labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
+
+                # log the inputs for the first step of the first epoch
+                if global_step == 0 and epoch == 0:
+                    logger.info("Input ids: {}".format(inout_ids))
+                    logger.info("Labels: {}".format(labels))
 
                 _, loss = model(input_ids=inout_ids, labels=labels)
 
@@ -285,13 +291,13 @@ def main():
                         save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
-                    # TODO: Add generation
+                # TODO: Add generation
 
     # Save the final trained checkpoint
     accelerator.wait_for_everyone()
-    if accelerator.is_main_process():
-        model = accelerator.unwrap_model()
-        model.save_pretrained(config.training.output_dir)
+    if accelerator.is_main_process:
+        model = accelerator.unwrap_model(model)
+        model.save_pretrained(config.experiment.output_dir)
 
     accelerator.end_training()
 

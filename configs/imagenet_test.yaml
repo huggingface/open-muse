@@ -14,16 +14,18 @@ model:
 
     transformer:
         vocab_size: 2025 # (1024 + 1000 + 1 -> Vq + Imagenet + <mask>)
-        hidden_size: 64
-        num_hidden_layers: 2
-        num_attention_heads: 4
-        intermediate_size: 256
-        hidden_dropout: 0.0
-        attention_dropout: 0.0
         max_position_embeddings: 257 # (+1 for class id)
+        hidden_size: 512
+        num_hidden_layers: 8
+        num_attention_heads: 8
+        intermediate_size: 2048
+        codebook_size: 1024
+        num_classes: 1000
         initializer_range: 0.02
         layer_norm_eps: 1e-6
         use_bias: False
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
 
     gradient_checkpointing: False
 
@@ -65,5 +67,6 @@ training:
     mixed_precision: "no"
     use_ema: False
     seed: 42
-    max_train_steps: 10
-    num_train_epochs: 100
+    max_train_steps: 1000
+    num_train_epochs: 1000
+    overfit_one_batch: True
