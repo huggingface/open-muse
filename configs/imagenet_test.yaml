@@ -5,12 +5,12 @@ experiment:
     max_train_examples: 110000000
     num_eval_images: 1000
     save_every: 1000
-    log_every: 50
+    log_every: 1
 
 
 model:
     vq_model:
-        pretrained: "path to vq model"
+        pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
 
     transformer:
         vocab_size: 2025 # (1024 + 1000 + 1 -> Vq + Imagenet + <mask>)
@@ -18,24 +18,23 @@ model:
         num_hidden_layers: 2
         num_attention_heads: 4
         intermediate_size: 256
-        hidden_dropout: 0.1
-        attention_dropout: 0.1
-        max_position_embeddings: 256
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
+        max_position_embeddings: 257 # (+1 for class id)
         initializer_range: 0.02
         layer_norm_eps: 1e-6
         use_bias: False
 
-    gradient_checkpointing: True
+    gradient_checkpointing: False
 
 
 dataset:
     params:
-        path: "imagenet-1k-" # path to imagenet dataset
+        path: "imagenet-1k" # path to imagenet dataset
         streaming: True
         shuffle_buffer_size: 5000
         batch_size: ${training.batch_size}
         workers: 1
-        class_mapping: "scripts/metadata/imagenet_idx_to_prompt.json"
         resolution: 256
     preprocessing:
         resolution: 256
@@ -54,7 +53,7 @@ optimizer:
 
 
 lr_scheduler:
-    scheduler: "ConstantWithWarmup"
+    scheduler: "constant"
     params:
         learning_rate: ${optimizer.params.learning_rate}
         warmup_steps: 500
@@ -62,9 +61,9 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    batch_size: 16
-    mixed_precision: bf16
+    batch_size: 4
+    mixed_precision: "no"
     use_ema: False
     seed: 42
-    max_train_steps: 1000
-    num_epochs: 100
+    max_train_steps: 10
+    num_train_epochs: 100
