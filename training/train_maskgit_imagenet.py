@@ -10,7 +10,6 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from datasets import logging
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 from torchvision import transforms
@@ -22,7 +21,7 @@ from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 from muse.training_utils import EMA
 
-logger = get_logger(__name__, log_level=logging.INFO)
+logger = get_logger(__name__, log_level="INFO")
 
 
 def get_config():
@@ -90,7 +89,7 @@ def main():
         datasets.utils.logging.set_verbosity_error()
         muse.logging.set_verbosity_error()
 
-    if accelerator.is_main_process():
+    if accelerator.is_main_process:
         os.makedirs(config.experiment.output_dir, exist_ok=True)
         config_path = Path(config.experiment.output_dir) / "config.yaml"
         logging.info(f"Saving config to {config_path}")
@@ -105,7 +104,7 @@ def main():
     #########################
     vq_model = MaskGitVQGAN.from_pretrained(config.model.vq_model.pretrained)
     model = MaskGitTransformer(**config.model.transformer)
-    mask_id = model.mask_id
+    mask_id = model.config.mask_token_id
 
     # Freeze the VQGAN
     vq_model.requires_grad_(False)
@@ -128,10 +127,11 @@ def main():
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
     datasets_config = config.dataset.params
-    dataset = datasets.load_dataset(datasets_config.path, streaming=datasets_config.streaming)
+    dataset = datasets.load_dataset(datasets_config.path, streaming=datasets_config.streaming, use_auth_token=True)
+    dataset = dataset.with_format("torch")
 
     # Preprocessing the datasets.
-    preproc_config = config.preprocessing
+    preproc_config = config.dataset.preprocessing
     train_transforms = transforms.Compose(
         [
             transforms.Resize(preproc_config.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
@@ -161,8 +161,8 @@ def main():
 
     def collate_fn(examples):
         pixel_values = torch.stack([example["image"] for example in examples])
-        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
-        class_id = torch.stack([example["label"] for example in examples])
+        pixel_values = pixel_values.float()
+        class_id = torch.tensor([example["label"] for example in examples])
         return {"pixel_values": pixel_values, "class_id": class_id}
 
     ##################################
@@ -186,7 +186,11 @@ def main():
     )
 
     # Prepare everything with accelerator
-    model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
+    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, lr_scheduler
+    )
+
+    vq_model.to(accelerator.device)
 
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
@@ -205,7 +209,9 @@ def main():
     now = time.time()
     for epoch in range(first_epoch, config.training.num_train_epochs):
         model.train()
-        for step, batch in enumerate(train_dataloader):
+        if datasets_config.streaming:
+            train_dataset.set_epoch(epoch)
+        for batch in train_dataloader:
             with accelerator.accumulate(model):
                 # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
                 with torch.no_grad():
@@ -223,7 +229,7 @@ def main():
 
                 num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
 
-                batch_randperm = torch.rand((batch, seq_len), device=image_tokens.device).argsort(dim=-1)
+                batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
                 mask = batch_randperm < num_token_masked.unsqueeze(-1)
                 # mask images and create input and labels
                 inout_ids = torch.where(mask, mask_id, image_tokens)
@@ -249,25 +255,27 @@ def main():
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 global_step += 1
-                examples_since_last_logged += batch["input_ids"].shape[0] * config.training.gradient_accumulation_steps
+                examples_since_last_logged += (
+                    batch["pixel_values"].shape[0] * config.training.gradient_accumulation_steps
+                )
 
-                if global_step % config.experiment.log_every:
+                if global_step % config.experiment.log_every == 0:
                     images_per_second_per_gpu = examples_since_last_logged / (time.time() - now)
                     # Log metrics
                     logs = {
                         "step_loss": avg_loss.item(),
-                        "lr": lr_scheduler.current_lr(),
+                        "lr": lr_scheduler.get_last_lr(),
                         "images/sec/gpu": images_per_second_per_gpu,
                     }
                     accelerator.log(logs, step=global_step)
 
                     logger.info(
-                        f" Step: {step} Loss: {avg_loss.item():0.4f} im/s/GPU: {images_per_second_per_gpu:0.2f}"
+                        f" Step: {global_step} Loss: {avg_loss.item():0.4f} im/s/GPU: {images_per_second_per_gpu:0.2f}"
                     )
 
                 if global_step % config.experiment.save_every == 0:
                     if accelerator.is_main_process:
-                        save_path = Path(config.training.output_dir) / f"checkpoint-{global_step}"
+                        save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
                     # TODO: Add generation
@@ -279,3 +287,7 @@ def main():
         model.save_pretrained(config.training.output_dir)
 
     accelerator.end_training()
+
+
+if __name__ == "__main__":
+    main()
