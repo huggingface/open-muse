@@ -213,19 +213,21 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
         self,
-        vocab_size,
+        vocab_size,  # codebook_size + 1 (for the mask token), for class-conditioned generation it'll be codebook_size + num_classes + 1
         hidden_size=768,
         num_hidden_layers=12,
         num_attention_heads=12,
         intermediate_size=3072,
         hidden_dropout=0.1,
         attention_dropout=0.1,
-        max_position_embeddings=256,
+        max_position_embeddings=256,  # for clas-conditioned generation it'll be 256 + 1 (for the class token)
         encoder_hidden_size=1024,  # T5-large
         add_cross_attention=False,
         initializer_range=0.02,
         layer_norm_eps=1e-12,  # Used from MaskGit paper, too large ?
         use_bias=False,
+        codebook_size=1024,
+        num_classes=None,  # set for class-conditioned generation
         **kwargs,
     ):
         super().__init__()
@@ -238,7 +240,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.attention_dropout = attention_dropout
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
-        self.config.mask_id = vocab_size
+        self.config.mask_token_id = vocab_size - 1
 
         self.embed = Embed(
             self.vocab_size,
@@ -297,28 +299,26 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     def generate(
         self,
         class_ids: torch.LongTensor,
-        fmap_size=None,
         temperature=1.0,
         topk_filter_thres=0.9,
         can_remask_prev_masked=False,  # TODO: implement this
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         cond_scale=3,  # TODO: implement this
-        mask_token_id=2,
         noise_schedule: Callable = cosine_schedule,
     ):
         # begin with all image token ids masked
+        mask_token_id = self.config.mask_token_id
         device = next(self.parameters()).device
         seq_len = self.max_position_embeddings - 1  # 256 image tokens + 1 class token, hardcode for now
 
         batch_size = len(class_ids)
         shape = (batch_size, seq_len)
 
+        # shift the class ids by the codebook size
+        class_ids += self.config.codebook_size
+
         # initialize with all image tokens masked
         input_ids = torch.ones((1, seq_len), dtype=torch.long, device=device) * mask_token_id
-        # prepend class token to input_ids
-        input_ids = torch.cat(
-            [class_ids[:, None], input_ids], dim=1
-        )  # TODO: Need to shift the class ids by the codebook size
         scores = torch.zeros(shape, dtype=torch.float32, device=device)
 
         starting_temperature = temperature
@@ -332,7 +332,14 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             masked_indices = scores.topk(num_token_masked, dim=-1).indices
             input_ids = input_ids.scatter(1, masked_indices, mask_token_id)
 
+            # prepend class token to input_ids
+            input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+
             logits = self(input_ids)
+
+            # remove class token
+            input_ids = input_ids[:, 1:]
+            logits = logits[:, 1:]
 
             filtered_logits = top_k(logits, topk_filter_thres)
 
@@ -349,4 +356,4 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             scores = 1 - probs_without_temperature.gather(2, pred_ids[..., None])
             scores = rearrange(scores, "... 1 -> ...")  # TODO: use torch
 
-        return input_ids[:, 1:]  # remove class token
+        return input_ids

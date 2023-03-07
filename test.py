@@ -2,18 +2,22 @@ import torch
 
 from muse import MaskGitTransformer, VQGANModel
 
+codebook_size = 1024
+num_classes = 1000
 model = MaskGitTransformer(
-    vocab_size=100,
+    vocab_size=codebook_size + num_classes + 1,
     hidden_size=32,
     num_hidden_layers=2,
     num_attention_heads=4,
     intermediate_size=64,
     max_position_embeddings=4 + 1,  # +1 for the class token
+    codebook_size=codebook_size,
+    num_classes=num_classes,
 )
 
 input_ids = torch.randint(0, 100, (1, 4))
 output = model(input_ids)
-assert output.shape == (1, 4, 100)
+assert output.shape == (1, 4, model.config.vocab_size)
 
 class_ids = torch.tensor([1], dtype=torch.long)
 gen_ids = model.generate(class_ids, timesteps=4)
@@ -22,7 +26,7 @@ print(gen_ids)
 
 model.enable_gradient_checkpointing()
 output = model(input_ids)
-assert output.shape == (1, 4, 100)
+assert output.shape == (1, 4, model.config.vocab_size)
 
 
 model = MaskGitTransformer(
