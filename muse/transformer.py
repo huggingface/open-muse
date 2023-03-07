@@ -253,7 +253,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.attention_dropout = attention_dropout
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
-        self.config.mask_token_id = vocab_size - 1
+        self.register_to_config(mask_token_id=vocab_size - 1)
 
         self.embed = Embed(
             self.vocab_size,
@@ -323,7 +323,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     ):
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
-        device = next(self.parameters()).device
         seq_len = self.max_position_embeddings - 1  # 256 image tokens + 1 class token, hardcode for now
 
         batch_size = len(class_ids)
@@ -333,13 +332,13 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones((1, seq_len), dtype=torch.long, device=device) * mask_token_id
-        scores = torch.zeros(shape, dtype=torch.float32, device=device)
+        input_ids = torch.ones((1, seq_len), dtype=torch.long, device=self.device) * mask_token_id
+        scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
 
         starting_temperature = temperature
 
         for timestep, steps_until_x0 in tqdm(
-            zip(torch.linspace(0, 1, timesteps, device=device), reversed(range(timesteps))), total=timesteps
+            zip(torch.linspace(0, 1, timesteps, device=self.device), reversed(range(timesteps))), total=timesteps
         ):
             rand_mask_prob = noise_schedule(timestep)
             num_token_masked = max(int((rand_mask_prob * seq_len).item()), 1)
