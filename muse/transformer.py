@@ -163,6 +163,8 @@ class Embed(nn.Module):
         max_position_embeddings=512,
         layer_norm_eps=1e-5,
         use_bias=False,
+        layer_norm_embedddings=False,
+        use_embeddings_project=False,
     ):
         super().__init__()
 
@@ -171,22 +173,33 @@ class Embed(nn.Module):
         self.hidden_size = hidden_size
         self.hidden_dropout = hidden_dropout
         self.max_position_embeddings = max_position_embeddings
+        self.layer_norm_embedddings = layer_norm_embedddings
+        self.use_embeddings_project = use_embeddings_project
 
         self.word_embeddings = nn.Embedding(self.vocab_size, self.embedding_size)
         self.position_embeddings = nn.Embedding(self.max_position_embeddings, self.embedding_size)
-        self.embeddings_ln = LayerNorm(
-            self.embedding_size, eps=layer_norm_eps, use_bias=use_bias
-        )  # TODO: is that really needed?
-        self.embedding_hidden_mapping = nn.Linear(self.embedding_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(self.hidden_dropout)
+
+        if layer_norm_embedddings:
+            self.embeddings_ln = LayerNorm(self.embedding_size, eps=layer_norm_eps, use_bias=use_bias)
+
+        if use_embeddings_project:
+            self.embedding_hidden_mapping = nn.Linear(self.embedding_size, self.hidden_size, bias=use_bias)
 
     def forward(self, input_ids):
         seq_length = input_ids.shape[-1]
         position_ids = torch.arange(seq_length)[None, :]
+
         word_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
-        input_embeddings = self.embeddings_ln(word_embeddings + position_embeddings)
-        input_embeddings = self.embedding_hidden_mapping(input_embeddings)
+        input_embeddings = word_embeddings + position_embeddings
+
+        if self.layer_norm_embedddings:
+            input_embeddings = self.embeddings_ln(input_embeddings)
+
+        if self.use_embeddings_project:
+            input_embeddings = self.embedding_hidden_mapping(input_embeddings)
+
         input_embeddings = self.dropout(input_embeddings)
         return input_embeddings
 
@@ -224,7 +237,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         encoder_hidden_size=1024,  # T5-large
         add_cross_attention=False,
         initializer_range=0.02,
-        layer_norm_eps=1e-12,  # Used from MaskGit paper, too large ?
+        layer_norm_eps=1e-5,
         use_bias=False,
         codebook_size=1024,
         num_classes=None,  # set for class-conditioned generation
@@ -267,6 +280,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 for _ in range(self.num_hidden_layers)
             ]
         )
+        self.encoder_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.mlm_layer = MlmLayer(self.hidden_size, self.vocab_size, layer_norm_eps, use_bias)
 
         self.gradient_checkpointing = False
@@ -290,6 +304,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             else:
                 hidden_states = layer(hidden_states, encoder_hidden_states=encoder_hidden_states)
 
+        hidden_states = self.encoder_layer_norm(hidden_states)
         logits = self.mlm_layer(hidden_states)
         if labels is not None:
             loss = F.cross_entropy(logits.view(-1, self.vocab_size), labels.view(-1), ignore_index=-100)
