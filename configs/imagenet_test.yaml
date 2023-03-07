@@ -34,7 +34,7 @@ dataset:
     params:
         path: "imagenet-1k" # path to imagenet dataset
         streaming: True
-        shuffle_buffer_size: 5000
+        shuffle_buffer_size: 10000
         batch_size: ${training.batch_size}
         workers: 1
         resolution: 256
@@ -46,12 +46,12 @@ dataset:
 
 optimizer:
     name: adamw
-    params:
-        learning_rate: 0.0001
+    params: # default adamw params
+        learning_rate: 4e-3
         beta1: 0.9
-        beta2: 0.98
+        beta2: 0.999
         weight_decay: 0.01
-        epsilon: 0.00000001
+        epsilon: 1e-8
 
 
 lr_scheduler:
