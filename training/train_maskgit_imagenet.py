@@ -102,6 +102,8 @@ def main():
     #########################
     # MODELS and OPTIMIZER  #
     #########################
+    if accelerator.is_main_process:
+        logger.info("Loading models and optimizer")
     vq_model = MaskGitVQGAN.from_pretrained(config.model.vq_model.pretrained)
     model = MaskGitTransformer(**config.model.transformer)
     mask_id = model.config.mask_token_id
@@ -126,6 +128,8 @@ def main():
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
+    if accelerator.is_main_process:
+        logger.info("Loading datasets")
     datasets_config = config.dataset.params
     dataset = datasets.load_dataset(datasets_config.path, streaming=datasets_config.streaming, use_auth_token=True)
     dataset = dataset.with_format("torch")
@@ -149,6 +153,8 @@ def main():
         examples["image"] = [train_transforms(image.convert("RGB")) for image in examples["image"]]
         return examples
 
+    if accelerator.is_main_process:
+        logger.info("Preprocessing and shuffling datasets.")
     with accelerator.main_process_first():
         # Set the training transforms
         train_dataset = dataset["train"].map(preprocess, batched=True)
@@ -169,6 +175,8 @@ def main():
     # DATLOADER and LR-SCHEDULER     #
     #################################
     # DataLoaders creation:
+    if accelerator.is_main_process:
+        logger.info("Creating dataloaders and lr_scheduler")
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         collate_fn=collate_fn,
@@ -186,6 +194,8 @@ def main():
     )
 
     # Prepare everything with accelerator
+    if accelerator.is_main_process:
+        logger.info("Preparing model, optimizer and dataloaders")
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
@@ -205,6 +215,9 @@ def main():
     global_step = 0
     first_epoch = 0
     examples_since_last_logged = 0
+
+    if accelerator.is_main_process:
+        logger.info("Begin training")
 
     now = time.time()
     for epoch in range(first_epoch, config.training.num_train_epochs):
