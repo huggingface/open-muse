@@ -66,7 +66,7 @@ class ResnetBlock(nn.Module):
         self.conv2 = Conv2dSame(self.out_channels_, self.out_channels_, kernel_size=3, bias=False)
 
         if self.in_channels != self.out_channels_:
-            self.nin_shortcut = Conv2dSame(self.in_channels, self.out_channels_, kernel_size=1, bias=False)
+            self.nin_shortcut = Conv2dSame(self.out_channels_, self.out_channels_, kernel_size=1, bias=False)
 
     def forward(self, hidden_states):
         residual = hidden_states
@@ -80,7 +80,7 @@ class ResnetBlock(nn.Module):
         hidden_states = self.conv2(hidden_states)
 
         if self.in_channels != self.out_channels_:
-            residual = self.nin_shortcut(residual)
+            residual = self.nin_shortcut(hidden_states)
 
         return hidden_states + residual
 
@@ -313,7 +313,7 @@ class VectorQuantizer(nn.Module):
         # get quantized latent vectors
         batch, num_tokens = indices.shape
         z_q = self.embedding(indices)
-        z_q = z_q.reshape(batch, -1, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens)))
+        z_q = z_q.reshape(batch, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens)), -1).permute(0, 3, 1, 2)
         return z_q
 
 
