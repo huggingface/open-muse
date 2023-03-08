@@ -138,24 +138,26 @@ def main():
     # Preprocessing the datasets.
 
     # 6. Get the column names for input/target.
-    dataset_config = config.dataset.params
-    column_names = dataset["train"].column_names
-    dataset_columns = dataset_name_mapping.get(dataset_config.path, None)
-    if dataset_config.image_column is None:
+    if datasets_config.streaming:
+        column_names = list(next(iter(dataset["train"])).keys())
+    else:
+        column_names = dataset["train"].column_names
+    dataset_columns = dataset_name_mapping.get(datasets_config.path, None)
+    if datasets_config.image_column is None:
         image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
     else:
-        image_column = dataset_config.image_column
+        image_column = datasets_config.image_column
         if image_column not in column_names:
             raise ValueError(
-                f"--image_column' value '{dataset_config.image_column}' needs to be one of: {', '.join(column_names)}"
+                f"--image_column' value '{datasets_config.image_column}' needs to be one of: {', '.join(column_names)}"
             )
-    if dataset_config.label_column is None:
+    if datasets_config.label_column is None:
         label_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
     else:
-        label_column = dataset_config.label_column
+        label_column = datasets_config.label_column
         if label_column not in column_names:
             raise ValueError(
-                f"--label_column' value '{dataset_config.label_column}' needs to be one of: {', '.join(column_names)}"
+                f"--label_column' value '{datasets_config.label_column}' needs to be one of: {', '.join(column_names)}"
             )
 
     preproc_config = config.dataset.preprocessing
@@ -180,24 +182,32 @@ def main():
     )
 
     def train_preprocess(examples):
-        examples["image"] = [train_transforms(image.convert("RGB")) for image in examples["image"]]
+        examples[image_column] = [train_transforms(image.convert("RGB")) for image in examples[image_column]]
         return examples
 
     def eval_preprocess(examples):
-        examples["image"] = [eval_transforms(image.convert("RGB")) for image in examples["image"]]
+        examples[image_column] = [eval_transforms(image.convert("RGB")) for image in examples[image_column]]
         return examples
 
     logger.info("Preprocessing and shuffling datasets.")
     with accelerator.main_process_first():
         # Set the training transforms
-        train_dataset = dataset["train"].map(train_preprocess, batched=True)
         eval_split_name = "validation" if "validation" in dataset else "test"
-        eval_dataset = dataset[eval_split_name].map(eval_preprocess, batched=True)
+        train_dataset = dataset["train"]
+        eval_dataset = dataset[eval_split_name]
+
+        if datasets_config.streaming:
+            train_dataset = train_dataset.map(train_preprocess, batched=True)
+            eval_dataset = eval_dataset.map(eval_preprocess, batched=True)
+        else:
+            train_dataset = train_dataset.with_transform(train_preprocess)
+            eval_dataset = eval_dataset.with_transform(eval_preprocess)
 
         # We need to shuffle early when using streaming datasets
-        train_dataset = train_dataset.shuffle(
-            buffer_size=datasets_config.shuffle_buffer_size, seed=config.training.seed
-        )
+        if datasets_config.streaming:
+            train_dataset = train_dataset.shuffle(
+                buffer_size=datasets_config.shuffle_buffer_size, seed=config.training.seed
+            )
 
     def collate_fn(examples):
         pixel_values = torch.stack([example[image_column] for example in examples])
@@ -215,6 +225,7 @@ def main():
         collate_fn=collate_fn,
         batch_size=config.training.batch_size,
         num_workers=datasets_config.workers,
+        shuffle=not datasets_config.streaming,
         drop_last=True,
     )
     eval_dataloader = torch.utils.data.DataLoader(
@@ -253,7 +264,17 @@ def main():
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
 
-    def train_step(batch, global_step, epoch):
+    # Train!
+    logger.info("***** Running training *****")
+    logger.info(f"  Num Epochs = {config.training.num_train_epochs}")
+    logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
+    global_step = 0
+    first_epoch = 0
+    examples_since_last_logged = 0
+
+    def train_step(batch, log_first_batch=False):
         with accelerator.accumulate(model):
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
             with torch.no_grad():
@@ -285,7 +306,7 @@ def main():
             labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
 
             # log the inputs for the first step of the first epoch
-            if global_step == 0 and epoch == 0:
+            if log_first_batch:
                 logger.info("Input ids: {}".format(input_ids))
                 logger.info("Labels: {}".format(labels))
 
@@ -296,21 +317,9 @@ def main():
             return loss, avg_loss
 
     @torch.no_grad()
-    def eval_step(batch, global_step, epoch):
-        _, avg_loss = train_step(batch, global_step, epoch)
+    def eval_step(batch):
+        _, avg_loss = train_step(batch)
         return avg_loss
-
-    # Train!
-    logger.info("***** Running training *****")
-    logger.info(f"  Num Epochs = {config.training.num_train_epochs}")
-    logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
-    global_step = 0
-    first_epoch = 0
-    examples_since_last_logged = 0
-
-    logger.info("Begin training")
 
     now = time.time()
     for epoch in range(first_epoch, config.training.num_train_epochs):
@@ -318,7 +327,7 @@ def main():
         if datasets_config.streaming and not config.training.overfit_one_batch:
             train_dataset.set_epoch(epoch)
         for batch in train_dataloader:
-            loss, avg_loss = train_step(batch, global_step, epoch)
+            loss, avg_loss = train_step(batch, log_first_batch=global_step == 0 and epoch == 0)
 
             accelerator.backward(loss)
             optimizer.step()
@@ -327,7 +336,6 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-                global_step += 1
                 examples_since_last_logged += (
                     batch["pixel_values"].shape[0] * config.training.gradient_accumulation_steps
                 )
@@ -351,13 +359,19 @@ def main():
                     model.eval()
                     eval_loss = 0
                     num_eval_examples = 0
+                    now = time.time()
                     for i, batch in enumerate(eval_dataloader):
-                        eval_loss += eval_step(batch, global_step, epoch)
+                        eval_loss += eval_step(batch)
                         num_eval_examples += batch["pixel_values"].shape[0]
                         if num_eval_examples >= config.experiment.max_eval_examples:
                             break
                     eval_loss = eval_loss / (i + 1)
                     accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
+
+                    eval_time = time.time() - now
+                    if epoch == 0 and global_step == 0:
+                        logger.info(f"First eval time: {eval_time} seconds")
+
                     logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f}")
                     model.train()
 
@@ -366,6 +380,7 @@ def main():
                         save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
+                global_step += 1
                 # TODO: Add generation
 
     # Save the final trained checkpoint
