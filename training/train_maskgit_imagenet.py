@@ -144,16 +144,27 @@ def main():
             transforms.ToTensor(),
         ]
     )
+    eval_transforms = transforms.Compose(
+        [
+            transforms.Resize(preproc_config.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+            transforms.CenterCrop(preproc_config.resolution),
+            transforms.ToTensor(),
+        ]
+    )
 
-    def preprocess(examples):
+    def train_preprocess(examples):
         examples["image"] = [train_transforms(image.convert("RGB")) for image in examples["image"]]
+        return examples
+
+    def eval_preprocess(examples):
+        examples["image"] = [eval_transforms(image.convert("RGB")) for image in examples["image"]]
         return examples
 
     logger.info("Preprocessing and shuffling datasets.")
     with accelerator.main_process_first():
         # Set the training transforms
-        train_dataset = dataset["train"].map(preprocess, batched=True)
-        eval_dataset = dataset["validation"].map(preprocess, batched=True)
+        train_dataset = dataset["train"].map(train_preprocess, batched=True)
+        eval_dataset = dataset["validation"].map(eval_preprocess, batched=True)
 
         # We need to shuffle early when using streaming datasets
         train_dataset = train_dataset.shuffle(
