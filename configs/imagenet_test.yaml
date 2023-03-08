@@ -3,9 +3,10 @@ experiment:
     project: "muse"
     output_dir: "imagenet"
     max_train_examples: 110000000
-    num_eval_images: 1000
-    save_every: 1000
-    log_every: 1
+    max_eval_examples: 12800
+    save_every: 500
+    eval_every: 500
+    log_every: 5
 
 
 model:
@@ -27,7 +28,7 @@ model:
         hidden_dropout: 0.0
         attention_dropout: 0.0
 
-    gradient_checkpointing: False
+    gradient_checkpointing: True
 
 
 dataset:
@@ -36,7 +37,7 @@ dataset:
         streaming: True
         shuffle_buffer_size: 10000
         batch_size: ${training.batch_size}
-        workers: 1
+        workers: 2
         resolution: 256
     preprocessing:
         resolution: 256
@@ -63,10 +64,10 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    batch_size: 4
-    mixed_precision: "no"
+    batch_size: 128
+    mixed_precision: "bf16"
     use_ema: False
     seed: 42
-    max_train_steps: 1000
-    num_train_epochs: 1000
-    overfit_one_batch: True
+    max_train_steps: None
+    num_train_epochs: 1
+    overfit_one_batch: False
