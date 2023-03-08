@@ -21,6 +21,11 @@ from muse.sampling import cosine_schedule
 
 logger = get_logger(__name__, log_level="INFO")
 
+dataset_name_mapping = {
+    "imagenet-1k": ("image", "label"),
+    "cifar10": ("img", "label"),
+}
+
 
 def get_config():
     cli_conf = OmegaConf.from_cli()
@@ -131,6 +136,28 @@ def main():
     dataset = dataset.with_format("torch")
 
     # Preprocessing the datasets.
+
+    # 6. Get the column names for input/target.
+    dataset_config = config.dataset.params
+    column_names = dataset["train"].column_names
+    dataset_columns = dataset_name_mapping.get(dataset_config.path, None)
+    if dataset_config.image_column is None:
+        image_column = dataset_columns[0] if dataset_columns is not None else column_names[0]
+    else:
+        image_column = dataset_config.image_column
+        if image_column not in column_names:
+            raise ValueError(
+                f"--image_column' value '{dataset_config.image_column}' needs to be one of: {', '.join(column_names)}"
+            )
+    if dataset_config.label_column is None:
+        label_column = dataset_columns[1] if dataset_columns is not None else column_names[1]
+    else:
+        label_column = dataset_config.label_column
+        if label_column not in column_names:
+            raise ValueError(
+                f"--label_column' value '{dataset_config.label_column}' needs to be one of: {', '.join(column_names)}"
+            )
+
     preproc_config = config.dataset.preprocessing
     train_transforms = transforms.Compose(
         [
@@ -164,7 +191,8 @@ def main():
     with accelerator.main_process_first():
         # Set the training transforms
         train_dataset = dataset["train"].map(train_preprocess, batched=True)
-        eval_dataset = dataset["validation"].map(eval_preprocess, batched=True)
+        eval_split_name = "validation" if "validation" in dataset else "test"
+        eval_dataset = dataset[eval_split_name].map(eval_preprocess, batched=True)
 
         # We need to shuffle early when using streaming datasets
         train_dataset = train_dataset.shuffle(
@@ -172,9 +200,9 @@ def main():
         )
 
     def collate_fn(examples):
-        pixel_values = torch.stack([example["image"] for example in examples])
+        pixel_values = torch.stack([example[image_column] for example in examples])
         pixel_values = pixel_values.float()
-        class_id = torch.tensor([example["label"] for example in examples])
+        class_id = torch.tensor([example[label_column] for example in examples])
         return {"pixel_values": pixel_values, "class_id": class_id}
 
     ##################################
@@ -246,22 +274,22 @@ def main():
             batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
             mask = batch_randperm < num_token_masked.unsqueeze(-1)
             # mask images and create input and labels
-            inout_ids = torch.where(mask, mask_id, image_tokens)
+            input_ids = torch.where(mask, mask_id, image_tokens)
             labels = torch.where(mask, image_tokens, -100)
 
             # shift the class ids by codebook size
             class_ids = batch["class_id"] + vq_model.num_embeddings
             # prepend the class ids to the image tokens
-            inout_ids = torch.cat([class_ids.unsqueeze(-1), inout_ids], dim=-1)
+            input_ids = torch.cat([class_ids.unsqueeze(-1), input_ids], dim=-1)
             # prepend -100 to the labels as we don't want to predict the class ids
             labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
-                logger.info("Input ids: {}".format(inout_ids))
+                logger.info("Input ids: {}".format(input_ids))
                 logger.info("Labels: {}".format(labels))
 
-            _, loss = model(input_ids=inout_ids, labels=labels)
+            _, loss = model(input_ids=input_ids, labels=labels)
 
             # Gather thexd losses across all processes for logging (if we use distributed training).
             avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()

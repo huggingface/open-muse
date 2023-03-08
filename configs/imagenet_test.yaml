@@ -39,6 +39,8 @@ dataset:
         batch_size: ${training.batch_size}
         workers: 2
         resolution: 256
+        image_column: "image"
+        label_column: "label"
     preprocessing:
         resolution: 256
         center_crop: True
