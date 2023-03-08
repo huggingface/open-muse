@@ -1,0 +1,75 @@
+experiment:
+    name: "cifar-10"
+    project: "muse"
+    output_dir: "cifar-10"
+    max_train_examples: 110000000
+    max_eval_examples: 10000
+    save_every: 500
+    eval_every: 500
+    log_every: 50
+
+
+model:
+    vq_model:
+        pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
+
+    transformer:
+        vocab_size: 1125 # (1024 + 100 + 1 -> Vq + Imagenet + <mask>)
+        max_position_embeddings: 257 # (+1 for class id)
+        hidden_size: 512
+        num_hidden_layers: 8
+        num_attention_heads: 8
+        intermediate_size: 2048
+        codebook_size: 1024
+        num_classes: 100
+        initializer_range: 0.02
+        layer_norm_eps: 1e-6
+        use_bias: False
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
+
+    gradient_checkpointing: True
+
+
+dataset:
+    params:
+        path: "cifar10" # path to imagenet dataset
+        streaming: False
+        shuffle_buffer_size: 10000
+        batch_size: ${training.batch_size}
+        workers: 1
+        resolution: 256
+        image_column: "img"
+        label_column: "label"
+    preprocessing:
+        resolution: 256
+        center_crop: False
+        random_flip: False
+
+
+optimizer:
+    name: adamw
+    params: # default adamw params
+        learning_rate: 4e-3
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.01
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "constant"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 500
+
+
+training:
+    gradient_accumulation_steps: 1
+    batch_size: 128
+    mixed_precision: "no"
+    use_ema: False
+    seed: 42
+    max_train_steps: None
+    num_train_epochs: 10
+    overfit_one_batch: False
