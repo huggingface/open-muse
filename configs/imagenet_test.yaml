@@ -6,7 +6,7 @@ experiment:
     max_eval_examples: 12800
     save_every: 500
     eval_every: 500
-    log_every: 5
+    log_every: 50
 
 
 model:
