@@ -176,6 +176,13 @@ def main():
         collate_fn=collate_fn,
         batch_size=config.training.batch_size,
         num_workers=datasets_config.workers,
+        drop_last=True,
+    )
+    eval_dataloader = torch.utils.data.DataLoader(
+        eval_dataset,
+        collate_fn=collate_fn,
+        batch_size=config.training.batch_size,
+        drop_last=True,
     )
 
     total_batch_size = (
@@ -189,8 +196,8 @@ def main():
 
     # Prepare everything with accelerator
     logger.info("Preparing model, optimizer and dataloaders")
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler
     )
 
     vq_model.to(accelerator.device)
@@ -204,15 +211,67 @@ def main():
 
     # TODO: Add checkpoint loading. We need to check how to resume datasets in streaming mode.
 
+    if config.training.overfit_one_batch:
+        train_dataloader = [next(iter(train_dataloader))]
+
+    def train_step(batch, global_step, epoch):
+        with accelerator.accumulate(model):
+            # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
+            with torch.no_grad():
+                image_tokens = vq_model.encode(batch["pixel_values"])[1]
+
+            batch_size, seq_len = image_tokens.shape
+
+            # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
+
+            # Sample a random timestep for each image
+            timesteps = torch.rand(batch_size, device=image_tokens.device)
+            # Sample a random mask probability for each image using timestep and cosine schedule
+            mask_prob = cosine_schedule(timesteps)
+            # creat a random mask for each image
+
+            num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+
+            batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+            mask = batch_randperm < num_token_masked.unsqueeze(-1)
+            # mask images and create input and labels
+            inout_ids = torch.where(mask, mask_id, image_tokens)
+            labels = torch.where(mask, image_tokens, -100)
+
+            # shift the class ids by codebook size
+            class_ids = batch["class_id"] + vq_model.num_embeddings
+            # prepend the class ids to the image tokens
+            inout_ids = torch.cat([class_ids.unsqueeze(-1), inout_ids], dim=-1)
+            # prepend -100 to the labels as we don't want to predict the class ids
+            labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
+
+            # log the inputs for the first step of the first epoch
+            if global_step == 0 and epoch == 0:
+                logger.info("Input ids: {}".format(inout_ids))
+                logger.info("Labels: {}".format(labels))
+
+            _, loss = model(input_ids=inout_ids, labels=labels)
+
+            # Gather thexd losses across all processes for logging (if we use distributed training).
+            avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+            return loss, avg_loss
+
+    @torch.no_grad()
+    def eval_step(batch, global_step, epoch):
+        _, avg_loss = train_step(batch, global_step, epoch)
+        return avg_loss
+
     # Train!
+    logger.info("***** Running training *****")
+    logger.info(f"  Num Epochs = {config.training.num_train_epochs}")
+    logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
     global_step = 0
     first_epoch = 0
     examples_since_last_logged = 0
 
     logger.info("Begin training")
-
-    if config.training.overfit_one_batch:
-        train_dataloader = [next(iter(train_dataloader))]
 
     now = time.time()
     for epoch in range(first_epoch, config.training.num_train_epochs):
@@ -220,50 +279,12 @@ def main():
         if datasets_config.streaming and not config.training.overfit_one_batch:
             train_dataset.set_epoch(epoch)
         for batch in train_dataloader:
-            with accelerator.accumulate(model):
-                # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
-                with torch.no_grad():
-                    image_tokens = vq_model.encode(batch["pixel_values"])[1]
+            loss, avg_loss = train_step(batch, global_step, epoch)
 
-                batch_size, seq_len = image_tokens.shape
-
-                # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
-
-                # Sample a random timestep for each image
-                timesteps = torch.rand(batch_size, device=image_tokens.device)
-                # Sample a random mask probability for each image using timestep and cosine schedule
-                mask_prob = cosine_schedule(timesteps)
-                # creat a random mask for each image
-
-                num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-
-                batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-                mask = batch_randperm < num_token_masked.unsqueeze(-1)
-                # mask images and create input and labels
-                inout_ids = torch.where(mask, mask_id, image_tokens)
-                labels = torch.where(mask, image_tokens, -100)
-
-                # shift the class ids by codebook size
-                class_ids = batch["class_id"] + vq_model.num_embeddings
-                # prepend the class ids to the image tokens
-                inout_ids = torch.cat([class_ids.unsqueeze(-1), inout_ids], dim=-1)
-                # prepend -100 to the labels as we don't want to predict the class ids
-                labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
-
-                # log the inputs for the first step of the first epoch
-                if global_step == 0 and epoch == 0:
-                    logger.info("Input ids: {}".format(inout_ids))
-                    logger.info("Labels: {}".format(labels))
-
-                _, loss = model(input_ids=inout_ids, labels=labels)
-
-                # Gather thexd losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
-
-                accelerator.backward(loss)
-                optimizer.step()
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+            accelerator.backward(loss)
+            optimizer.step()
+            lr_scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -285,6 +306,21 @@ def main():
                     logger.info(
                         f" Step: {global_step} Loss: {avg_loss.item():0.4f} im/s/GPU: {images_per_second_per_gpu:0.2f}"
                     )
+
+                if global_step % config.experiment.eval_every == 0:
+                    logger.info("Evaluating...")
+                    model.eval()
+                    eval_loss = 0
+                    num_eval_examples = 0
+                    for i, batch in enumerate(eval_dataloader):
+                        eval_loss += eval_step(batch, global_step, epoch)
+                        num_eval_examples += batch["pixel_values"].shape[0]
+                        if num_eval_examples >= config.experiment.max_eval_examples:
+                            break
+                    eval_loss = eval_loss / (i + 1)
+                    accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
+                    logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f}")
+                    model.train()
 
                 if global_step % config.experiment.save_every == 0:
                     if accelerator.is_main_process:
