@@ -14,14 +14,14 @@ model:
         pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
 
     transformer:
-        vocab_size: 1125 # (1024 + 100 + 1 -> Vq + Imagenet + <mask>)
+        vocab_size: 1035 # (1024 + 10 + 1 -> Vq + Imagenet + <mask>)
         max_position_embeddings: 257 # (+1 for class id)
         hidden_size: 512
         num_hidden_layers: 8
         num_attention_heads: 8
         intermediate_size: 2048
         codebook_size: 1024
-        num_classes: 100
+        num_classes: 10
         initializer_range: 0.02
         layer_norm_eps: 1e-6
         use_bias: False
