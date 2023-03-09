@@ -114,6 +114,15 @@ def main():
     vq_model.requires_grad_(False)
 
     optimizer_config = config.optimizer.params
+    learning_rate = optimizer_config.learning_rate
+    if optimizer_config.scale_lr:
+        learning_rate = (
+            learning_rate
+            * config.training.batch_size
+            * accelerator.num_processes
+            * config.training.gradient_accumulation_steps
+        )
+
     optimizer = AdamW(
         model.parameters(),
         lr=optimizer_config.learning_rate,

@@ -51,6 +51,7 @@ optimizer:
     name: adamw
     params: # default adamw params
         learning_rate: 4e-3
+        scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999
         weight_decay: 0.01
