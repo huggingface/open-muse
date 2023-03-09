@@ -289,9 +289,9 @@ def main():
 
             # Sample a random timestep for each image
             timesteps = torch.rand(batch_size, device=image_tokens.device)
-            timesteps = timesteps.clip(config.training.min_masking_rate)
             # Sample a random mask probability for each image using timestep and cosine schedule
             mask_prob = cosine_schedule(timesteps)
+            mask_prob = mask_prob.clip(config.training.min_masking_rate)
             # creat a random mask for each image
 
             num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
@@ -318,11 +318,12 @@ def main():
 
             # Gather thexd losses across all processes for logging (if we use distributed training).
             avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
-            return loss, avg_loss
+            avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
+            return loss, avg_loss, avg_masking_rate
 
     @torch.no_grad()
     def eval_step(batch):
-        _, avg_loss = train_step(batch)
+        _, avg_loss, _ = train_step(batch)
         return avg_loss
 
     now = time.time()
@@ -331,7 +332,7 @@ def main():
         if datasets_config.streaming and not config.training.overfit_one_batch:
             train_dataset.set_epoch(epoch)
         for batch in train_dataloader:
-            loss, avg_loss = train_step(batch, log_first_batch=global_step == 0 and epoch == 0)
+            loss, avg_loss, avg_masking_rate = train_step(batch, log_first_batch=global_step == 0 and epoch == 0)
 
             accelerator.backward(loss)
             optimizer.step()
@@ -350,6 +351,7 @@ def main():
                     logs = {
                         "step_loss": avg_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
+                        "avg_masking_rate": avg_masking_rate.item(),
                         "images/sec/gpu": images_per_second_per_gpu,
                     }
                     accelerator.log(logs, step=global_step)
