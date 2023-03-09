@@ -113,6 +113,28 @@ def main():
     # Freeze the VQGAN
     vq_model.requires_grad_(False)
 
+    # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
+    def save_model_hook(models, weights, output_dir):
+        for model in models:
+            model.save_pretrained(output_dir)
+            # make sure to pop weight so that corresponding model is not saved again
+            weights.pop()
+
+    def load_model_hook(models, input_dir):
+        while len(models) > 0:
+            # pop models so that they are not loaded again
+            model = models.pop()
+
+            # load muse style into model
+            load_model = MaskGitTransformer.from_pretrained(input_dir)
+            model.register_to_config(**load_model.config)
+
+            model.load_state_dict(load_model.state_dict())
+            del load_model
+
+    accelerator.register_save_state_pre_hook(save_model_hook)
+    accelerator.register_load_state_pre_hook(load_model_hook)
+
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
     if optimizer_config.scale_lr:
