@@ -193,6 +193,9 @@ def main():
     with accelerator.main_process_first():
         # Set the training transforms
         eval_split_name = "validation" if "validation" in dataset else "test"
+        if eval_split_name not in dataset and not datasets_config.streaming:
+            dataset = dataset["train"].train_test_split(test_size=0.1)
+
         train_dataset = dataset["train"]
         eval_dataset = dataset[eval_split_name]
 
@@ -345,7 +348,7 @@ def main():
                     # Log metrics
                     logs = {
                         "step_loss": avg_loss.item(),
-                        "lr": lr_scheduler.get_last_lr(),
+                        "lr": lr_scheduler.get_last_lr()[0],
                         "images/sec/gpu": images_per_second_per_gpu,
                     }
                     accelerator.log(logs, step=global_step)
