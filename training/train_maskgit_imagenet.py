@@ -289,6 +289,7 @@ def main():
 
             # Sample a random timestep for each image
             timesteps = torch.rand(batch_size, device=image_tokens.device)
+            timesteps = timesteps.clip(config.training.min_masking_rate)
             # Sample a random mask probability for each image using timestep and cosine schedule
             mask_prob = cosine_schedule(timesteps)
             # creat a random mask for each image

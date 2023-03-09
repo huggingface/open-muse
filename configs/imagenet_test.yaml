@@ -73,3 +73,4 @@ training:
     max_train_steps: None
     num_train_epochs: 1
     overfit_one_batch: False
+    min_masking_rate: 0.0
