@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
+from data import ClassificationDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 
@@ -17,7 +18,6 @@ import muse
 from muse import MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
-from training.data import ClassificationDataset
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -290,7 +290,9 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, labels, mask_prob = prepare_inputs_and_labels(batch, config.training.min_masking_rate)
+            input_ids, labels, mask_prob = prepare_inputs_and_labels(
+                pixel_values, class_ids, config.training.min_masking_rate
+            )
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -371,6 +373,8 @@ def main():
                         logger.info(f"Saved state to {save_path}")
                 global_step += 1
                 # TODO: Add generation
+            if global_step >= config.training.max_train_steps:
+                break
         # End for
 
     # Save the final trained checkpoint
