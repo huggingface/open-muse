@@ -26,7 +26,7 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=setuptools.find_packages(),
-    install_requires=["transformers", "accelerate", "einops", "omegaconf"],
+    install_requires=["transformers", "accelerate", "einops", "omegaconf", "webdataset"],
     extras_require={
         "dev": ["black[jupyter]", "isort", "flake8>=3.8.3"],
     },
