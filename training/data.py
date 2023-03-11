@@ -32,7 +32,6 @@ class ImageNetTransform:
         )
 
 
-# Turn the above into a class
 class ClassificationDataset:
     def __init__(
         self,
@@ -61,7 +60,8 @@ class ClassificationDataset:
             wds.rename(image="jpg;png;jpeg;webp", class_id="cls"),
             wds.map(filter_keys(set(["image", "class_id"]))),
             wds.map_dict(image=transform.train_transform, class_id=lambda x: int(x)),
-            wds.batched(per_gpu_batch_size, partial=False, collate_fn=default_collate),
+            wds.to_tuple("image", "class_id"),
+            wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
 
         num_batches = math.ceil(num_train_examples / global_batch_size)
@@ -69,11 +69,10 @@ class ClassificationDataset:
         num_batches = num_worker_batches * num_workers
         num_samples = num_batches * global_batch_size
 
-        self._train_dataset = wds.WebDataset(*pipeline).with_epoch(
-            num_worker_batches
-        )  # each worker is iterating over this
+        # each worker is iterating over this
+        self._train_dataset = wds.DataPipeline(*pipeline).with_epoch(num_worker_batches)
         self._train_dataloader = wds.WebLoader(
-            self.train_dataset,
+            self._train_dataset,
             batch_size=None,
             shuffle=False,
             num_workers=num_workers,
@@ -93,11 +92,12 @@ class ClassificationDataset:
             wds.rename(image="jpg;png;jpeg;webp", class_id="cls"),
             wds.map(filter_keys(set(["image", "class_id"]))),
             wds.map_dict(image=transform.eval_transform, class_id=lambda x: int(x)),
-            wds.batched(per_gpu_batch_size, partial=True, collate_fn=default_collate),
+            wds.to_tuple("image", "class_id"),
+            wds.batched(per_gpu_batch_size, partial=True, collation_fn=default_collate),
         ]
-        self._eval_dataset = wds.WebDataset(*pipeline)
+        self._eval_dataset = wds.DataPipeline(*pipeline)
         self._eval_dataloader = wds.WebLoader(
-            self.eval_dataset,
+            self._eval_dataset,
             batch_size=None,
             shuffle=False,
             num_workers=num_workers,
@@ -111,7 +111,7 @@ class ClassificationDataset:
 
     @property
     def train_dataloader(self):
-        return self._train_loader
+        return self._train_dataloader
 
     @property
     def eval_dataset(self):
@@ -119,4 +119,4 @@ class ClassificationDataset:
 
     @property
     def eval_dataloader(self):
-        return self._eval_loader
+        return self._eval_dataloader
