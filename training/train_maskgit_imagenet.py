@@ -133,6 +133,29 @@ def main():
     else:
         muse.logging.set_verbosity_error()
 
+    # We need to initialize the trackers we use, and also store our configuration.
+    # The trackers initializes automatically on the main process.
+    if accelerator.is_main_process:
+        run_id = config.wandb.get("run_id", None)
+        if run_id is None:
+            run_id = wandb.util.generate_id()
+            config.wandb.run_id = run_id
+
+        wandb_init_kwargs = dict(
+            name=config.experiment.name,
+            id=run_id,
+            resume=config.experiment.resume_from_checkpoint,
+            entity=config.wandb.get("entity", None),
+            config_exclude_keys=[],
+        )
+        wandb_config = {k: v for k, v in flatten_omega_conf(config, resolve=True)}
+        wandb_config.pop("experiment.resume_from_checkpoint")
+        accelerator.init_trackers(
+            config.experiment.project,
+            config=wandb_config,
+            init_kwargs={"wandb": wandb_init_kwargs},
+        )
+
     if accelerator.is_main_process:
         os.makedirs(config.experiment.output_dir, exist_ok=True)
         config_path = Path(config.experiment.output_dir) / "config.yaml"
@@ -221,26 +244,6 @@ def main():
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
     vq_model.to(accelerator.device)
 
-    # We need to initialize the trackers we use, and also store our configuration.
-    # The trackers initializes automatically on the main process.
-    if accelerator.is_main_process:
-        run_id = config.wandb.get("run_id", None)
-        if run_id is None:
-            run_id = wandb.util.generate_id()
-            config.wandb.run_id = run_id
-
-        wandb_init_kwargs = dict(
-            name=config.experiment.name,
-            id=run_id,
-            resume=config.experiment.resume_from_checkpoint,
-            entity=config.wandb.get("entity", None),
-        )
-        accelerator.init_trackers(
-            config.experiment.project,
-            config={k: v for k, v in flatten_omega_conf(config, resolve=True)},
-            init_kwargs=wandb_init_kwargs,
-        )
-
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
 
@@ -263,8 +266,8 @@ def main():
     # Potentially load in the weights and states from a previous save
     resume_from_checkpoint = config.experiment.resume_from_checkpoint
     if resume_from_checkpoint:
-        if resume_from_checkpointt != "latest":
-            path = os.path.basename(resume_from_checkpointt)
+        if resume_from_checkpoint != "latest":
+            path = os.path.basename(resume_from_checkpoint)
         else:
             # Get the most recent checkpoint
             dirs = os.listdir(config.experiment.output_dir)
@@ -273,8 +276,8 @@ def main():
             path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
-            accelerator.print(f"Checkpoint '{resume_from_checkpointt}' does not exist. Starting a new training run.")
-            resume_from_checkpointt = None
+            accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
+            resume_from_checkpoint = None
         else:
             accelerator.print(f"Resuming from checkpoint {path}")
             accelerator.load_state(os.path.join(config.experiment.output_dir, path))
@@ -378,8 +381,8 @@ def main():
                     data_time_m.reset()
 
                 # Evaluate model on main process
-                if global_step % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                    validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+                # if global_step % config.experiment.eval_every == 0 and accelerator.is_main_process:
+                #     validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
 
                 # Save model checkpoint
                 if global_step % config.experiment.save_every == 0 and accelerator.is_main_process:
