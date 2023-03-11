@@ -8,6 +8,7 @@ from typing import Any, List, Tuple
 
 import torch
 import torch.nn.functional as F
+import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
@@ -223,11 +224,22 @@ def main():
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
-        accelerator.init_trackers(
-            config.experiment.project, config={k: v for k, v in flatten_omega_conf(config, resolve=True)}
-        )
+        run_id = config.wandb.get("run_id", None)
+        if run_id is None:
+            run_id = wandb.util.generate_id()
+            config.wandb.run_id = run_id
 
-    # TODO: Add checkpoint loading. We need to check how to resume datasets in streaming mode.
+        wandb_init_kwargs = dict(
+            name=config.experiment.name,
+            id=run_id,
+            resume=config.experiment.resume_from_checkpoint,
+            entity=config.wandb.get("entity", None),
+        )
+        accelerator.init_trackers(
+            config.experiment.project,
+            config={k: v for k, v in flatten_omega_conf(config, resolve=True)},
+            init_kwargs=wandb_init_kwargs,
+        )
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -247,6 +259,27 @@ def main():
     logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
     global_step = 0
     first_epoch = 0
+
+    # Potentially load in the weights and states from a previous save
+    resume_from_checkpoint = config.experiment.resume_from_checkpoint
+    if resume_from_checkpoint:
+        if resume_from_checkpointt != "latest":
+            path = os.path.basename(resume_from_checkpointt)
+        else:
+            # Get the most recent checkpoint
+            dirs = os.listdir(config.experiment.output_dir)
+            dirs = [d for d in dirs if d.startswith("checkpoint")]
+            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+            path = dirs[-1] if len(dirs) > 0 else None
+
+        if path is None:
+            accelerator.print(f"Checkpoint '{resume_from_checkpointt}' does not exist. Starting a new training run.")
+            resume_from_checkpointt = None
+        else:
+            accelerator.print(f"Resuming from checkpoint {path}")
+            accelerator.load_state(os.path.join(config.experiment.output_dir, path))
+            global_step = int(path.split("-")[1])
+            first_epoch = global_step // num_update_steps_per_epoch
 
     @torch.no_grad()
     def prepare_inputs_and_labels(

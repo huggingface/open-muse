@@ -7,7 +7,7 @@ experiment:
     save_every: 500
     eval_every: 500
     log_every: 50
-
+    resume_from_checkpoint: False
 
 model:
     vq_model:
