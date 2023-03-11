@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import os
@@ -334,7 +335,7 @@ def main():
                     logger.info(
                         f"Step: {global_step} "
                         f"Loss: {avg_loss.item():0.4f} "
-                        f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:#g}/s/gpu "
+                        f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
@@ -345,45 +346,61 @@ def main():
 
                 # Evaluate model on main process
                 if global_step % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                    logger.info("Evaluating...")
-                    model.eval()
-                    eval_loss = 0
-                    now = time.time()
-                    for i, batch in enumerate(eval_dataloader):
-                        pixel_values, class_ids = batch
-                        pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-                        class_ids = class_ids.to(accelerator.device, non_blocking=True)
-                        input_ids, labels, mask_prob = prepare_inputs_and_labels(pixel_values, class_ids)
-                        with torch.no_grad():
-                            _, loss = model(input_ids=input_ids, labels=labels)
-                        eval_loss += loss.mean()
-                    eval_loss = eval_loss / (i + 1)
-                    eval_time = time.time() - now
+                    validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
 
-                    if epoch == 0 and global_step == 0:
-                        logger.info(f"First eval time: {eval_time} seconds")
-                    accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
-                    logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f}")
-                    model.train()
+                # Save model checkpoint
+                if global_step % config.experiment.save_every == 0 and accelerator.is_main_process:
+                    save_checkpoint(config, accelerator, global_step)
 
-                if global_step % config.experiment.save_every == 0:
-                    if accelerator.is_main_process:
-                        save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
-                        accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
                 global_step += 1
                 # TODO: Add generation
+
+            # Stop training if max steps is reached
             if global_step >= config.training.max_train_steps:
                 break
         # End for
 
-    # Save the final trained checkpoint
     accelerator.wait_for_everyone()
+
+    # Evaluate and save checkpoint at the end of training
+    if accelerator.is_main_process:
+        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+        save_checkpoint(config, accelerator, global_step)
+
+    # Save the final trained checkpoint
     if accelerator.is_main_process:
         model = accelerator.unwrap_model(model)
         model.save_pretrained(config.experiment.output_dir)
 
     accelerator.end_training()
+
+
+@torch.no_grad()
+def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels):
+    logger.info("Evaluating...")
+    model.eval()
+    eval_loss = 0
+    now = time.time()
+    for i, batch in enumerate(eval_dataloader):
+        pixel_values, class_ids = batch
+        pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
+        class_ids = class_ids.to(accelerator.device, non_blocking=True)
+        input_ids, labels, _ = prepare_inputs_and_labels(pixel_values, class_ids)
+        _, loss = model(input_ids=input_ids, labels=labels)
+        eval_loss += loss.mean()
+    eval_loss = eval_loss / (i + 1)
+    eval_time = time.time() - now
+
+    logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f} Eval time: {eval_time} s")
+    accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
+    model.train()
+
+
+def save_checkpoint(config, accelerator, global_step):
+    save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
+    accelerator.save_state(save_path)
+    json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
+    logger.info(f"Saved state to {save_path}")
 
 
 if __name__ == "__main__":
