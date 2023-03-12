@@ -7,9 +7,9 @@ experiment:
     output_dir: "imagenet"
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
-    save_every: 500
+    save_every: 1000
     eval_every: 500
-    generate_every: 500
+    generate_every: 1000
     log_every: 50
     resume_from_checkpoint: False
 
@@ -18,13 +18,14 @@ model:
         pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
 
     transformer:
-        vocab_size: 2025 # (1024 + 1000 + 1 -> Vq + Imagenet + <mask>)
-        max_position_embeddings: 257 # (+1 for class id)
-        hidden_size: 512
-        num_hidden_layers: 8
-        num_attention_heads: 8
-        intermediate_size: 2048
+        vocab_size: 2048 # (1024 + 1000 + 1 = 2025 -> Vq + Imagenet + <mask>, use 2048 for even division by 8)
+        max_position_embeddings: 264 # (256 + 1 for class id, use 264 for even division by 8)
+        hidden_size: 768
+        num_hidden_layers: 12
+        num_attention_heads: 12
+        intermediate_size: 3072
         codebook_size: 1024
+        num_vq_tokens: 256
         num_classes: 1000
         initializer_range: 0.02
         layer_norm_eps: 1e-6
@@ -48,13 +49,13 @@ dataset:
     preprocessing:
         resolution: 256
         center_crop: True
-        random_flip: True
+        random_flip: False
 
 
 optimizer:
     name: adamw
     params: # default adamw params
-        learning_rate: 4e-3
+        learning_rate: 1e-4
         scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999
@@ -63,7 +64,7 @@ optimizer:
 
 
 lr_scheduler:
-    scheduler: "constant"
+    scheduler: "constant_with_warmup"
     params:
         learning_rate: ${optimizer.params.learning_rate}
         warmup_steps: 500
@@ -72,7 +73,7 @@ lr_scheduler:
 training:
     gradient_accumulation_steps: 1
     batch_size: 128
-    mixed_precision: "bf16"
+    mixed_precision: "no"
     enable_tf32: True
     use_ema: False
     seed: 42
