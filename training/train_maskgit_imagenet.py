@@ -15,6 +15,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from data import ClassificationDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
+from optimizer import Lion
 from PIL import Image
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 
@@ -199,7 +200,15 @@ def main():
             * config.training.gradient_accumulation_steps
         )
 
-    optimizer = AdamW(
+    optimizer_type = config.optimizer.name
+    if optimizer_type == "adamw":
+        optimizer_cls = AdamW
+    elif optimizer_type == "lion":
+        optimizer_cls = Lion
+    else:
+        raise ValueError(f"Optimizer {optimizer_type} not supported")
+
+    optimizer = optimizer_cls(
         model.parameters(),
         lr=optimizer_config.learning_rate,
         betas=(optimizer_config.beta1, optimizer_config.beta2),
