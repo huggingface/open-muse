@@ -110,6 +110,12 @@ def main():
     #########################
     config = get_config()
 
+    # Enable TF32 on Ampere GPUs
+    if config.training.enable_tf32:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+
     config.experiment.logging_dir = Path(config.experiment.output_dir) / "logs"
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
