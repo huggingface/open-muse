@@ -354,7 +354,7 @@ def main():
                 end = time.time()
 
                 # Log metrics
-                if global_step % config.experiment.log_every == 0:
+                if (global_step + 1) % config.experiment.log_every == 0:
                     samples_per_second_per_gpu = (
                         config.training.gradient_accumulation_steps * config.training.batch_size / batch_time_m.val
                     )
@@ -366,10 +366,10 @@ def main():
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
                     }
-                    accelerator.log(logs, step=global_step)
+                    accelerator.log(logs, step=global_step + 1)
 
                     logger.info(
-                        f"Step: {global_step} "
+                        f"Step: {global_step + 1} "
                         f"Loss: {avg_loss.item():0.4f} "
                         f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
@@ -381,12 +381,12 @@ def main():
                     data_time_m.reset()
 
                 # Evaluate model on main process
-                # if global_step % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                #     validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+                if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
+                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
 
                 # Save model checkpoint
-                if global_step % config.experiment.save_every == 0 and accelerator.is_main_process:
-                    save_checkpoint(config, accelerator, global_step)
+                if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
+                    save_checkpoint(config, accelerator, global_step + 1)
 
                 global_step += 1
                 # TODO: Add generation
@@ -427,7 +427,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
 
-    logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f} Eval time: {eval_time} s")
+    logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f} Eval time: {eval_time:0.2f} s")
     accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
     model.train()
 
