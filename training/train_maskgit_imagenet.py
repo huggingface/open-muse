@@ -467,7 +467,10 @@ def generate_images(model, vq_model, accelerator, global_step):
 
     # Generate images
     model.eval()
-    gen_token_ids = accelerator.unwrap_model(model).generate(imagenet_class_ids, timesteps=4)
+    gen_token_ids = accelerator.unwrap_model(model).generate(imagenet_class_ids[:1], timesteps=4)
+    # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
+    # so we clamp them to the correct range.
+    gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
     images = vq_model.decode_code(gen_token_ids)
     model.train()
 
