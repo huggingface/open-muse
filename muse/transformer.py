@@ -332,7 +332,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones((1, seq_len), dtype=torch.long, device=self.device) * mask_token_id
+        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
         scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
 
         starting_temperature = temperature
