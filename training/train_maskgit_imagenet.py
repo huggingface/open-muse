@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, List, Tuple
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import wandb
@@ -14,6 +15,7 @@ from accelerate.logging import get_logger
 from accelerate.utils import set_seed
 from data import ClassificationDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
+from PIL import Image
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 
 import muse
@@ -394,6 +396,10 @@ def main():
                 if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
                     save_checkpoint(config, accelerator, global_step + 1)
 
+                # Generate images
+                if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
+                    generate_images(model, vq_model, accelerator, global_step + 1)
+
                 global_step += 1
                 # TODO: Add generation
 
@@ -436,6 +442,37 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
     logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f} Eval time: {eval_time:0.2f} s")
     accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
     model.train()
+
+
+@torch.no_grad()
+def generate_images(model, vq_model, accelerator, global_step):
+    logger.info("Generating images...")
+    # fmt: off
+    imagenet_class_names = ["Jay", "Castle", "coffee mug", "desk", "Husky", "Valley", "Red wine", "Coral reef", "Mixing bowl", "Cleaver", "Vine Snake", "Bloodhound", "Barbershop", "Ski", "Otter", "Snowmobile"]
+    # fmt: on
+    imagenet_class_ids = torch.tensor(
+        [17, 483, 504, 526, 248, 979, 966, 973, 659, 499, 59, 163, 424, 795, 360, 802],
+        device=accelerator.device,
+        dtype=torch.long,
+    )
+
+    # Generate images
+    model.eval()
+    gen_token_ids = accelerator.unwrap_model(model).generate(imagenet_class_ids, timesteps=4)
+    images = vq_model.decode_code(gen_token_ids)
+    model.train()
+
+    # Convert to PIL images
+    images = 2.0 * images - 1.0
+    images = torch.clamp(images, -1.0, 1.0)
+    images = (images + 1.0) / 2.0
+    images *= 255.0
+    images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+    pil_images = [Image.fromarray(image) for image in images]
+
+    # Log images
+    wandb_images = [wandb.Image(image, caption=imagenet_class_names[i]) for i, image in enumerate(pil_images)]
+    wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
 def save_checkpoint(config, accelerator, global_step):

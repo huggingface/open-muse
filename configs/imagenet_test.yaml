@@ -1,3 +1,6 @@
+wandb:
+  entity: null
+
 experiment:
     name: "imagenet"
     project: "muse"
@@ -6,6 +9,7 @@ experiment:
     max_eval_examples: 12800
     save_every: 500
     eval_every: 500
+    generate_every: 500
     log_every: 50
     resume_from_checkpoint: False
 
