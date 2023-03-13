@@ -1,3 +1,5 @@
+# Adapted from https://github.com/lucidrains/muse-maskgit-pytorch
+
 import math
 
 import torch
