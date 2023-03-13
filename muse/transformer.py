@@ -240,6 +240,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         layer_norm_eps=1e-5,
         use_bias=False,
         codebook_size=1024,
+        num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
         **kwargs,
     ):
@@ -323,7 +324,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     ):
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
-        seq_len = self.max_position_embeddings - 1  # 256 image tokens + 1 class token, hardcode for now
+        seq_len = self.config.num_vq_tokens
 
         batch_size = len(class_ids)
         shape = (batch_size, seq_len)
@@ -332,7 +333,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones((1, seq_len), dtype=torch.long, device=self.device) * mask_token_id
+        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
         scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
 
         starting_temperature = temperature
