@@ -18,13 +18,15 @@ All the artifacts of this project will be uploaded to the [openMUSE](https://hug
 
 ### Installation
 
-First create a virtual environment and install the repo using.
+First create a virtual environment and install the repo using:
 
 ```bash
 git clone https://github.com/huggingface/muse
 cd muse
 pip install -e ".[extra]"
 ```
+
+You'll need to install `PyTorch` and `torchvision` manually. We are using `torch==1.13.1` with `CUDA11.7` for training.
 
 For distributed data parallel training we use `accelerate` library, although this may change in the future. For dataset loading, we use `webdataset` library. So the dataset should be in the `webdataset` format.
 
