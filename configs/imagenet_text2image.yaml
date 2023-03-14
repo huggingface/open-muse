@@ -1,0 +1,89 @@
+wandb:
+  entity: null
+
+experiment:
+    project: "muse"
+    name: "imagenet-text2image"
+    output_dir: "imagenet-text2image"
+    max_train_examples: 1281167 # total number of imagenet examples
+    max_eval_examples: 12800
+    save_every: 1000
+    eval_every: 500
+    generate_every: 1000
+    log_every: 50
+    resume_from_checkpoint: False
+
+model:
+    vq_model:
+        pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
+    
+    text_model:
+        type: "t5"
+        pretrained: "t5-base"
+
+    transformer:
+        vocab_size: 1024
+        max_position_embeddings: 256
+        hidden_size: 768
+        num_hidden_layers: 12
+        num_attention_heads: 12
+        intermediate_size: 3072
+        encoder_hidden_size: 768
+        add_cross_attention: True
+        codebook_size: 1024
+        num_vq_tokens: 256
+        initializer_range: 0.02
+        layer_norm_eps: 1e-6
+        use_bias: False
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
+
+    gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: False
+
+
+dataset:
+    params:
+        train_shards_path_or_url: "/home/suraj_huggingface_co/imagenet-shards/imagenet-train-{000000..000320}.tar"
+        eval_shards_path_or_url: "/home/suraj_huggingface_co/imagenet-shards/imagenet-val-{000000..000049}.tar"
+        batch_size: ${training.batch_size}
+        shuffle_buffer_size: 10000
+        num_workers: 2
+        resolution: 256
+        pin_memory: True
+        persistent_workers: True
+    preprocessing:
+        max_seq_length: 96
+        resolution: 256
+        center_crop: True
+        random_flip: False
+
+
+optimizer:
+    name: adamw
+    params: # default adamw params
+        learning_rate: 1e-4
+        scale_lr: False # scale learning rate by total batch size
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.01
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "constant_with_warmup"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 500
+
+
+training:
+    gradient_accumulation_steps: 1
+    batch_size: 128
+    mixed_precision: "no"
+    enable_tf32: True
+    use_ema: False
+    seed: 42
+    max_train_steps: 10000
+    overfit_one_batch: False
+    min_masking_rate: 0.0
