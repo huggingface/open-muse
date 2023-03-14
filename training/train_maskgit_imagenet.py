@@ -201,6 +201,10 @@ def main():
     # Freeze the VQGAN
     vq_model.requires_grad_(False)
 
+    # Enable flash attention if asked
+    if config.model.enable_xformers_memory_efficient_attention:
+        model.enable_xformers_memory_efficient_attention()
+
     # Create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)

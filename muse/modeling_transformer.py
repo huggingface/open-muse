@@ -15,7 +15,7 @@
 
 # This file is heavily inspired by the original implementation from https://github.com/lucidrains/muse-maskgit-pytorch
 
-from typing import Callable
+from typing import Callable, Optional
 
 import torch
 import torch.nn.functional as F
@@ -26,6 +26,13 @@ from tqdm import tqdm
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 from .sampling import cosine_schedule, gumbel_sample, top_k
+
+try:
+    import xformers.ops as xops
+
+    is_xformers_available = True
+except ImportError:
+    is_xformers_available = False
 
 
 # layer norm without bias
@@ -63,6 +70,17 @@ class Attention(nn.Module):
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
+        self.use_memory_efficient_attention_xformers = False
+        self.xformers_attention_op = None
+
+    def set_use_memory_efficient_attention_xformers(
+        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
+    ):
+        if use_memory_efficient_attention_xformers and not is_xformers_available:
+            raise ImportError("Please install xformers to use memory efficient attention")
+        self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
+        self.xformers_attention_op = attention_op
+
     def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
         batch, seq_len, _ = hidden_states.shape
 
@@ -76,9 +94,20 @@ class Attention(nn.Module):
         key = key.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
         value = value.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
+        if self.use_memory_efficient_attention_xformers:
+            attn_output = xops.memory_efficient_attention(query, key, value)
+            attn_output = attn_output.view(batch, seq_len, self.hidden_size)
+        else:
+            attn_output = self.attention(query, key, value, attention_mask)
+
+        attn_output = self.out(attn_output)
+        return attn_output
+
+    def attention(self, query, key, value, attention_mask):
+        batch, seq_len = query.shape[:2]
         query, key, value = map(lambda t: t.transpose(1, 2), (query, key, value))  # (B, nh, T, hs)
 
-        query = query / self.scale_attn
+        query = query / self.scale_attn  # scale query
         attn_weights = torch.matmul(query, key.transpose(-2, -1))
         # Apply the attention mask
         if attention_mask is not None:
@@ -86,11 +115,8 @@ class Attention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.dropout(attn_weights)
         attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-
-        attn_output = (
-            attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
-        )  # re-assemble all head outputs side by side
-        attn_output = self.out(attn_output)
+        # re-assemble all head outputs side by side
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         return attn_output
 
 

@@ -177,6 +177,7 @@ model:
         attention_dropout: 0.0
 
     gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: False
 
 
 dataset:
@@ -242,6 +243,7 @@ __model__:
 - `model.vq_model.pretrained`: The pretrained vq model to use. Can be a path to a saved checkpoint or a huggingface model name.
 - `model.transformer`: The transformer model configuration.
 - `model.gradient_checkpointing`: Enable gradient checkpointing for the transformer model.
+- `enable_xformers_memory_efficient_attention`: Enable memory efficient attention or flash attention for the transformer model. For flash attention we need to use `fp16` or `bf16`. [xformers](https://github.com/facebookresearch/xformers) needs to be installed for this to work.
 
 __dataset__:
 - `dataset.params.train_shards_path_or_url`: The path or url to the `webdataset` training shards.
