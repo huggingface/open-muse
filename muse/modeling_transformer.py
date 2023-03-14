@@ -94,21 +94,20 @@ class Attention(nn.Module):
         key = key.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
         value = value.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
-        query, key, value = map(lambda t: t.transpose(1, 2), (query, key, value))  # (B, nh, T, hs)
-
-        if self._use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self._attention_op)
+        if self.use_memory_efficient_attention_xformers:
+            attn_output = xops.memory_efficient_attention(query, key, value)
+            attn_output = attn_output.view(batch, seq_len, self.hidden_size)
         else:
             attn_output = self.attention(query, key, value, attention_mask)
 
-        attn_output = (
-            attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
-        )  # re-assemble all head outputs side by side
         attn_output = self.out(attn_output)
         return attn_output
 
     def attention(self, query, key, value, attention_mask):
-        query = query / self.scale_attn
+        batch, seq_len = query.shape[:2]
+        query, key, value = map(lambda t: t.transpose(1, 2), (query, key, value))  # (B, nh, T, hs)
+
+        query = query / self.scale_attn  # scale query
         attn_weights = torch.matmul(query, key.transpose(-2, -1))
         # Apply the attention mask
         if attention_mask is not None:
@@ -116,6 +115,9 @@ class Attention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.dropout(attn_weights)
         attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        # re-assemble all head outputs side by side
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
+        return attn_output
 
 
 # Normformer style GLU FeedForward
