@@ -458,7 +458,7 @@ def main():
 
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
-        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, config)
         save_checkpoint(config, accelerator, global_step)
 
     # Save the final trained checkpoint
