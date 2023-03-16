@@ -39,6 +39,13 @@ from muse import MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
+try:
+    import apex
+
+    is_apex_available = True
+except ImportError:
+    is_apex_available = False
+
 logger = get_logger(__name__, log_level="INFO")
 
 
@@ -222,6 +229,11 @@ def main():
     optimizer_type = config.optimizer.name
     if optimizer_type == "adamw":
         optimizer_cls = AdamW
+    elif optimizer_type == "fused_adamw":
+        if is_apex_available:
+            optimizer_cls = apex.optimizers.FusedAdam
+        else:
+            raise ImportError("Please install apex to use fused_adam")
     elif optimizer_type == "lion":
         optimizer_cls = Lion
     else:
@@ -382,7 +394,11 @@ def main():
                 accelerator.backward(loss)
                 optimizer.step()
                 lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+
+                if optimizer_type == "fused_adamw":
+                    optimizer.zero_grad()
+                else:
+                    optimizer.zero_grad(set_to_none=True)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
