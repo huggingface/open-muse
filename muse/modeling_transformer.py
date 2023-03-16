@@ -351,7 +351,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
 
-    def forward(self, input_ids, encoder_hidden_states=None, labels=None):
+    def forward(self, input_ids, encoder_hidden_states=None, labels=None, label_smoothing=0.0):
         hidden_states = self.embed(input_ids)
 
         for layer in self.transformer_layers:
@@ -370,7 +370,9 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         hidden_states = self.encoder_layer_norm(hidden_states)
         logits = self.mlm_layer(hidden_states)
         if labels is not None:
-            loss = F.cross_entropy(logits.view(-1, self.vocab_size), labels.view(-1), ignore_index=-100)
+            loss = F.cross_entropy(
+                logits.view(-1, self.vocab_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
+            )
             return logits, loss
         return logits
 

@@ -1,5 +1,5 @@
 wandb:
-  entity: null
+    entity: null
 
 experiment:
     project: "muse"
@@ -81,3 +81,4 @@ training:
     max_train_steps: 10000
     overfit_one_batch: False
     min_masking_rate: 0.0
+    label_smoothing: 0.0
