@@ -2,8 +2,8 @@ wandb:
   entity: null
 
 experiment:
-    name: "imagenet"
     project: "muse"
+    name: "imagenet"
     output_dir: "imagenet"
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
@@ -21,8 +21,8 @@ model:
         vocab_size: 2048 # (1024 + 1000 + 1 = 2025 -> Vq + Imagenet + <mask>, use 2048 for even division by 8)
         max_position_embeddings: 264 # (256 + 1 for class id, use 264 for even division by 8)
         hidden_size: 768
-        num_hidden_layers: 12
-        num_attention_heads: 12
+        num_hidden_layers: 24
+        num_attention_heads: 16
         intermediate_size: 3072
         codebook_size: 1024
         num_vq_tokens: 256
@@ -39,8 +39,8 @@ model:
 
 dataset:
     params:
-        train_shards_path_or_url: "/home/suraj_huggingface_co/imagenet-shards/imagenet-train-{000000..000320}.tar"
-        eval_shards_path_or_url: "/home/suraj_huggingface_co/imagenet-shards/imagenet-val-{000000..000049}.tar"
+        train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-train-{000000..000320}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar -"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 10000
         num_workers: 2
