@@ -196,7 +196,7 @@ dataset:
         random_flip: False
 
 optimizer:
-    name: adamw
+    name: adamw # Can be adamw or lion or fused_adamw. Install apex for fused_adamw
     params: # default adamw params
         learning_rate: ???
         scale_lr: False # scale learning rate by total batch size
