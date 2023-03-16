@@ -329,6 +329,25 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         self.gradient_checkpointing = False
 
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        """
+        Initialize the weights according to the original implementation.
+        https://github.com/google-research/maskgit/blob/main/maskgit/nets/maskgit_transformer.py#L37
+        """
+        # TODO: make this configurable
+        if isinstance(module, nn.Linear):
+            nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
+        elif isinstance(module, nn.LayerNorm):
+            module.weight.data.fill_(1.0)
+            if module.bias is not None:
+                module.bias.data.zero_()
+
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
 

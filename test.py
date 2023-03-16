@@ -11,6 +11,7 @@ model = MaskGitTransformer(
     num_attention_heads=4,
     intermediate_size=64,
     max_position_embeddings=4 + 1,  # +1 for the class token
+    num_vq_tokens=4,
     codebook_size=codebook_size,
     num_classes=num_classes,
 )
