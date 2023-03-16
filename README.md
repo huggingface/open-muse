@@ -221,6 +221,7 @@ training:
     max_train_steps: ???
     overfit_one_batch: False
     min_masking_rate: 0.0
+    label_smoothing: 0.0
 ```
 
 Arguments with ??? are required.
@@ -276,6 +277,7 @@ __training__:
 - `training.max_train_steps`: The maximum number of training steps.
 - `training.overfit_one_batch`: Whether to overfit one batch for debugging.
 - `training.min_masking_rate`: The minimum masking rate to use for training.
+- `training.label_smoothing`: The label smoothing value to use for training.
 
 ___Notes about training and dataset.___:
 
