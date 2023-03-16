@@ -434,9 +434,7 @@ def main():
 
                 # Evaluate model on main process
                 if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                    validate_model(
-                        model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels, config
-                    )
+                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
@@ -458,7 +456,7 @@ def main():
 
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
-        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, config)
+        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
         save_checkpoint(config, accelerator, global_step)
 
     # Save the final trained checkpoint
@@ -470,7 +468,7 @@ def main():
 
 
 @torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, config):
+def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels):
     logger.info("Evaluating...")
     model.eval()
     eval_loss = 0
@@ -480,7 +478,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         class_ids = class_ids.to(accelerator.device, non_blocking=True)
         input_ids, labels, _ = prepare_inputs_and_labels(pixel_values, class_ids)
-        _, loss = model(input_ids=input_ids, labels=labels, label_smoothing=config.training.label_smoothing)
+        _, loss = model(input_ids=input_ids, labels=labels)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
