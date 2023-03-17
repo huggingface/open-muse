@@ -34,7 +34,7 @@ model:
         attention_dropout: 0.0
 
     gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: False
+    enable_xformers_memory_efficient_attention: True
 
 
 dataset:
@@ -43,7 +43,7 @@ dataset:
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar -"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 10000
-        num_workers: 2
+        num_workers: 4
         resolution: 256
         pin_memory: True
         persistent_workers: True
@@ -54,7 +54,7 @@ dataset:
 
 
 optimizer:
-    name: adamw
+    name: fused_adamw 
     params: # default adamw params
         learning_rate: 1e-4
         scale_lr: False # scale learning rate by total batch size
@@ -68,17 +68,17 @@ lr_scheduler:
     scheduler: "constant_with_warmup"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 500
+        warmup_steps: 1000
 
 
 training:
     gradient_accumulation_steps: 1
-    batch_size: 128
-    mixed_precision: "no"
+    batch_size: 192 # on 80GB A100
+    mixed_precision: "bf16"
     enable_tf32: True
     use_ema: False
     seed: 42
-    max_train_steps: 10000
+    max_train_steps: 50000
     overfit_one_batch: False
     min_masking_rate: 0.0
     label_smoothing: 0.0
