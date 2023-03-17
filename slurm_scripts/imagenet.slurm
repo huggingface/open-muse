@@ -16,7 +16,6 @@ conda activate muse
 echo "START TIME: $(date)"
 
 MUSE_REPO=/admin/home/suraj/code/muse
-TRAINING_DIR=$MUSE_REPO/training/t5
 OUTPUT_DIR=/fsx/suraj/imagenet-test-run
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
