@@ -312,7 +312,7 @@ The same command can be used to launch the training locally.
 - [x] Add W&B logging utils.
 - [x] Add WebDataset support. Not really needed for imagenet experiment but can work on this parallelly. (LAION is already available in this format so will be easier to use it).
 - [x] Add a training script for class conditional generation using imagenet.
-- [ ] Make the codebase ready for the cluster training. Add SLURM support.
+- [x] Make the codebase ready for the cluster training. Add SLURM scripts.
 
 ### Conduct text2image experiments on CC12M.
 - [ ] Finish data loading, pre-processing utils.
