@@ -11,6 +11,7 @@
 set -x -e
 
 source /admin/home/suraj/.bashrc
+source /fsx/suraj/miniconda3/etc/profile.d/conda.sh
 conda activate muse
 
 echo "START TIME: $(date)"
@@ -19,12 +20,14 @@ MUSE_REPO=/admin/home/suraj/code/muse
 OUTPUT_DIR=/fsx/suraj/imagenet-test-run
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
-pushd MUSE_REPO
+mkdir -p $OUTPUT_DIR
+touch $LOG_PATH
+pushd $MUSE_REPO
 
 CMD=" \
     training/train_maskgit_imagenet.py config=configs/imagenet.yaml \
     wandb.entity=psuraj \
-    experiment.name=$OUTPUT_DIR \
+    experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=2820 \
     "
