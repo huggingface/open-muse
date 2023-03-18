@@ -56,7 +56,6 @@ def rename_flax_dict(params):
         new_key = new_key.replace("scale", "weight")
         new_key = new_key.replace("embeddings.embedding", "embeddings.weight")
         new_key = new_key.replace("kernel", "weight")
-        print(new_key)
         params[new_key] = params.pop(key)
     params['mlm_layer.to_logits.weight'] = params['embed.word_embeddings.weight']
     return params
@@ -160,6 +159,7 @@ def convert(flax_model_path, pytorch_dump_folder_path):
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=1000,
+        layer_norm_eps=1e-12,
         layer_norm_embeddings=True,
         use_bias=True,
         use_encoder_layernorm=False,
