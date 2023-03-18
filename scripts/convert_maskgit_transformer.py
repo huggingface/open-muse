@@ -53,8 +53,12 @@ def rename_flax_dict(params):
         new_key = new_key.replace("mlm_bias", "to_logits")
         new_key = new_key.replace("Mlp_0", "ffn")
         new_key = new_key.replace("layer_output_ln", "layer_norm")
+        new_key = new_key.replace("scale", "weight")
+        new_key = new_key.replace("embeddings.embedding", "embeddings.weight")
+        new_key = new_key.replace("kernel", "weight")
+        print(new_key)
         params[new_key] = params.pop(key)
-    params['mlm_layer.to_logits.weight'] = params['embed.word_embeddings.embedding']
+    params['mlm_layer.to_logits.weight'] = params['embed.word_embeddings.weight']
     return params
 
 
@@ -76,30 +80,31 @@ def load_flax_weights_in_pytorch_model(pt_model, flax_state):
     # keep track of unexpected & missing keys
     unexpected_keys = []
     missing_keys = set(pt_model_dict.keys())
-    for i in range(24):
-        flax_state[f'transformer_layers.{i}.attention.query.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.query.kernel']), (768, -1))
-        flax_state[f'transformer_layers.{i}.attention.query.bias'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.query.bias']), (-1,))
-        flax_state[f'transformer_layers.{i}.attention.key.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.key.kernel']), (768, -1))
-        flax_state[f'transformer_layers.{i}.attention.key.bias'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.key.bias']), (-1,))
-        flax_state[f'transformer_layers.{i}.attention.value.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.value.kernel']), (768, -1))
-        flax_state[f'transformer_layers.{i}.attention.value.bias'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.value.bias']), (-1,))
-        flax_state[f'transformer_layers.{i}.attention.out.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.out.kernel']), (-1, 768))
+
     for flax_key, flax_tensor in flax_state.items():
         flax_key_tuple = tuple(flax_key.split("."))
+        flax_tensor = torch.from_numpy(flax_tensor)
+        if flax_key_tuple[0] == "transformer_layers" and len(flax_tensor.shape) == 3:
+            if flax_tensor.shape[0] == 768:
+                flax_tensor = flax_tensor.permute(1, 2, 0)
+            elif flax_tensor.shape[-1] == 768:
+                flax_tensor = flax_tensor.permute(2, 0, 1)
+        if flax_key_tuple[0] == "transformer_layers" and len(flax_tensor.shape) == 2:
+            if not 'bias' == flax_key_tuple[-1]:
+                flax_tensor = flax_tensor.permute(1, 0)
+        if flax_key_tuple[0] == "mlm_layer" and len(flax_tensor.shape) == 2:
+            if not flax_key_tuple[1] == "to_logits":
+                flax_tensor = flax_tensor.permute(1, 0)
 
-        # rename flax weights to PyTorch format
-        if flax_key_tuple[-1] == "kernel" and ".".join(flax_key_tuple) not in pt_model_dict:
-            # linear layer
-            flax_key_tuple = flax_key_tuple[:-1] + ("weight",)
-            flax_tensor = flax_tensor.T
-        elif flax_key_tuple[-1] in ["scale", "embedding"]:
-            flax_key_tuple = flax_key_tuple[:-1] + ("weight",)
+        if flax_key_tuple[0] == "transformer_layers" and 'bias' == flax_key_tuple[-1] and len(flax_tensor.shape) == 2:
+            flax_tensor = flax_tensor.reshape(-1)
+        if flax_key_tuple[0] == "transformer_layers" and 'weight' == flax_key_tuple[-1] and len(flax_tensor.shape) == 3:
+            if flax_tensor.shape[0] == 768:
+                flax_tensor = flax_tensor.reshape(flax_tensor.shape[0], -1)
+            elif flax_tensor.shape[-1] == 768:
+                flax_tensor = flax_tensor.reshape(-1, flax_tensor.shape[-1])
 
         flax_key = ".".join(flax_key_tuple)
-
-        if "in_proj.weight" in flax_key:
-            flax_key = flax_key.replace("in_proj.weight", "in_proj_weight")
-
         if flax_key in pt_model_dict:
             if flax_tensor.shape != pt_model_dict[flax_key].shape:
                 raise ValueError(
