@@ -21,10 +21,16 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 from flax.traverse_util import flatten_dict
-from maskgit.utils import restore_from_path
 import argparse
 
 from muse import MaskGitTransformer
+import tensorflow as tf
+import flax
+
+def restore_from_path(path):
+  with tf.io.gfile.GFile(path, "rb") as f:
+    state = flax.serialization.from_bytes(None, f.read())
+  return state
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +43,7 @@ def rename_flax_dict(params):
         params[new_key] = params.pop(key)
     keys = list(params.keys())
 
-
-    encoder_keys = [key for key in keys if "encoder.ResBlock" in key]
-    for key in encoder_keys:
+    for key in keys:
         new_key = key.replace("Embed_0", "embed")
         for i in range(24):
             new_key = key.replace(f"TransformerLayer_{i}.", f"transformer_layers.{i}.")

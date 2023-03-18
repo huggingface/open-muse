@@ -41,7 +41,7 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=setuptools.find_packages(),
-    install_requires=["transformers", "accelerate", "einops", "omegaconf", "webdataset"],
+    install_requires=["transformers", "accelerate", "einops", "omegaconf", "webdataset", "huggingface_hub>0.4.0"],
     extras_require={
         "dev": ["black[jupyter]", "isort", "flake8>=3.8.3"],
     },
