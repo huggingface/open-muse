@@ -88,11 +88,7 @@ def load_flax_weights_in_pytorch_model(pt_model, flax_state):
         flax_key_tuple = tuple(flax_key.split("."))
 
         # rename flax weights to PyTorch format
-        if flax_key_tuple[-1] == "kernel" and flax_tensor.ndim == 4 and ".".join(flax_key_tuple) not in pt_model_dict:
-            # conv layer
-            flax_key_tuple = flax_key_tuple[:-1] + ("weight",)
-            flax_tensor = jnp.transpose(flax_tensor, (3, 2, 0, 1))
-        elif flax_key_tuple[-1] == "kernel" and ".".join(flax_key_tuple) not in pt_model_dict:
+        if flax_key_tuple[-1] == "kernel" and ".".join(flax_key_tuple) not in pt_model_dict:
             # linear layer
             flax_key_tuple = flax_key_tuple[:-1] + ("weight",)
             flax_tensor = flax_tensor.T
