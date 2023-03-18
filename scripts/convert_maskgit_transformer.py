@@ -46,15 +46,15 @@ def rename_flax_dict(params):
     for key in keys:
         new_key = key.replace("Embed_0", "embed")
         for i in range(24):
-            new_key = key.replace(f"TransformerLayer_{i}.", f"transformer_layers.{i}.")
-        new_key = key.replace("Attention_0.attention_output_ln", "attn_layer_norm")
-        new_key = key.replace("Attention_0.self_attention", "attention")
-        new_key = key.replace("MlmLayer_0", "mlm_layer")
-        new_key = key.replace("mlm_bias", "to_logits")
-        new_key = key.replace("Mlp_0", "ffn")
-        new_key = key.replace("layer_output_ln", "layer_norm")
+            new_key = new_key.replace(f"TransformerLayer_{i}.", f"transformer_layers.{i}.")
+        new_key = new_key.replace("Attention_0.attention_output_ln", "attn_layer_norm")
+        new_key = new_key.replace("Attention_0.self_attention", "attention")
+        new_key = new_key.replace("MlmLayer_0", "mlm_layer")
+        new_key = new_key.replace("mlm_bias", "to_logits")
+        new_key = new_key.replace("Mlp_0", "ffn")
+        new_key = new_key.replace("layer_output_ln", "layer_norm")
         params[new_key] = params.pop(key)
-    params['mlm_layer.to_logits.weight'] = params['embed.word_embeddings.weight']
+    params['mlm_layer.to_logits.weight'] = params['embed.word_embeddings.embedding']
     return params
 
 
@@ -77,15 +77,13 @@ def load_flax_weights_in_pytorch_model(pt_model, flax_state):
     unexpected_keys = []
     missing_keys = set(pt_model_dict.keys())
     for i in range(24):
-        flax_state[f'transformer_layers.{i}.attention.query.kernel'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.query.kernel'], (768, -1))
-        flax_state[f'transformer_layers.{i}.attention.query.bias'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.query.bias'], (-1,))
-        flax_state[f'transformer_layers.{i}.attention.key.kernel'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.key.kernel'], (768, -1))
-        flax_state[f'transformer_layers.{i}.attention.key.bias'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.key.bias'], (-1,))
-        flax_state[f'transformer_layers.{i}.attention.value.kernel'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.value.kernel'], (768, -1))
-        flax_state[f'transformer_layers.{i}.attention.value.bias'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.value.bias'], (-1,))
-        flax_state[f'transformer_layers.{i}.attention.out.kernel'] = torch.reshape(flax_state[f'transformer_layers.{i}.attention.out.kernel'], (-1, 768))
-        flax_state[f'transformer_layers.{i}.ffn.intermediate_output.kernel'] = torch.transpose(flax_state[f'transformer_layers.{i}.ffn.intermediate_output.kernel'], 0, 1)
-        flax_state[f'transformer_layers.{i}.ffn.layer_output.kernel'] = torch.transpose(flax_state[f'transformer_layers.{i}.ffn.layer_output.kernel'], 0, 1)
+        flax_state[f'transformer_layers.{i}.attention.query.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.query.kernel']), (768, -1))
+        flax_state[f'transformer_layers.{i}.attention.query.bias'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.query.bias']), (-1,))
+        flax_state[f'transformer_layers.{i}.attention.key.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.key.kernel']), (768, -1))
+        flax_state[f'transformer_layers.{i}.attention.key.bias'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.key.bias']), (-1,))
+        flax_state[f'transformer_layers.{i}.attention.value.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.value.kernel']), (768, -1))
+        flax_state[f'transformer_layers.{i}.attention.value.bias'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.value.bias']), (-1,))
+        flax_state[f'transformer_layers.{i}.attention.out.kernel'] = torch.reshape(torch.from_numpy(flax_state[f'transformer_layers.{i}.attention.out.kernel']), (-1, 768))
     for flax_key, flax_tensor in flax_state.items():
         flax_key_tuple = tuple(flax_key.split("."))
 

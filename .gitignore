@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 models
 *.ipynb
-
+*.png
 # C extensions
 *.so
 
