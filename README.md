@@ -18,13 +18,15 @@ All the artifacts of this project will be uploaded to the [openMUSE](https://hug
 
 ### Installation
 
-First create a virtual environment and install the repo using.
+First create a virtual environment and install the repo using:
 
 ```bash
 git clone https://github.com/huggingface/muse
 cd muse
 pip install -e ".[extra]"
 ```
+
+You'll need to install `PyTorch` and `torchvision` manually. We are using `torch==1.13.1` with `CUDA11.7` for training.
 
 For distributed data parallel training we use `accelerate` library, although this may change in the future. For dataset loading, we use `webdataset` library. So the dataset should be in the `webdataset` format.
 
@@ -152,6 +154,7 @@ experiment:
     eval_every: 500
     generate_every: 1000
     log_every: 50
+    log_grad_norm_every: 100
     resume_from_checkpoint: latest
 
 model:
@@ -175,6 +178,7 @@ model:
         attention_dropout: 0.0
 
     gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: False
 
 
 dataset:
@@ -193,7 +197,7 @@ dataset:
         random_flip: False
 
 optimizer:
-    name: adamw
+    name: adamw # Can be adamw or lion or fused_adamw. Install apex for fused_adamw
     params: # default adamw params
         learning_rate: ???
         scale_lr: False # scale learning rate by total batch size
@@ -218,6 +222,7 @@ training:
     max_train_steps: ???
     overfit_one_batch: False
     min_masking_rate: 0.0
+    label_smoothing: 0.0
 ```
 
 Arguments with ??? are required.
@@ -234,12 +239,14 @@ __experiment__:
 - `experiment.eval_every`: Evaluate the model every `eval_every` steps.
 - `experiment.generate_every`: Generate images every `generate_every` steps.
 - `experiment.log_every`: Log the training metrics every `log_every` steps.
+- `log_grad_norm_every`: Log the gradient norm every `log_grad_norm_every` steps.
 - `experiment.resume_from_checkpoint`: The checkpoint to resume training from. Can be `latest` to resume from the latest checkpoint or path to a saved checkpoint. If `None` or the path does not exist then training starts from scratch.
 
 __model__:
 - `model.vq_model.pretrained`: The pretrained vq model to use. Can be a path to a saved checkpoint or a huggingface model name.
 - `model.transformer`: The transformer model configuration.
 - `model.gradient_checkpointing`: Enable gradient checkpointing for the transformer model.
+- `enable_xformers_memory_efficient_attention`: Enable memory efficient attention or flash attention for the transformer model. For flash attention we need to use `fp16` or `bf16`. [xformers](https://github.com/facebookresearch/xformers) needs to be installed for this to work.
 
 __dataset__:
 - `dataset.params.train_shards_path_or_url`: The path or url to the `webdataset` training shards.
@@ -272,6 +279,7 @@ __training__:
 - `training.max_train_steps`: The maximum number of training steps.
 - `training.overfit_one_batch`: Whether to overfit one batch for debugging.
 - `training.min_masking_rate`: The minimum masking rate to use for training.
+- `training.label_smoothing`: The label smoothing value to use for training.
 
 ___Notes about training and dataset.___:
 
@@ -306,7 +314,7 @@ The same command can be used to launch the training locally.
 - [x] Add W&B logging utils.
 - [x] Add WebDataset support. Not really needed for imagenet experiment but can work on this parallelly. (LAION is already available in this format so will be easier to use it).
 - [x] Add a training script for class conditional generation using imagenet.
-- [ ] Make the codebase ready for the cluster training. Add SLURM support.
+- [x] Make the codebase ready for the cluster training. Add SLURM scripts.
 
 ### Conduct text2image experiments on CC12M.
 - [ ] Finish data loading, pre-processing utils.

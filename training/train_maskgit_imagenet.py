@@ -39,6 +39,13 @@ from muse import MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
+try:
+    import apex
+
+    is_apex_available = True
+except ImportError:
+    is_apex_available = False
+
 logger = get_logger(__name__, log_level="INFO")
 
 
@@ -134,12 +141,13 @@ def main():
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
 
-    config.experiment.logging_dir = Path(config.experiment.output_dir) / "logs"
+    config.experiment.logging_dir = str(Path(config.experiment.output_dir) / "logs")
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
         log_with="wandb",
         logging_dir=config.experiment.logging_dir,
+        split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes.
     )
 
     #####################################
@@ -160,15 +168,17 @@ def main():
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
+        resume_wandb_run = config.experiment.resume_from_checkpoint
         run_id = config.wandb.get("run_id", None)
         if run_id is None:
+            resume_wandb_run = False
             run_id = wandb.util.generate_id()
             config.wandb.run_id = run_id
 
         wandb_init_kwargs = dict(
             name=config.experiment.name,
             id=run_id,
-            resume=config.experiment.resume_from_checkpoint,
+            resume=resume_wandb_run,
             entity=config.wandb.get("entity", None),
             config_exclude_keys=[],
         )
@@ -201,6 +211,10 @@ def main():
     # Freeze the VQGAN
     vq_model.requires_grad_(False)
 
+    # Enable flash attention if asked
+    if config.model.enable_xformers_memory_efficient_attention:
+        model.enable_xformers_memory_efficient_attention()
+
     # Create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
@@ -218,6 +232,11 @@ def main():
     optimizer_type = config.optimizer.name
     if optimizer_type == "adamw":
         optimizer_cls = AdamW
+    elif optimizer_type == "fused_adamw":
+        if is_apex_available:
+            optimizer_cls = apex.optimizers.FusedAdam
+        else:
+            raise ImportError("Please install apex to use fused_adam")
     elif optimizer_type == "lion":
         optimizer_cls = Lion
     else:
@@ -299,21 +318,29 @@ def main():
     resume_from_checkpoint = config.experiment.resume_from_checkpoint
     if resume_from_checkpoint:
         if resume_from_checkpoint != "latest":
-            path = os.path.basename(resume_from_checkpoint)
+            path = resume_from_checkpoint
         else:
             # Get the most recent checkpoint
             dirs = os.listdir(config.experiment.output_dir)
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
+            path = os.path.join(config.experiment.output_dir, path)
 
         if path is None:
             accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
             resume_from_checkpoint = None
         else:
             accelerator.print(f"Resuming from checkpoint {path}")
-            accelerator.load_state(os.path.join(config.experiment.output_dir, path))
-            global_step = int(path.split("-")[1])
+
+            resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
+            if not resume_lr_scheduler:
+                logger.info("Not resuming the lr scheduler.")
+                accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
+            accelerator.load_state(path)
+            if not resume_lr_scheduler:
+                accelerator._schedulers = [lr_scheduler]
+            global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
 
     @torch.no_grad()
@@ -370,7 +397,7 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                _, loss = model(input_ids=input_ids, labels=labels)
+                _, loss = model(input_ids=input_ids, labels=labels, label_smoothing=config.training.label_smoothing)
                 # Gather thexd losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
@@ -378,7 +405,19 @@ def main():
                 accelerator.backward(loss)
                 optimizer.step()
                 lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+
+                # log gradient norm before zeroing it
+                if (
+                    accelerator.sync_gradients
+                    and (global_step + 1) % config.experiment.log_grad_norm_every == 0
+                    and accelerator.is_main_process
+                ):
+                    log_grad_norm(model, accelerator, global_step + 1)
+
+                if optimizer_type == "fused_adamw":
+                    optimizer.zero_grad()
+                else:
+                    optimizer.zero_grad(set_to_none=True)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
@@ -507,6 +546,14 @@ def save_checkpoint(config, accelerator, global_step):
     accelerator.save_state(save_path)
     json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
     logger.info(f"Saved state to {save_path}")
+
+
+def log_grad_norm(model, accelerator, global_step):
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grads = param.grad.detach().data
+            grad_norm = (grads.norm(p=2) / grads.numel()).item()
+            accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
 
 
 if __name__ == "__main__":

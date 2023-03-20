@@ -20,6 +20,23 @@ from codecs import open
 
 import setuptools
 
+_deps = [
+    "transformers==4.26.1",
+    "accelerate==0.17.1",
+    "einops==0.6.0",
+    "omegaconf==2.3.0",
+    "webdataset>=0.2.39",
+    "wandb",
+    "huggingface_hub>0.4.0",
+]
+
+_extras_dev_deps = [
+    "black[jupyter]~=23.1",
+    "isort>=5.5.4",
+    "flake8>=3.8.3",
+]
+
+
 here = os.path.abspath(os.path.dirname(__file__))
 
 with open(os.path.join(here, "README.md"), encoding="utf-8") as f:
@@ -41,8 +58,8 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     packages=setuptools.find_packages(),
-    install_requires=["transformers", "accelerate", "einops", "omegaconf", "webdataset", "huggingface_hub>0.4.0"],
+    install_requires=_deps,
     extras_require={
-        "dev": ["black[jupyter]", "isort", "flake8>=3.8.3"],
+        "dev": [_extras_dev_deps],
     },
 )

@@ -1,5 +1,5 @@
 wandb:
-  entity: ???
+    entity: ???
 
 experiment:
     name: ???
@@ -10,6 +10,7 @@ experiment:
     eval_every: 500
     generate_every: 1000
     log_every: 50
+    log_grad_norm_every: 100
     resume_from_checkpoint: latest
 
 model:
@@ -33,6 +34,7 @@ model:
         attention_dropout: 0.0
 
     gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: False
 
 
 dataset:
@@ -51,7 +53,7 @@ dataset:
         random_flip: False
 
 optimizer:
-    name: adamw
+    name: adamw # Can be adamw or lion or fused_adamw. Install apex for fused_adamw
     params: # default adamw params
         learning_rate: ???
         scale_lr: False # scale learning rate by total batch size
@@ -76,3 +78,4 @@ training:
     max_train_steps: ???
     overfit_one_batch: False
     min_masking_rate: 0.0
+    label_smoothing: 0.0
