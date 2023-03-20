@@ -396,6 +396,14 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
 
+                # log gradient norm before zeroing it
+                if (
+                    accelerator.sync_gradients
+                    and (global_step + 1) % config.experiment.log_grad_norm_every == 0
+                    and accelerator.is_main_process
+                ):
+                    log_grad_norm(model, accelerator, global_step + 1)
+
                 if optimizer_type == "fused_adamw":
                     optimizer.zero_grad()
                 else:
@@ -528,6 +536,14 @@ def save_checkpoint(config, accelerator, global_step):
     accelerator.save_state(save_path)
     json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
     logger.info(f"Saved state to {save_path}")
+
+
+def log_grad_norm(model, accelerator, global_step):
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grads = param.grad.detach().data
+            grad_norm = (grads.norm(p=2) / grads.numel()).item()
+            accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
 
 
 if __name__ == "__main__":
