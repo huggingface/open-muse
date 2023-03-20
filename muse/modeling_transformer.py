@@ -122,8 +122,17 @@ class Attention(nn.Module):
 
 # Normformer style GLU FeedForward
 class FeedForward(nn.Module):
-    def __init__(self, hidden_size, intermediate_size, hidden_dropout=0.0, layer_norm_eps=1e-5, use_bias=False):
+    def __init__(
+        self,
+        hidden_size,
+        intermediate_size,
+        hidden_dropout=0.0,
+        layer_norm_eps=1e-5,
+        use_normformer=True,
+        use_bias=False,
+    ):
         super().__init__()
+        self.use_normformer = use_normformer
         self.pre_mlp_layer_norm = LayerNorm(hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.wi_0 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
@@ -137,8 +146,8 @@ class FeedForward(nn.Module):
         hidden_gelu = F.gelu(self.wi_0(hidden_states))
         hidden_linear = self.wi_1(hidden_states)
         hidden_states = hidden_gelu * hidden_linear
-
-        hidden_states = self.mid_mlp_layer_norm(hidden_states)
+        if self.use_normformer:
+            hidden_states = self.mid_mlp_layer_norm(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.wo(hidden_states)
         return hidden_states
@@ -156,6 +165,7 @@ class TransformerLayer(nn.Module):
         hidden_dropout=0.0,
         attention_dropout=0.0,
         layer_norm_eps=1e-5,
+        use_normformer=True,
         use_bias=False,
     ):
         super().__init__()
@@ -168,7 +178,9 @@ class TransformerLayer(nn.Module):
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
-        self.ffn = FeedForward(self.hidden_size, self.intermediate_size, hidden_dropout, layer_norm_eps, use_bias)
+        self.ffn = FeedForward(
+            self.hidden_size, self.intermediate_size, hidden_dropout, layer_norm_eps, use_normformer, use_bias
+        )
 
         if add_cross_attention:
             self.crossattn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
@@ -281,6 +293,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         add_cross_attention=False,
         initializer_range=0.02,
         layer_norm_eps=1e-5,
+        use_normformer=True,
         use_bias=False,
         codebook_size=1024,
         num_vq_tokens=256,
@@ -319,6 +332,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     hidden_dropout=self.hidden_dropout,
                     attention_dropout=self.attention_dropout,
                     layer_norm_eps=layer_norm_eps,
+                    use_normformer=use_normformer,
                     use_bias=use_bias,
                 )
                 for _ in range(self.num_hidden_layers)
