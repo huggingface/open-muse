@@ -174,11 +174,14 @@ class TransformerLayer(nn.Module):
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
+        self.use_normformer = use_normformer
 
         self.attn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
+        if use_normformer:
+            self.post_attn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.ffn = FeedForward(
             self.hidden_size, self.intermediate_size, hidden_dropout, layer_norm_eps, use_normformer, use_bias
         )
@@ -188,12 +191,16 @@ class TransformerLayer(nn.Module):
             self.crossattention = Attention(
                 self.hidden_size, self.num_attention_heads, encoder_hidden_size, attention_dropout, use_bias
             )
+            if use_normformer:
+                self.post_crossattn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
 
     def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
         attention_output = self.attention(hidden_states, attention_mask)
+        if self.use_normformer:
+            attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
 
         if encoder_hidden_states is not None:
@@ -201,6 +208,8 @@ class TransformerLayer(nn.Module):
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
             attention_output = self.crossattention(hidden_states, encoder_hidden_states=encoder_hidden_states)
+            if self.use_normformer:
+                attention_output = self.post_crossattn_layer_norm(attention_output)
             hidden_states = residual + attention_output
 
         residual = hidden_states
