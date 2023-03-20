@@ -436,6 +436,8 @@ def main():
                 # Evaluate model on main process
                 if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
                     validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
+                    # log gradient norms
+                    log_grad_norm(model, accelerator, global_step + 1)
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
@@ -529,6 +531,13 @@ def save_checkpoint(config, accelerator, global_step):
     json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
     logger.info(f"Saved state to {save_path}")
 
+
+def log_grad_norm(model, accelerator, global_step):
+    for name, param in model.named_parameters():
+        if param.grad is not None:
+            grads = param.grad.detach().data
+            grad_norm = (grads.norm(p=2) / grads.numel()).item()
+            accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
 
 if __name__ == "__main__":
     main()
