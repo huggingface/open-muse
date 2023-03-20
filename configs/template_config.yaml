@@ -31,6 +31,7 @@ model:
         layer_norm_eps: 1e-6
         use_bias: False
         use_normformer: True
+        use_encoder_layernorm: True
         hidden_dropout: 0.0
         attention_dropout: 0.0
 
