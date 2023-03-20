@@ -396,6 +396,14 @@ def main():
                 optimizer.step()
                 lr_scheduler.step()
 
+                # log gradient norm before zeroing it
+                if (
+                    accelerator.sync_gradients
+                    and (global_step + 1) % config.experiment.log_grad_norm_every == 0
+                    and accelerator.is_main_process
+                ):
+                    log_grad_norm(model, accelerator, global_step + 1)
+
                 if optimizer_type == "fused_adamw":
                     optimizer.zero_grad()
                 else:
@@ -436,8 +444,6 @@ def main():
                 # Evaluate model on main process
                 if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
                     validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
-                    # log gradient norms
-                    log_grad_norm(model, accelerator, global_step + 1)
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
@@ -538,6 +544,7 @@ def log_grad_norm(model, accelerator, global_step):
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
             accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
+
 
 if __name__ == "__main__":
     main()

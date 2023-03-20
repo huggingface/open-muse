@@ -154,6 +154,7 @@ experiment:
     eval_every: 500
     generate_every: 1000
     log_every: 50
+    log_grad_norm_every: 100
     resume_from_checkpoint: latest
 
 model:
@@ -238,6 +239,7 @@ __experiment__:
 - `experiment.eval_every`: Evaluate the model every `eval_every` steps.
 - `experiment.generate_every`: Generate images every `generate_every` steps.
 - `experiment.log_every`: Log the training metrics every `log_every` steps.
+- `log_grad_norm_every`: Log the gradient norm every `log_grad_norm_every` steps.
 - `experiment.resume_from_checkpoint`: The checkpoint to resume training from. Can be `latest` to resume from the latest checkpoint or path to a saved checkpoint. If `None` or the path does not exist then training starts from scratch.
 
 __model__:
