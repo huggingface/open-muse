@@ -70,7 +70,6 @@ class ClassificationDataset:
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
-            wds.shuffle(100),
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
             wds.shuffle(shuffle_buffer_size),
             wds.decode("pil", handler=wds.ignore_and_continue),
