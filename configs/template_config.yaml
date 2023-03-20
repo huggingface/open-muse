@@ -32,6 +32,7 @@ model:
         use_bias: False
         use_normformer: True
         use_encoder_layernorm: True
+        use_mlm_layernorm: True
         hidden_dropout: 0.0
         attention_dropout: 0.0
 

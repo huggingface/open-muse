@@ -270,17 +270,20 @@ class Embed(nn.Module):
 
 
 class MlmLayer(nn.Module):
-    def __init__(self, hidden_size, vocab_size, layer_norm_eps=1e-5, use_bias=False):
+    def __init__(self, hidden_size, vocab_size, layer_norm_eps=1e-5, use_mlm_layernorm=True, use_bias=False):
         super().__init__()
         self.hidden_size = hidden_size
+        self.use_mlm_layernorm = use_mlm_layernorm
         self.mlm_dense = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-        self.mlm_ln = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+        if use_mlm_layernorm:
+            self.mlm_ln = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.to_logits = nn.Linear(self.hidden_size, vocab_size, bias=use_bias)
 
     def forward(self, hidden_states):
         hidden_states = self.mlm_dense(hidden_states)
         hidden_states = F.gelu(hidden_states)
-        hidden_states = self.mlm_ln(hidden_states)
+        if self.use_mlm_layernorm:
+            hidden_states = self.mlm_ln(hidden_states)
         logits = self.to_logits(hidden_states)
         return logits
 
@@ -305,6 +308,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         layer_norm_eps=1e-5,
         use_normformer=True,
         use_encoder_layernorm=True,
+        use_mlm_layernorm=True,
         use_bias=False,
         codebook_size=1024,
         num_vq_tokens=256,
@@ -351,7 +355,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         )
         if use_encoder_layernorm:
             self.encoder_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
-        self.mlm_layer = MlmLayer(self.hidden_size, self.vocab_size, layer_norm_eps, use_bias)
+        self.mlm_layer = MlmLayer(self.hidden_size, self.vocab_size, layer_norm_eps, use_mlm_layernorm, use_bias)
 
         self.gradient_checkpointing = False
 
