@@ -393,9 +393,9 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             else:
                 hidden_states = layer(hidden_states, encoder_hidden_states=encoder_hidden_states)
 
-        hidden_states = self.encoder_layer_norm(hidden_states)
         if self.config.use_encoder_layernorm:
-            logits = self.mlm_layer(hidden_states)
+            hidden_states = self.encoder_layer_norm(hidden_states)
+        logits = self.mlm_layer(hidden_states)
         if labels is not None:
             loss = F.cross_entropy(
                 logits.view(-1, self.vocab_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
