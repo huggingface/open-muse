@@ -30,6 +30,7 @@ model:
         initializer_range: 0.02
         layer_norm_eps: 1e-6
         use_bias: False
+        use_normformer: True
         hidden_dropout: 0.0
         attention_dropout: 0.0
 
