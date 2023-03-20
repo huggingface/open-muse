@@ -304,6 +304,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         initializer_range=0.02,
         layer_norm_eps=1e-5,
         use_normformer=True,
+        use_encoder_layernorm=True,
         use_bias=False,
         codebook_size=1024,
         num_vq_tokens=256,
@@ -348,7 +349,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 for _ in range(self.num_hidden_layers)
             ]
         )
-        self.encoder_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+        if use_encoder_layernorm:
+            self.encoder_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.mlm_layer = MlmLayer(self.hidden_size, self.vocab_size, layer_norm_eps, use_bias)
 
         self.gradient_checkpointing = False
@@ -391,7 +393,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             else:
                 hidden_states = layer(hidden_states, encoder_hidden_states=encoder_hidden_states)
 
-        hidden_states = self.encoder_layer_norm(hidden_states)
+        if self.config.use_encoder_layernorm:
+            hidden_states = self.encoder_layer_norm(hidden_states)
         logits = self.mlm_layer(hidden_states)
         if labels is not None:
             loss = F.cross_entropy(
