@@ -136,7 +136,8 @@ class FeedForward(nn.Module):
         self.pre_mlp_layer_norm = LayerNorm(hidden_size, eps=layer_norm_eps, use_bias=use_bias)
         self.wi_0 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
-        self.mid_mlp_layer_norm = LayerNorm(intermediate_size, eps=layer_norm_eps, use_bias=use_bias)
+        if use_normformer:
+            self.mid_mlp_layer_norm = LayerNorm(intermediate_size, eps=layer_norm_eps, use_bias=use_bias)
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
 
