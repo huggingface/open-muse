@@ -13,6 +13,7 @@ experiment:
     log_every: 50
     log_grad_norm_every: 100
     resume_from_checkpoint: False
+    resume_lr_scheduler: True
 
 model:
     vq_model:

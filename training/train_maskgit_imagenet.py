@@ -141,7 +141,7 @@ def main():
         torch.backends.cudnn.benchmark = True
         torch.backends.cudnn.deterministic = False
 
-    config.experiment.logging_dir = Path(config.experiment.output_dir) / "logs"
+    config.experiment.logging_dir = str(Path(config.experiment.output_dir) / "logs")
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
@@ -168,15 +168,17 @@ def main():
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
+        resume_wandb_run = config.experiment.resume_from_checkpoint
         run_id = config.wandb.get("run_id", None)
         if run_id is None:
+            resume_wandb_run = False
             run_id = wandb.util.generate_id()
             config.wandb.run_id = run_id
 
         wandb_init_kwargs = dict(
             name=config.experiment.name,
             id=run_id,
-            resume=config.experiment.resume_from_checkpoint,
+            resume=resume_wandb_run,
             entity=config.wandb.get("entity", None),
             config_exclude_keys=[],
         )
@@ -316,21 +318,29 @@ def main():
     resume_from_checkpoint = config.experiment.resume_from_checkpoint
     if resume_from_checkpoint:
         if resume_from_checkpoint != "latest":
-            path = os.path.basename(resume_from_checkpoint)
+            path = resume_from_checkpoint
         else:
             # Get the most recent checkpoint
             dirs = os.listdir(config.experiment.output_dir)
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
+            path = os.path.join(config.experiment.output_dir, path)
 
         if path is None:
             accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
             resume_from_checkpoint = None
         else:
             accelerator.print(f"Resuming from checkpoint {path}")
-            accelerator.load_state(os.path.join(config.experiment.output_dir, path))
-            global_step = int(path.split("-")[1])
+
+            resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
+            if not resume_lr_scheduler:
+                logger.info("Not resuming the lr scheduler.")
+                accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
+            accelerator.load_state(path)
+            if not resume_lr_scheduler:
+                accelerator._schedulers = [lr_scheduler]
+            global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
 
     @torch.no_grad()
