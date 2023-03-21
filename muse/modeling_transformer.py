@@ -51,6 +51,25 @@ def prob_mask_like(shape, prob, device=None):
         return uniform(shape, device=device) < prob
 
 
+def make_attention_mask(
+    query_input: torch.Tensor,
+    key_input: torch.Tensor,
+    pairwise_fn: Callable = torch.mul,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    # [batch, len_q, len_kv]
+    mask = pairwise_fn(
+        # [batch, len_q] -> [batch, len_q, 1]
+        torch.unsqueeze(query_input, axis=-1),
+        # [batch, len_q] -> [batch, 1, len_kv]
+        torch.unsqueeze(key_input, axis=-2),
+    )
+    # [batch, 1, len_q, len_kv]. This creates the head dim.
+    mask = torch.unsqueeze(mask, axis=-3)
+    mask = (1.0 - mask) * torch.finfo(dtype).min
+    return mask.type(dtype)
+
+
 # layer norm without bias
 class LayerNorm(nn.Module):
     def __init__(self, dim, eps=1e-5, use_bias=False):
@@ -97,7 +116,7 @@ class Attention(nn.Module):
         self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
         self.xformers_attention_op = attention_op
 
-    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         batch, seq_len, _ = hidden_states.shape
 
         context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
@@ -111,9 +130,19 @@ class Attention(nn.Module):
         value = value.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value)
+            attn_bias = None
+            if encoder_attention_mask is not None:
+                q_seq_lens = [seq_len] * query.shape[0]
+                kv_seq_lens = encoder_attention_mask.sum(dim=1).tolist()
+                attn_bias = xops.fmha.attn_bias.BlockDiagonalMask.from_seqlens(q_seq_lens, kv_seq_lens)
+                query, key, value = [x.reshape([1, -1, *x.shape[2:]]) for x in [query, key, value]]
+
+            attn_output = xops.memory_efficient_attention(query, key, value, attn_bias=attn_bias)
             attn_output = attn_output.view(batch, seq_len, self.hidden_size)
         else:
+            if encoder_attention_mask is not None:
+                src_attn_mask = torch.ones(batch, seq_len, dtype=torch.long, device=query.device)
+                attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
             attn_output = self.attention(query, key, value, attention_mask)
 
         attn_output = self.out(attn_output)
@@ -210,11 +239,11 @@ class TransformerLayer(nn.Module):
             if use_normformer:
                 self.post_crossattn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
 
-    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
-        attention_output = self.attention(hidden_states, attention_mask)
+        attention_output = self.attention(hidden_states, encoder_hidden_states, encoder_attention_mask)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
@@ -402,7 +431,15 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
 
-    def forward(self, input_ids, encoder_hidden_states=None, labels=None, label_smoothing=0.0, cond_dropout_prob=0.0):
+    def forward(
+        self,
+        input_ids,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        label_smoothing=0.0,
+        cond_dropout_prob=0.0,
+    ):
         hidden_states = self.embed(input_ids)
 
         # condition dropout for classifier free guidance
@@ -420,9 +457,15 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
                     return custom_forward
 
-                hidden_states = checkpoint(create_custom_forward(layer), hidden_states, encoder_hidden_states)
+                hidden_states = checkpoint(
+                    create_custom_forward(layer), hidden_states, encoder_hidden_states, encoder_attention_mask
+                )
             else:
-                hidden_states = layer(hidden_states, encoder_hidden_states=encoder_hidden_states)
+                hidden_states = layer(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
+                )
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
