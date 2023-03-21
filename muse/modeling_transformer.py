@@ -441,23 +441,25 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def generate(
         self,
-        class_ids: torch.LongTensor,
+        class_ids: torch.LongTensor = None,
+        encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
         topk_filter_thres=0.9,
         can_remask_prev_masked=False,  # TODO: implement this
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
-        cond_scale=3,  # TODO: implement this
+        guidance_scale=3,  # TODO: implement this
         noise_schedule: Callable = cosine_schedule,
     ):
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
         seq_len = self.config.num_vq_tokens
 
-        batch_size = len(class_ids)
+        batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
         shape = (batch_size, seq_len)
 
         # shift the class ids by the codebook size
-        class_ids += self.config.codebook_size
+        if class_ids is not None:
+            class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
         input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
@@ -475,13 +477,23 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             input_ids = input_ids.scatter(1, masked_indices, mask_token_id)
 
             # prepend class token to input_ids
-            input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+            if class_ids is not None:
+                input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
 
-            logits = self(input_ids)
+            # classifier free guidance
+            if encoder_hidden_states is not None and guidance_scale > 0:
+                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                model_input = torch.cat([input_ids] * 2)
+                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
+            else:
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
 
             # remove class token
-            input_ids = input_ids[:, 1:]
-            logits = logits[:, 1:]
+            if class_ids is not None:
+                input_ids = input_ids[:, 1:]
+                logits = logits[:, 1:]
 
             filtered_logits = top_k(logits, topk_filter_thres)
 
