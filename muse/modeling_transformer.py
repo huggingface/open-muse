@@ -447,7 +447,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         topk_filter_thres=0.9,
         can_remask_prev_masked=False,  # TODO: implement this
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
-        guidance_scale=3,  # TODO: implement this
+        guidance_scale=3,
         noise_schedule: Callable = cosine_schedule,
     ):
         # begin with all image token ids masked
