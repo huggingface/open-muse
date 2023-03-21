@@ -35,6 +35,22 @@ except ImportError:
     is_xformers_available = False
 
 
+# classifier free guidance functions
+
+
+def uniform(shape, min=0, max=1, device=None):
+    return torch.zeros(shape, device=device).float().uniform_(0, 1)
+
+
+def prob_mask_like(shape, prob, device=None):
+    if prob == 1:
+        return torch.ones(shape, device=device, dtype=torch.bool)
+    elif prob == 0:
+        return torch.zeros(shape, device=device, dtype=torch.bool)
+    else:
+        return uniform(shape, device=device) < prob
+
+
 # layer norm without bias
 class LayerNorm(nn.Module):
     def __init__(self, dim, eps=1e-5, use_bias=False):
@@ -386,8 +402,14 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
 
-    def forward(self, input_ids, encoder_hidden_states=None, labels=None, label_smoothing=0.0):
+    def forward(self, input_ids, encoder_hidden_states=None, labels=None, label_smoothing=0.0, cond_dropout_prob=0.0):
         hidden_states = self.embed(input_ids)
+
+        # condition dropout for classifier free guidance
+        if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
+            batch_size = encoder_hidden_states.shape[0]
+            mask = prob_mask_like((batch_size, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
+            encoder_hidden_states = encoder_hidden_states * mask
 
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
