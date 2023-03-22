@@ -88,3 +88,4 @@ training:
     overfit_one_batch: False
     min_masking_rate: 0.0
     label_smoothing: 0.0
+    max_grad_norm: null
