@@ -225,6 +225,7 @@ training:
     overfit_one_batch: False
     min_masking_rate: 0.0
     label_smoothing: 0.0
+    max_grad_norm: null
 ```
 
 Arguments with ??? are required.
@@ -282,6 +283,7 @@ __training__:
 - `training.overfit_one_batch`: Whether to overfit one batch for debugging.
 - `training.min_masking_rate`: The minimum masking rate to use for training.
 - `training.label_smoothing`: The label smoothing value to use for training.
+- `max_grad_norm`: Max gradient norm.
 
 ___Notes about training and dataset.___:
 

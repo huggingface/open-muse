@@ -403,6 +403,10 @@ def main():
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
 
                 accelerator.backward(loss)
+
+                if config.training.max_grad_norm is not None and accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+
                 optimizer.step()
                 lr_scheduler.step()
 
