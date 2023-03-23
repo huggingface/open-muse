@@ -11,7 +11,9 @@ experiment:
     eval_every: 500
     generate_every: 1000
     log_every: 50
+    log_grad_norm_every: 100
     resume_from_checkpoint: False
+    resume_lr_scheduler: True
 
 model:
     vq_model:
@@ -34,6 +36,10 @@ model:
         num_vq_tokens: 256
         initializer_range: 0.02
         layer_norm_eps: 1e-6
+        use_normformer: True
+        use_encoder_layernorm: True
+        use_mlm_layer: True
+        use_mlm_layernorm: True
         use_bias: False
         hidden_dropout: 0.0
         attention_dropout: 0.0
@@ -43,9 +49,11 @@ model:
 
 
 dataset:
+    type: "classification"
     params:
-        train_shards_path_or_url: "/home/suraj_huggingface_co/imagenet-shards/imagenet-train-{000000..000320}.tar"
-        eval_shards_path_or_url: "/home/suraj_huggingface_co/imagenet-shards/imagenet-val-{000000..000049}.tar"
+        train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-train-{000000..000320}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar -"
+        imagenet_class_mapping_pat: "/fsx/suraj/data/imagenet-class-mapping.json"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 10000
         num_workers: 2
@@ -60,7 +68,7 @@ dataset:
 
 
 optimizer:
-    name: adamw
+    name: fused_adamw
     params: # default adamw params
         learning_rate: 1e-4
         scale_lr: False # scale learning rate by total batch size
@@ -87,3 +95,5 @@ training:
     max_train_steps: 10000
     overfit_one_batch: False
     min_masking_rate: 0.0
+    label_smoothing: 0.0
+    max_grad_norm: null

@@ -280,8 +280,12 @@ def main():
     preproc_config = config.dataset.preprocessing
     dataset_config = config.dataset.params
 
-    if config.dataset.type == "claasification":
-        dataset_cls = partial(ClassificationDataset, return_text=True)
+    if config.dataset.type == "classification":
+        dataset_cls = partial(
+            ClassificationDataset,
+            return_text=True,
+            imagenet_class_mapping_path=dataset_config.imagenet_class_mapping_path,
+        )
     else:
         dataset_cls = Text2ImageDataset
 

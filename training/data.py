@@ -15,6 +15,7 @@
 
 # This file is heavily inspired by https://github.com/mlfoundations/open_clip/blob/main/src/training/data.py
 
+import json
 import math
 from typing import List, Union
 
@@ -65,6 +66,7 @@ class ClassificationDataset:
         max_seq_length: int = 16,
         center_crop: bool = True,
         random_flip: bool = False,
+        imagenet_class_mapping_path=None,
         shuffle_buffer_size: int = 1000,
         pin_memory: bool = False,
         persistent_workers: bool = False,
@@ -72,6 +74,11 @@ class ClassificationDataset:
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
         if return_text:
+            if imagenet_class_mapping_path is None:
+                raise ValueError("imagenet_class_mapping_path must be provided when return_text is True")
+
+            with open(imagenet_class_mapping_path, "r") as f:
+                self.class_mapping = json.load(f)
 
             def tokenize(imagenet_class_id):
                 text = self.class_mapping[str(imagenet_class_id)]
