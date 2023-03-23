@@ -318,8 +318,18 @@ def main():
     logger.info("Preparing model, optimizer and dataloaders")
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
-    vq_model.to(accelerator.device)
-    text_encoder.to(accelerator.device)
+
+    # For mixed precision training we cast the text_encoder and vae weights to half-precision
+    # as these models are only used for inference, keeping weights in full precision is not required.
+    # TODO: make this configurable
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+
+    text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+    vq_model.to(device=accelerator.device)
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -541,9 +551,11 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 @torch.no_grad()
 def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step):
     logger.info("Generating images...")
+    model.eval()
     # fmt: off
     imagenet_class_names = ["Jay", "Castle", "coffee mug", "desk", "Husky", "Valley", "Red wine", "Coral reef", "Mixing bowl", "Cleaver", "Vine Snake", "Bloodhound", "Barbershop", "Ski", "Otter", "Snowmobile"]
     # fmt: on
+
     input_ids = tokenizer(
         imagenet_class_names,
         return_tensors="pt",
@@ -552,11 +564,11 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     ).input_ids
     encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
 
-    # Generate images
-    model.eval()
-    gen_token_ids = accelerator.unwrap_model(model).generate(
-        encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=4
-    )
+    with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
+        # Generate images
+        gen_token_ids = accelerator.unwrap_model(model).generate(
+            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=4
+        )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
