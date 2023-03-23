@@ -15,6 +15,7 @@
 
 # This file is heavily inspired by the original implementation from https://github.com/lucidrains/muse-maskgit-pytorch
 
+from functools import partial
 from typing import Callable, Optional
 
 import torch
@@ -64,6 +65,27 @@ def make_attention_mask(
     # [batch, 1, len_q, len_kv]. This creates the head dim.
     mask = torch.unsqueeze(mask, axis=-3)
     return (1.0 - mask).type(torch.bool)
+
+
+try:
+    from apex.normalization import FusedRMSNorm as RMSNorm  # noqa
+except Exception:
+
+    class RMSNorm(nn.Module):
+        def __init__(self, normalized_shape, eps=1e-6):
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.variance_epsilon = eps
+
+        def forward(self, input):
+            variance = input.to(torch.float32).pow(2).mean(-1, keepdim=True)
+            input = input * torch.rsqrt(variance + self.variance_epsilon)
+
+            # convert into half-precision if necessary
+            if self.weight.dtype in [torch.float16, torch.bfloat16]:
+                input = input.to(self.weight.dtype)
+
+            return self.weight * input
 
 
 # layer norm without bias
@@ -171,6 +193,7 @@ class FeedForward(nn.Module):
         hidden_size,
         intermediate_size,
         hidden_dropout=0.0,
+        norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_normformer=True,
         use_bias=False,
@@ -181,7 +204,8 @@ class FeedForward(nn.Module):
         self.wi_0 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         if use_normformer:
-            self.mid_mlp_layer_norm = LayerNorm(intermediate_size, eps=layer_norm_eps, use_bias=use_bias)
+            norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+            self.mid_mlp_layer_norm = norm_cls(intermediate_size, eps=layer_norm_eps)
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
 
@@ -209,6 +233,7 @@ class TransformerLayer(nn.Module):
         add_cross_attention=False,
         hidden_dropout=0.0,
         attention_dropout=0.0,
+        norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_normformer=True,
         use_bias=False,
@@ -220,23 +245,30 @@ class TransformerLayer(nn.Module):
         self.num_attention_heads = num_attention_heads
         self.use_normformer = use_normformer
 
-        self.attn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
         if use_normformer:
-            self.post_attn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+            self.post_attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
         self.ffn = FeedForward(
-            self.hidden_size, self.intermediate_size, hidden_dropout, layer_norm_eps, use_normformer, use_bias
+            self.hidden_size,
+            self.intermediate_size,
+            hidden_dropout,
+            norm_type,
+            layer_norm_eps,
+            use_normformer,
+            use_bias,
         )
 
         if add_cross_attention:
-            self.crossattn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+            self.crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
             self.crossattention = Attention(
                 self.hidden_size, self.num_attention_heads, encoder_hidden_size, attention_dropout, use_bias
             )
             if use_normformer:
-                self.post_crossattn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+                self.post_crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         residual = hidden_states
@@ -274,6 +306,7 @@ class Embed(nn.Module):
         hidden_size,
         hidden_dropout=0.0,
         max_position_embeddings=512,
+        norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_bias=False,
         layer_norm_embedddings=False,
@@ -294,7 +327,8 @@ class Embed(nn.Module):
         self.dropout = nn.Dropout(self.hidden_dropout)
 
         if layer_norm_embedddings:
-            self.embeddings_ln = LayerNorm(self.embedding_size, eps=layer_norm_eps, use_bias=use_bias)
+            norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+            self.embeddings_ln = norm_cls(self.embedding_size, eps=layer_norm_eps)
 
         if use_embeddings_project:
             self.embedding_hidden_mapping = nn.Linear(self.embedding_size, self.hidden_size, bias=use_bias)
@@ -318,13 +352,22 @@ class Embed(nn.Module):
 
 
 class MlmLayer(nn.Module):
-    def __init__(self, hidden_size, vocab_size, layer_norm_eps=1e-5, use_mlm_layernorm=True, use_bias=False):
+    def __init__(
+        self,
+        hidden_size,
+        vocab_size,
+        norm_type="layernorm",
+        layer_norm_eps=1e-5,
+        use_mlm_layernorm=True,
+        use_bias=False,
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.use_mlm_layernorm = use_mlm_layernorm
         self.mlm_dense = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         if use_mlm_layernorm:
-            self.mlm_ln = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+            norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+            self.mlm_ln = norm_cls(self.hidden_size, eps=layer_norm_eps)
         self.to_logits = nn.Linear(self.hidden_size, vocab_size, bias=use_bias)
 
     def forward(self, hidden_states):
@@ -354,6 +397,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         encoder_hidden_size=1024,  # T5-large
         project_encoder_hidden_states=False,
         initializer_range=0.02,
+        norm_type="layernorm",  # or rmsnorm
         layer_norm_eps=1e-5,
         use_normformer=True,
         use_encoder_layernorm=True,
@@ -377,6 +421,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.initializer_range = initializer_range
         self.register_to_config(mask_token_id=vocab_size - 1)
 
+        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+
         self.embed = Embed(
             self.vocab_size,
             self.hidden_size,
@@ -384,12 +430,13 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             self.hidden_dropout,
             self.max_position_embeddings,
             use_bias,
+            norm_type,
             layer_norm_eps,
         )
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
-            self.encoder_proj_layer_norm = LayerNorm(hidden_size, use_bias=use_bias)
+            self.encoder_proj_layer_norm = norm_type(hidden_size, eps=layer_norm_eps)
 
         self.transformer_layers = nn.ModuleList(
             [
@@ -401,6 +448,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     add_cross_attention=add_cross_attention,
                     hidden_dropout=self.hidden_dropout,
                     attention_dropout=self.attention_dropout,
+                    norm_type=norm_type,
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
@@ -409,10 +457,12 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             ]
         )
         if use_encoder_layernorm:
-            self.encoder_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+            self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
 
         if use_mlm_layer:
-            self.mlm_layer = MlmLayer(self.hidden_size, self.vocab_size, layer_norm_eps, use_mlm_layernorm, use_bias)
+            self.mlm_layer = MlmLayer(
+                self.hidden_size, self.vocab_size, norm_type, layer_norm_eps, use_mlm_layernorm, use_bias
+            )
         else:
             self.to_logits = nn.Linear(self.hidden_size, self.vocab_size, bias=use_bias)
 
