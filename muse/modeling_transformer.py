@@ -92,12 +92,13 @@ class Attention(nn.Module):
             )
         self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
 
+        if encoder_hidden_size is not None: # Cross attention
+            self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
+            self.encoder_norm = LayerNorm(hidden_size, use_bias=use_bias)
+
         self.query = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-
-        self.kv_input_dim = self.hidden_size if encoder_hidden_size is None else encoder_hidden_size
-        self.key = nn.Linear(self.kv_input_dim, self.hidden_size, bias=use_bias)
-        self.value = nn.Linear(self.kv_input_dim, self.hidden_size, bias=use_bias)
-
+        self.key = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
+        self.value = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
@@ -116,8 +117,11 @@ class Attention(nn.Module):
         if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
             raise ValueError("Memory efficient attention does not yet support encoder attention mask")
 
-        context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
+        if encoder_hidden_states is not None:
+            context = self.encoder_proj(encoder_hidden_states)
+            context = self.encoder_norm(context)
 
+        context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
         batch, q_seq_len, _ = hidden_states.shape
         kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
 
