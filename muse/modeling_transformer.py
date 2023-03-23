@@ -35,6 +35,37 @@ except ImportError:
     is_xformers_available = False
 
 
+# classifier free guidance functions
+
+
+def uniform(shape, min=0, max=1, device=None):
+    return torch.zeros(shape, device=device).float().uniform_(0, 1)
+
+
+def prob_mask_like(shape, prob, device=None):
+    if prob == 1:
+        return torch.ones(shape, device=device, dtype=torch.bool)
+    elif prob == 0:
+        return torch.zeros(shape, device=device, dtype=torch.bool)
+    else:
+        return uniform(shape, device=device) < prob
+
+
+def make_attention_mask(
+    query_input: torch.Tensor, key_input: torch.Tensor, pairwise_fn: Callable = torch.mul
+) -> torch.Tensor:
+    # [batch, len_q, len_kv]
+    mask = pairwise_fn(
+        # [batch, len_q] -> [batch, len_q, 1]
+        torch.unsqueeze(query_input, axis=-1),
+        # [batch, len_q] -> [batch, 1, len_kv]
+        torch.unsqueeze(key_input, axis=-2),
+    )
+    # [batch, 1, len_q, len_kv]. This creates the head dim.
+    mask = torch.unsqueeze(mask, axis=-3)
+    return (1.0 - mask).type(torch.bool)
+
+
 # layer norm without bias
 class LayerNorm(nn.Module):
     def __init__(self, dim, eps=1e-5, use_bias=False):
@@ -61,12 +92,13 @@ class Attention(nn.Module):
             )
         self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
 
+        if encoder_hidden_size is not None:  # Cross attention
+            self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
+            self.encoder_norm = LayerNorm(hidden_size, use_bias=use_bias)
+
         self.query = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-
-        self.kv_input_dim = self.hidden_size if encoder_hidden_size is None else encoder_hidden_size
-        self.key = nn.Linear(self.kv_input_dim, self.hidden_size, bias=use_bias)
-        self.value = nn.Linear(self.kv_input_dim, self.hidden_size, bias=use_bias)
-
+        self.key = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
+        self.value = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
@@ -81,37 +113,54 @@ class Attention(nn.Module):
         self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
         self.xformers_attention_op = attention_op
 
-    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
-        batch, seq_len, _ = hidden_states.shape
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
+            raise ValueError("Memory efficient attention does not yet support encoder attention mask")
+
+        if encoder_hidden_states is not None:
+            context = self.encoder_proj(encoder_hidden_states)
+            context = self.encoder_norm(context)
 
         context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
+        batch, q_seq_len, _ = hidden_states.shape
+        kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
 
         query = self.query(hidden_states)
         key = self.key(context)
         value = self.value(context)
 
-        query = query.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        key = key.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        value = value.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
             attn_output = xops.memory_efficient_attention(query, key, value)
-            attn_output = attn_output.view(batch, seq_len, self.hidden_size)
+            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
+            attention_mask = None
+            if encoder_attention_mask is not None:
+                src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
+                attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
             attn_output = self.attention(query, key, value, attention_mask)
 
         attn_output = self.out(attn_output)
         return attn_output
 
-    def attention(self, query, key, value, attention_mask):
+    def attention(self, query, key, value, attention_mask=None):
         batch, seq_len = query.shape[:2]
-        query, key, value = map(lambda t: t.transpose(1, 2), (query, key, value))  # (B, nh, T, hs)
+        kv_seq_len = key.shape[1]
+        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
 
-        query = query / self.scale_attn  # scale query
-        attn_weights = torch.matmul(query, key.transpose(-2, -1))
+        attn_weights = torch.baddbmm(
+            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
+            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            alpha=1 / self.scale_attn,
+        )
+        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
         # Apply the attention mask
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
+            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.dropout(attn_weights)
         attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -194,11 +243,11 @@ class TransformerLayer(nn.Module):
             if use_normformer:
                 self.post_crossattn_layer_norm = LayerNorm(self.hidden_size, eps=layer_norm_eps, use_bias=use_bias)
 
-    def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
-        attention_output = self.attention(hidden_states, attention_mask)
+        attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
@@ -207,7 +256,11 @@ class TransformerLayer(nn.Module):
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
-            attention_output = self.crossattention(hidden_states, encoder_hidden_states=encoder_hidden_states)
+            attention_output = self.crossattention(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+            )
             if self.use_normformer:
                 attention_output = self.post_crossattn_layer_norm(attention_output)
             hidden_states = residual + attention_output
@@ -386,8 +439,25 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = True
 
-    def forward(self, input_ids, encoder_hidden_states=None, labels=None, label_smoothing=0.0):
+    def forward(
+        self,
+        input_ids,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        label_smoothing=0.0,
+        cond_dropout_prob=0.0,
+    ):
+        if self.config.add_cross_attention and encoder_hidden_states is None:
+            raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
+
         hidden_states = self.embed(input_ids)
+
+        # condition dropout for classifier free guidance
+        if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
+            batch_size = encoder_hidden_states.shape[0]
+            mask = prob_mask_like((batch_size, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
+            encoder_hidden_states = encoder_hidden_states * mask
 
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
@@ -398,9 +468,15 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
                     return custom_forward
 
-                hidden_states = checkpoint(create_custom_forward(layer), hidden_states, encoder_hidden_states)
+                hidden_states = checkpoint(
+                    create_custom_forward(layer), hidden_states, encoder_hidden_states, encoder_attention_mask
+                )
             else:
-                hidden_states = layer(hidden_states, encoder_hidden_states=encoder_hidden_states)
+                hidden_states = layer(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
+                )
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
@@ -419,23 +495,25 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def generate(
         self,
-        class_ids: torch.LongTensor,
+        class_ids: torch.LongTensor = None,
+        encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
         topk_filter_thres=0.9,
         can_remask_prev_masked=False,  # TODO: implement this
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
-        cond_scale=3,  # TODO: implement this
+        guidance_scale=3,
         noise_schedule: Callable = cosine_schedule,
     ):
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
         seq_len = self.config.num_vq_tokens
 
-        batch_size = len(class_ids)
+        batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
         shape = (batch_size, seq_len)
 
         # shift the class ids by the codebook size
-        class_ids += self.config.codebook_size
+        if class_ids is not None:
+            class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
         input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
@@ -453,13 +531,23 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             input_ids = input_ids.scatter(1, masked_indices, mask_token_id)
 
             # prepend class token to input_ids
-            input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+            if class_ids is not None:
+                input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
 
-            logits = self(input_ids)
+            # classifier free guidance
+            if encoder_hidden_states is not None and guidance_scale > 0:
+                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                model_input = torch.cat([input_ids] * 2)
+                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
+            else:
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
 
             # remove class token
-            input_ids = input_ids[:, 1:]
-            logits = logits[:, 1:]
+            if class_ids is not None:
+                input_ids = input_ids[:, 1:]
+                logits = logits[:, 1:]
 
             filtered_logits = top_k(logits, topk_filter_thres)
 
