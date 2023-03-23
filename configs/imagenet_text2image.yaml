@@ -8,10 +8,10 @@ experiment:
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
     save_every: 1000
-    eval_every: 500
+    eval_every: 1000
     generate_every: 1000
     log_every: 50
-    log_grad_norm_every: 100
+    log_grad_norm_every: 500
     resume_from_checkpoint: False
     resume_lr_scheduler: True
 
@@ -21,17 +21,17 @@ model:
     
     text_encoder:
         type: "t5"
-        pretrained: "google/t5-v1_1-base"
+        pretrained: "google/t5-v1_1-large"
 
     transformer:
-        vocab_size: 1024
+        vocab_size: 1040
         max_position_embeddings: 256
-        hidden_size: 768
-        num_hidden_layers: 12
-        num_attention_heads: 12
-        intermediate_size: 3072
+        hidden_size: 1024
+        num_hidden_layers: 24
+        num_attention_heads: 16
+        intermediate_size: 4096
         add_cross_attention: True
-        encoder_hidden_size: 768
+        encoder_hidden_size: 1024
         project_encoder_hidden_states: False
         codebook_size: 1024
         num_vq_tokens: 256
@@ -47,7 +47,7 @@ model:
         attention_dropout: 0.0
 
     gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: False
+    enable_xformers_memory_efficient_attention: True
 
 
 dataset:
@@ -57,7 +57,7 @@ dataset:
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar -"
         imagenet_class_mapping_pat: "/fsx/suraj/data/imagenet-class-mapping.json"
         batch_size: ${training.batch_size}
-        shuffle_buffer_size: 10000
+        shuffle_buffer_size: 1000
         num_workers: 2
         resolution: 256
         pin_memory: True
@@ -84,17 +84,17 @@ lr_scheduler:
     scheduler: "constant_with_warmup"
     params:
         learning_rate: ${optimizer.params.learning_rate}
-        warmup_steps: 500
+        warmup_steps: 2000
 
 
 training:
     gradient_accumulation_steps: 1
-    batch_size: 128
-    mixed_precision: "no"
+    batch_size: 64
+    mixed_precision: "fp16"
     enable_tf32: True
     use_ema: False
     seed: 42
-    max_train_steps: 10000
+    max_train_steps: 200000
     overfit_one_batch: False
     min_masking_rate: 0.0
     label_smoothing: 0.0
