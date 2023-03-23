@@ -60,6 +60,9 @@ class ClassificationDataset:
         global_batch_size: int,
         num_workers: int,
         resolution: int = 256,
+        return_text: bool = False,
+        tokenizer: PreTrainedTokenizer = None,
+        max_seq_length: int = 16,
         center_crop: bool = True,
         random_flip: bool = False,
         shuffle_buffer_size: int = 1000,
@@ -68,16 +71,40 @@ class ClassificationDataset:
     ):
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
+        if return_text:
+
+            def tokenize(imagenet_class_id):
+                text = self.class_mapping[str(imagenet_class_id)]
+                input_ids = tokenizer(
+                    text, max_length=max_seq_length, padding="max_length", truncation=False, return_tensors="pt"
+                ).input_ids
+                return input_ids[0]
+
+            processing_pipeline = [
+                wds.rename(image="jpg;png;jpeg;webp", input_ids="cls", text_raw="cls", class_id="cls"),
+                wds.map(filter_keys(set(["image", "input_ids", "text_raw", "class_idx"]))),
+                wds.map_dict(
+                    image=transform.train_transform,
+                    input_ids=tokenize,
+                    text_raw=lambda class_idx: self.class_mapping[str(class_idx)],
+                ),
+                wds.to_tuple("image", "input_ids"),
+            ]
+        else:
+            processing_pipeline = [
+                wds.rename(image="jpg;png;jpeg;webp", class_id="cls"),
+                wds.map(filter_keys(set(["image", "class_id"]))),
+                wds.map_dict(image=transform.train_transform, class_id=lambda x: int(x)),
+                wds.to_tuple("image", "class_id"),
+            ]
+
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
             wds.shuffle(shuffle_buffer_size),
             wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", class_id="cls"),
-            wds.map(filter_keys(set(["image", "class_id"]))),
-            wds.map_dict(image=transform.train_transform, class_id=lambda x: int(x)),
-            wds.to_tuple("image", "class_id"),
+            *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
 
@@ -106,10 +133,7 @@ class ClassificationDataset:
             wds.split_by_worker,
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
             wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", class_id="cls"),
-            wds.map(filter_keys(set(["image", "class_id"]))),
-            wds.map_dict(image=transform.eval_transform, class_id=lambda x: int(x)),
-            wds.to_tuple("image", "class_id"),
+            *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=True, collation_fn=default_collate),
         ]
         self._eval_dataset = wds.DataPipeline(*pipeline)

@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import time
+from functools import partial
 from pathlib import Path
 from typing import Any, List, Tuple
 
@@ -28,7 +29,7 @@ import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed
-from data import Text2ImageDataset
+from data import ClassificationDataset, Text2ImageDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
 from PIL import Image
@@ -263,7 +264,13 @@ def main():
     # This means that the dataloading is not deterministic, but it's fast and efficient.
     preproc_config = config.dataset.preprocessing
     dataset_config = config.dataset.params
-    dataset = Text2ImageDataset(
+
+    if config.dataset.type == "claasification":
+        dataset_cls = partial(ClassificationDataset, return_text=True)
+    else:
+        dataset_cls = Text2ImageDataset
+
+    dataset = dataset_cls(
         train_shards_path_or_url=dataset_config.train_shards_path_or_url,
         eval_shards_path_or_url=dataset_config.eval_shards_path_or_url,
         tokenizer=tokenizer,
