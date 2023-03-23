@@ -21,7 +21,7 @@ model:
     
     text_model:
         type: "t5"
-        pretrained: "t5-base"
+        pretrained: "google/t5-v1_1-base"
 
     transformer:
         vocab_size: 1024
