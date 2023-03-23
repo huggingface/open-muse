@@ -567,7 +567,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate(
-            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=4
+            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=12
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
