@@ -38,7 +38,7 @@ model:
         initializer_range: 0.02
         norm_type: "rmsnorm"
         layer_norm_eps: 1e-6
-        use_normformer: True
+        use_normformer: False
         use_encoder_layernorm: True
         use_mlm_layer: True
         use_mlm_layernorm: True
