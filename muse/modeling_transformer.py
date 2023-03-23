@@ -92,13 +92,12 @@ class Attention(nn.Module):
             )
         self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
 
-        if encoder_hidden_size is not None:  # Cross attention
-            self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
-            self.encoder_norm = LayerNorm(hidden_size, use_bias=use_bias)
-
         self.query = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-        self.key = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-        self.value = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
+
+        kv_hidden_size = self.hidden_size if encoder_hidden_size is None else encoder_hidden_size
+        self.key = nn.Linear(kv_hidden_size, self.hidden_size, bias=use_bias)
+        self.value = nn.Linear(kv_hidden_size, self.hidden_size, bias=use_bias)
+
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
@@ -116,10 +115,6 @@ class Attention(nn.Module):
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
             raise ValueError("Memory efficient attention does not yet support encoder attention mask")
-
-        if encoder_hidden_states is not None:
-            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
-            encoder_hidden_states = self.encoder_norm(encoder_hidden_states)
 
         context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
         batch, q_seq_len, _ = hidden_states.shape
@@ -355,8 +350,9 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         hidden_dropout=0.1,
         attention_dropout=0.1,
         max_position_embeddings=256,  # for clas-conditioned generation it'll be 256 + 1 (for the class token)
-        encoder_hidden_size=1024,  # T5-large
         add_cross_attention=False,
+        encoder_hidden_size=1024,  # T5-large
+        project_encoder_hidden_states=False,
         initializer_range=0.02,
         layer_norm_eps=1e-5,
         use_normformer=True,
@@ -390,6 +386,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             use_bias,
             layer_norm_eps,
         )
+
+        if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
+            self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
+            self.encoder_proj_layer_norm = LayerNorm(hidden_size, use_bias=use_bias)
+
         self.transformer_layers = nn.ModuleList(
             [
                 TransformerLayer(
@@ -452,6 +453,10 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
 
         hidden_states = self.embed(input_ids)
+
+        if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
+            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
