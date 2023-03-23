@@ -197,21 +197,21 @@ def main():
     #########################
     logger.info("Loading models and optimizer")
 
-    if config.model.text_model.type == "clip":
-        text_model = CLIPTextModel.from_pretrained(config.model.text_model.pretrained)
-        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_model.pretrained)
-    elif config.model.text_model.type == "t5":
-        text_model = T5EncoderModel.from_pretrained(config.model.text_model.pretrained)
-        tokenizer = T5Tokenizer.from_pretrained(config.model.text_model.pretrained)
+    if config.model.text_encoder.type == "clip":
+        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+    elif config.model.text_encoder.type == "t5":
+        text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
+        tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
     else:
-        raise ValueError(f"Unknown text model type: {config.model.text_model.type}")
+        raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
 
     vq_model = MaskGitVQGAN.from_pretrained(config.model.vq_model.pretrained)
     model = MaskGitTransformer(**config.model.transformer)
     mask_id = model.config.mask_token_id
 
     # Freeze the text model and VQGAN
-    text_model.requires_grad_(False)
+    text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
     # Enable flash attention if asked
@@ -300,7 +300,7 @@ def main():
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
     vq_model.to(accelerator.device)
-    text_model.to(accelerator.device)
+    text_encoder.to(accelerator.device)
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -347,7 +347,7 @@ def main():
         pixel_values: torch.FloatTensor, input_ids: torch.LongTensor, min_masking_rate: float = 0.0
     ):
         image_tokens = vq_model.encode(pixel_values)[1]
-        encoder_hidden_states = text_model(input_ids)[0]
+        encoder_hidden_states = text_encoder(input_ids)[0]
 
         batch_size, seq_len = image_tokens.shape
         # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
@@ -381,7 +381,7 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, labels, mask_prob = prepare_inputs_and_labels(
+            input_ids, encoder_hidden_states, labels, mask_prob = prepare_inputs_and_labels(
                 pixel_values, input_ids, config.training.min_masking_rate
             )
 
@@ -392,8 +392,8 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                _, loss = model(input_ids=input_ids, labels=labels)
-                # Gather thexd losses across all processes for logging (if we use distributed training).
+                _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels)
+                # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
 
@@ -444,7 +444,7 @@ def main():
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    generate_images(model, vq_model, accelerator, global_step + 1)
+                    generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step + 1)
 
                 global_step += 1
                 # TODO: Add generation
@@ -476,10 +476,10 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
     eval_loss = 0
     now = time.time()
     for i, batch in enumerate(eval_dataloader):
-        pixel_values, class_ids = batch
+        pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-        class_ids = class_ids.to(accelerator.device, non_blocking=True)
-        input_ids, labels, _ = prepare_inputs_and_labels(pixel_values, class_ids)
+        input_ids = input_ids.to(accelerator.device, non_blocking=True)
+        input_ids, encoder_hidden_states, labels, _ = prepare_inputs_and_labels(pixel_values, input_ids)
         _, loss = model(input_ids=input_ids, labels=labels)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
@@ -491,20 +491,24 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 
 
 @torch.no_grad()
-def generate_images(model, vq_model, accelerator, global_step):
+def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step):
     logger.info("Generating images...")
     # fmt: off
     imagenet_class_names = ["Jay", "Castle", "coffee mug", "desk", "Husky", "Valley", "Red wine", "Coral reef", "Mixing bowl", "Cleaver", "Vine Snake", "Bloodhound", "Barbershop", "Ski", "Otter", "Snowmobile"]
     # fmt: on
-    imagenet_class_ids = torch.tensor(
-        [17, 483, 504, 526, 248, 979, 966, 973, 659, 499, 59, 163, 424, 795, 360, 802],
-        device=accelerator.device,
-        dtype=torch.long,
-    )
+    input_ids = tokenizer(
+        imagenet_class_names,
+        return_tensors="pt",
+        padding="max_length",
+        max_length=config.dataset.preprocessing.max_seq_length,
+    ).input_ids
+    encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
 
     # Generate images
     model.eval()
-    gen_token_ids = accelerator.unwrap_model(model).generate(imagenet_class_ids, timesteps=4)
+    gen_token_ids = accelerator.unwrap_model(model).generate(
+        encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=4
+    )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
