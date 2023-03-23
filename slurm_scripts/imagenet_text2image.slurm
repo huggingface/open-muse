@@ -25,7 +25,7 @@ touch $LOG_PATH
 pushd $MUSE_REPO
 
 CMD=" \
-    training/train_maskgit_imagenet.py config=configs/imagenet_text2image.yaml \
+    training/train_muse.py config=configs/imagenet_text2image.yaml \
     wandb.entity=psuraj \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
