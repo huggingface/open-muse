@@ -118,8 +118,8 @@ class Attention(nn.Module):
             raise ValueError("Memory efficient attention does not yet support encoder attention mask")
 
         if encoder_hidden_states is not None:
-            context = self.encoder_proj(encoder_hidden_states)
-            context = self.encoder_norm(context)
+            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_norm(encoder_hidden_states)
 
         context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
         batch, q_seq_len, _ = hidden_states.shape
