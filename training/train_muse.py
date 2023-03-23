@@ -41,6 +41,13 @@ from muse import MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
+try:
+    import apex
+
+    is_apex_available = True
+except ImportError:
+    is_apex_available = False
+
 logger = get_logger(__name__, log_level="INFO")
 
 
@@ -142,6 +149,7 @@ def main():
         mixed_precision=config.training.mixed_precision,
         log_with="wandb",
         logging_dir=config.experiment.logging_dir,
+        split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
     )
 
     #####################################
@@ -407,12 +415,21 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels)
+                _, loss = model(
+                    input_ids=input_ids,
+                    encoder_hidden_states=encoder_hidden_states,
+                    labels=labels,
+                    label_smoothing=config.training.label_smoothing,
+                )
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
 
                 accelerator.backward(loss)
+
+                if config.training.max_grad_norm is not None and accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+
                 optimizer.step()
                 lr_scheduler.step()
 
