@@ -92,7 +92,7 @@ class Attention(nn.Module):
             )
         self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
 
-        if encoder_hidden_size is not None: # Cross attention
+        if encoder_hidden_size is not None:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
             self.encoder_norm = LayerNorm(hidden_size, use_bias=use_bias)
 
