@@ -52,10 +52,7 @@ def prob_mask_like(shape, prob, device=None):
 
 
 def make_attention_mask(
-    query_input: torch.Tensor,
-    key_input: torch.Tensor,
-    pairwise_fn: Callable = torch.mul,
-    dtype: torch.dtype = torch.float32,
+    query_input: torch.Tensor, key_input: torch.Tensor, pairwise_fn: Callable = torch.mul
 ) -> torch.Tensor:
     # [batch, len_q, len_kv]
     mask = pairwise_fn(
@@ -66,8 +63,7 @@ def make_attention_mask(
     )
     # [batch, 1, len_q, len_kv]. This creates the head dim.
     mask = torch.unsqueeze(mask, axis=-3)
-    mask = (1.0 - mask) * torch.finfo(dtype).min
-    return mask.type(dtype)
+    return (1.0 - mask).type(torch.bool)
 
 
 # layer norm without bias
@@ -117,46 +113,50 @@ class Attention(nn.Module):
         self.xformers_attention_op = attention_op
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
-        batch, seq_len, _ = hidden_states.shape
+        if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
+            raise ValueError("Memory efficient attention does not yet support encoder attention mask")
 
         context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
+
+        batch, q_seq_len, _ = hidden_states.shape
+        kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
 
         query = self.query(hidden_states)
         key = self.key(context)
         value = self.value(context)
 
-        query = query.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        key = key.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        value = value.view(batch, seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-            attn_bias = None
-            if encoder_attention_mask is not None:
-                q_seq_lens = [seq_len] * query.shape[0]
-                kv_seq_lens = encoder_attention_mask.sum(dim=1).tolist()
-                attn_bias = xops.fmha.attn_bias.BlockDiagonalMask.from_seqlens(q_seq_lens, kv_seq_lens)
-                query, key, value = [x.reshape([1, -1, *x.shape[2:]]) for x in [query, key, value]]
-
-            attn_output = xops.memory_efficient_attention(query, key, value, attn_bias=attn_bias)
-            attn_output = attn_output.view(batch, seq_len, self.hidden_size)
+            attn_output = xops.memory_efficient_attention(query, key, value)
+            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
+            attention_mask = None
             if encoder_attention_mask is not None:
-                src_attn_mask = torch.ones(batch, seq_len, dtype=torch.long, device=query.device)
+                src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
                 attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
             attn_output = self.attention(query, key, value, attention_mask)
 
         attn_output = self.out(attn_output)
         return attn_output
 
-    def attention(self, query, key, value, attention_mask):
+    def attention(self, query, key, value, attention_mask=None):
         batch, seq_len = query.shape[:2]
-        query, key, value = map(lambda t: t.transpose(1, 2), (query, key, value))  # (B, nh, T, hs)
+        kv_seq_len = key.shape[1]
+        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
 
-        query = query / self.scale_attn  # scale query
-        attn_weights = torch.matmul(query, key.transpose(-2, -1))
+        attn_weights = torch.baddbmm(
+            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
+            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            alpha=1 / self.scale_attn,
+        )
+        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
         # Apply the attention mask
         if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
+            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
         attn_weights = F.softmax(attn_weights, dim=-1)
         attn_weights = self.dropout(attn_weights)
         attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
@@ -243,7 +243,7 @@ class TransformerLayer(nn.Module):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
-        attention_output = self.attention(hidden_states, encoder_hidden_states, encoder_attention_mask)
+        attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
@@ -252,7 +252,11 @@ class TransformerLayer(nn.Module):
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
-            attention_output = self.crossattention(hidden_states, encoder_hidden_states=encoder_hidden_states)
+            attention_output = self.crossattention(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+            )
             if self.use_normformer:
                 attention_output = self.post_crossattn_layer_norm(attention_output)
             hidden_states = residual + attention_output
