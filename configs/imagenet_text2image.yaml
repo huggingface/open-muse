@@ -30,8 +30,9 @@ model:
         num_hidden_layers: 12
         num_attention_heads: 12
         intermediate_size: 3072
-        encoder_hidden_size: 768
         add_cross_attention: True
+        encoder_hidden_size: 768
+        project_encoder_hidden_states: False
         codebook_size: 1024
         num_vq_tokens: 256
         initializer_range: 0.02
