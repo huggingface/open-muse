@@ -83,7 +83,7 @@ class ClassificationDataset:
             def tokenize(imagenet_class_id):
                 text = self.class_mapping[str(imagenet_class_id)]
                 input_ids = tokenizer(
-                    text, max_length=max_seq_length, padding="max_length", truncation=False, return_tensors="pt"
+                    text, max_length=max_seq_length, padding="max_length", truncation=True, return_tensors="pt"
                 ).input_ids
                 return input_ids[0]
 

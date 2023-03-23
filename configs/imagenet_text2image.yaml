@@ -19,7 +19,7 @@ model:
     vq_model:
         pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
     
-    text_model:
+    text_encoder:
         type: "t5"
         pretrained: "google/t5-v1_1-base"
 
@@ -61,7 +61,7 @@ dataset:
         pin_memory: True
         persistent_workers: True
     preprocessing:
-        max_seq_length: 96
+        max_seq_length: 16
         resolution: 256
         center_crop: True
         random_flip: False
