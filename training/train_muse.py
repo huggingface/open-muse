@@ -554,13 +554,14 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     logger.info("Generating images...")
     model.eval()
     # fmt: off
-    imagenet_class_names = ["Jay", "Castle", "coffee mug", "desk", "Husky", "Valley", "Red wine", "Coral reef", "Mixing bowl", "Cleaver", "Vine Snake", "Bloodhound", "Barbershop", "Ski", "Otter", "Snowmobile"]
+    imagenet_class_names = ['jay', 'castle', 'coffee mug', 'desk', 'Eskimo dog,  husky', 'valley,  vale', 'red wine', 'coral reef', 'mixing bowl', 'cleaver,  meat cleaver,  chopper', 'vine snake', 'bloodhound,  sleuthhound', 'barbershop', 'ski', 'otter', 'snowmobile']
     # fmt: on
 
     input_ids = tokenizer(
         imagenet_class_names,
         return_tensors="pt",
         padding="max_length",
+        truncation=True,
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
     encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
@@ -568,7 +569,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate(
-            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=8
+            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=4
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
