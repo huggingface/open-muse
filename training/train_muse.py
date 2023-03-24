@@ -434,6 +434,7 @@ def main():
                     encoder_hidden_states=encoder_hidden_states,
                     labels=labels,
                     label_smoothing=config.training.label_smoothing,
+                    cond_dropout_prob=config.training.cond_dropout_prob,
                 )
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
@@ -567,7 +568,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate(
-            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=12
+            encoder_hidden_states=encoder_hidden_states, guidance_scale=5.0, timesteps=8
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
