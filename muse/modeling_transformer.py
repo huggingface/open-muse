@@ -511,7 +511,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
-            mask = prob_mask_like((batch_size, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
+            mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
             encoder_hidden_states = encoder_hidden_states * mask
 
         for layer in self.transformer_layers:
