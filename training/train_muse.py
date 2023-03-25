@@ -257,7 +257,7 @@ def main():
             raise ImportError(
                 "To use 8-bit Adam, please install the bitsandbytes library: `pip install bitsandbytes`."
             )
-        optimizer_class = bnb.optim.AdamW8bit
+        optimizer_cls = bnb.optim.AdamW8bit
     elif optimizer_type == "lion":
         optimizer_cls = Lion
     else:
