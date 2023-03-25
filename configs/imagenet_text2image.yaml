@@ -100,3 +100,5 @@ training:
     min_masking_rate: 0.0
     label_smoothing: 0.0
     max_grad_norm: null
+    guidance_scale: 10.0
+    generation_timesteps: 4
