@@ -645,10 +645,18 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
         shape = (batch_size, seq_len)
 
+        # shift the class ids by the codebook size
+        if class_ids is not None:
+            class_ids += self.config.codebook_size
+
         # initialize with all image tokens masked
         input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
 
         for step in range(timesteps):
+            # prepend class token to input_ids
+            if class_ids is not None:
+                input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
                 uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
@@ -662,9 +670,14 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
                 logits = logits[..., : self.config.codebook_size]
 
+            # remove class token
+            if class_ids is not None:
+                input_ids = input_ids[:, 1:]
+                logits = logits[:, 1:]
+
             # Samples the ids using categorical sampling: [batch_size, seq_length].
             # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
-            sampled_ids = torch.cat([torch.multinomial(l.softmax(dim=-1), 1).squeeze(1) for l in logits])
+            sampled_ids = torch.stack([torch.multinomial(l.softmax(dim=-1), 1).squeeze(1) for l in logits])
 
             # Just updates the masked tokens.
             unknown_map = input_ids == mask_token_id
