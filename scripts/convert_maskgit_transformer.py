@@ -163,7 +163,8 @@ def convert(flax_model_path, pytorch_dump_folder_path):
         layer_norm_embeddings=True,
         use_bias=True,
         use_encoder_layernorm=False,
-        use_maskgit_mlp=True
+        use_maskgit_mlp=True,
+        use_normformer=False
     )
 
     pt_model = load_flax_weights_in_pytorch_model(pt_model, params)

@@ -28,3 +28,11 @@ def top_k(logits, thres=0.9):
 
 def cosine_schedule(t):
     return torch.cos(t * math.pi * 0.5)
+
+
+def mask_by_random_topk(mask_len, probs, temperature=1.0):
+    confidence = log(probs) + temperature * gumbel_noise(probs)
+    sorted_confidence = torch.sort(confidence, dim=-1).values
+    cut_off = torch.gather(sorted_confidence, 1, mask_len.long())
+    masking = confidence < cut_off
+    return masking
