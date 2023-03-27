@@ -595,9 +595,12 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
                 cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits = cond_logits[..., : self.config.codebook_size]
+                uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
             else:
                 logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
+                logits = logits[..., : self.config.codebook_size]
 
             # remove class token
             if class_ids is not None:
