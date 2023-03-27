@@ -29,13 +29,13 @@ def generate_and_log(args):
         text_encoder_path=args.text_encoder,
         vae_path=args.vae,
         transformer_path=args.transformer,
-    ).to(device="cuda")
+    ).to(device=args.device)
     pipe.transformer.enable_xformers_memory_efficient_attention()
 
     imagenet_class_ids = list(range(1000))
     with open(args.imagenet_class_mapping_path) as f:
         imagenet_class_mapping = json.load(f)
-    imagenet_class_ids = list(chunk(imagenet_class_ids, 16))
+    imagenet_class_ids = list(chunk(imagenet_class_ids, args.batch_size // args.num_generations))
 
     # generate images and log in wandb table
     table = wandb.Table(columns=["class name"] + [f"image {i}" for i in range(args.num_generations)])
@@ -78,6 +78,8 @@ if __name__ == "__main__":
     parser.add_argument("--vae", type=str, default="openMUSE/maskgit-vqgan-imagenet-f16-256")
     parser.add_argument("--transformer", type=str, required=True)
     parser.add_argument("--imagenet_class_mapping_path", type=str, required=True)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--batch_size", type=int, default=64)
 
     args = parser.parse_args()
     generate_and_log(args)
