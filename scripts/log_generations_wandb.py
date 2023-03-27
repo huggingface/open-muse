@@ -60,7 +60,7 @@ def generate_and_log(args):
                 row.append(wandb.Image(image))
             table.add_data(*row)
 
-    wandb.log({"samples": wandb.plot.table(table)})
+    wandb.log({"samples": table})
 
 
 if __name__ == "__main__":
@@ -80,3 +80,4 @@ if __name__ == "__main__":
     parser.add_argument("--imagenet_class_mapping_path", type=str, required=True)
 
     args = parser.parse_args()
+    generate_and_log(args)
