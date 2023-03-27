@@ -45,6 +45,7 @@ class PipelineMuse:
         temperature: float = 1.0,
         topk_filter_thres: float = 0.9,
         num_images_per_prompt: int = 1,
+        use_maskgit_generate: bool = False,
     ):
         if isinstance(text, str):
             text = [text]
@@ -60,7 +61,11 @@ class PipelineMuse:
         encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
         encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
 
-        generated_tokens = self.transformer.generate(
+        generate = self.transformer.generate
+        if use_maskgit_generate:
+            generate = self.transformer.generate2
+
+        generated_tokens = generate(
             encoder_hidden_states=encoder_hidden_states,
             timesteps=timesteps,
             guidance_scale=guidance_scale,

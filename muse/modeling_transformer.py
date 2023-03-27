@@ -26,7 +26,7 @@ from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
-from .sampling import cosine_schedule, gumbel_sample, top_k
+from .sampling import cosine_schedule, gumbel_sample, mask_by_random_topk, top_k
 
 try:
     import xformers.ops as xops
@@ -623,3 +623,88 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             scores = rearrange(scores, "... 1 -> ...")  # TODO: use torch
 
         return input_ids
+
+    def generate2(
+        self,
+        class_ids: torch.LongTensor = None,
+        encoder_hidden_states: torch.FloatTensor = None,
+        temperature=1.0,
+        timesteps=18,  # ideal number of steps is 18 in maskgit paper
+        guidance_scale=0,
+        noise_schedule=cosine_schedule,
+        **kwargs,
+    ):
+        """
+        Generate 1:1 similar to the original MaskGit repo
+        https://github.com/google-research/maskgit/blob/main/maskgit/libml/parallel_decode.py#L79
+        """
+        # begin with all image token ids masked
+        mask_token_id = self.config.mask_token_id
+        seq_len = self.config.num_vq_tokens
+
+        batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
+        shape = (batch_size, seq_len)
+
+        # shift the class ids by the codebook size
+        if class_ids is not None:
+            class_ids += self.config.codebook_size
+
+        # initialize with all image tokens masked
+        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+
+        for step in range(timesteps):
+            # prepend class token to input_ids
+            if class_ids is not None:
+                input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+
+            # classifier free guidance
+            if encoder_hidden_states is not None and guidance_scale > 0:
+                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                model_input = torch.cat([input_ids] * 2)
+                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits = cond_logits[..., : self.config.codebook_size]
+                uncond_logits = uncond_logits[..., : self.config.codebook_size]
+                logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
+            else:
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
+                logits = logits[..., : self.config.codebook_size]
+
+            # remove class token
+            if class_ids is not None:
+                input_ids = input_ids[:, 1:]
+                logits = logits[:, 1:]
+
+            # Samples the ids using categorical sampling: [batch_size, seq_length].
+            # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
+            sampled_ids = torch.stack([torch.multinomial(l.softmax(dim=-1), 1).squeeze(1) for l in logits])
+
+            # Just updates the masked tokens.
+            unknown_map = input_ids == mask_token_id
+            sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
+            # Defines the mask ratio for the next round. The number to mask out is
+            # determined by mask_ratio * unknown_number_in_the_beginning.
+            ratio = 1.0 * (step + 1) / timesteps
+            mask_ratio = noise_schedule(torch.tensor(ratio))
+            # Computes the probabilities of each selected tokens.
+            probs = logits.softmax(dim=-1)
+            selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
+            selected_probs = selected_probs.squeeze(-1)
+
+            # Ignores the tokens given in the input by overwriting their confidence.
+            selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
+            # Gets mask lens for each sample in the batch according to the mask ratio.
+            mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
+            # Keeps at least one of prediction in this round and also masks out at least
+            # one and for the next iteration
+            mask_len = torch.max(
+                torch.tensor([1], device=logits.device), torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len)
+            )
+
+            # Adds noise for randomness
+            temperature = temperature * (1.0 - ratio)
+            masking = mask_by_random_topk(mask_len, selected_probs, temperature)
+            # Masks tokens with lower confidence.
+            input_ids = torch.where(masking, mask_token_id, sampled_ids)
+
+        return sampled_ids
