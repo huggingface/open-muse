@@ -50,6 +50,12 @@ def parse_args():
         default=4,
         help="The index of the imagenet class id to do inference on. Chosen from imagenet_class_names below."
     )
+    parser.add_argument(
+        "--num_timesteps",
+        type=int,
+        default=4,
+        help="The number of timesteps used to generate."
+    )
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -69,7 +75,6 @@ if __name__ == "__main__":
         model = MaskGitTransformer.from_pretrained(args.pytorch_dump_folder_path)
         model = model.to(accelerator.device, dtype=precision)
         model.eval()
-        # Load the pre-trained vq model from the hub
 
         # Initialize the MaskGitTransformer model
         mask_id = model.config.mask_token_id
@@ -83,7 +88,7 @@ if __name__ == "__main__":
             dtype=torch.long,
         )
         print(f"Generating image of {imagenet_class_names[imagenet_class_idx]}")
-        gen_token_ids = model.generate(imagenet_class_ids, timesteps=4)
+        gen_token_ids = model.generate(imagenet_class_ids, timesteps=args.num_timesteps)
         # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
         # so we clamp them to the correct range.
         gen_token_ids = torch.clamp(gen_token_ids, max=model.config.codebook_size - 1)

@@ -184,6 +184,7 @@ class TransformerLayer(nn.Module):
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
+        self.use_maskgit_mlp = use_maskgit_mlp
         if use_maskgit_mlp:
             self.ffn = Mlp(self.hidden_size, self.intermediate_size, hidden_dropout, layer_norm_eps, use_bias)
         else:
@@ -202,6 +203,7 @@ class TransformerLayer(nn.Module):
         hidden_states = residual + attention_output
         hidden_states = self.attn_layer_norm(hidden_states)
 
+
         if encoder_hidden_states is not None:
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
@@ -211,6 +213,8 @@ class TransformerLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.ffn(hidden_states)
+        if self.use_maskgit_mlp:
+            return hidden_states
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -244,21 +248,17 @@ class Embed(nn.Module):
 
         if layer_norm_embeddings:
             self.embeddings_ln = LayerNorm(self.embedding_size, eps=layer_norm_eps, use_bias=use_bias)
-
         if use_embeddings_project:
             self.embedding_hidden_mapping = nn.Linear(self.embedding_size, self.hidden_size, bias=use_bias)
 
     def forward(self, input_ids):
         seq_length = input_ids.shape[-1]
         position_ids = torch.arange(seq_length)[None, :].to(input_ids.device)
-
         word_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
         input_embeddings = word_embeddings + position_embeddings
-
         if self.layer_norm_embeddings:
             input_embeddings = self.embeddings_ln(input_embeddings)
-
         if self.use_embeddings_project:
             input_embeddings = self.embedding_hidden_mapping(input_embeddings)
 
@@ -327,8 +327,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             self.hidden_size,
             self.hidden_dropout,
             self.max_position_embeddings,
-            use_bias,
-            layer_norm_eps,
+            layer_norm_eps=layer_norm_eps,
+            use_bias=use_bias,
             layer_norm_embeddings=layer_norm_embeddings,
         )
         self.transformer_layers = nn.ModuleList(
@@ -379,7 +379,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def forward(self, input_ids, encoder_hidden_states=None, labels=None, label_smoothing=0.0):
         hidden_states = self.embed(input_ids)
-
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
 
@@ -421,7 +420,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         # shift the class ids by the codebook size
         class_ids += self.config.codebook_size
-
         # initialize with all image tokens masked
         input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
         scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
@@ -439,9 +437,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             # prepend class token to input_ids
             input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
-
             logits = self(input_ids)
-
             # remove class token
             input_ids = input_ids[:, 1:]
             logits = logits[:, 1:]

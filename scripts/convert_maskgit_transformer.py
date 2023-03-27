@@ -82,7 +82,7 @@ def load_flax_weights_in_pytorch_model(pt_model, flax_state):
 
     for flax_key, flax_tensor in flax_state.items():
         flax_key_tuple = tuple(flax_key.split("."))
-        flax_tensor = torch.from_numpy(flax_tensor)
+        flax_tensor = torch.from_numpy(np.array(flax_tensor))
         if flax_key_tuple[0] == "transformer_layers" and len(flax_tensor.shape) == 3:
             if flax_tensor.shape[0] == 768:
                 flax_tensor = flax_tensor.permute(1, 2, 0)
