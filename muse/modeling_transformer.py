@@ -626,12 +626,14 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
-        topk_filter_thres=0.9,
-        can_remask_prev_masked=False,  # TODO: implement this
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
-        guidance_scale=3,
-        noise_schedule: Callable = cosine_schedule,
+        guidance_scale=0,
+        noise_schedule=cosine_schedule,
     ):
+        """
+        Generate 1:1 similar to the original MaskGit repo
+        https://github.com/google-research/maskgit/blob/main/maskgit/libml/parallel_decode.py#L79
+        """
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
         seq_len = self.config.num_vq_tokens
@@ -654,31 +656,32 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
             else:
                 logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
-                logits = logits[:, :, : self.config.codebook_size]
+                logits = logits[..., : self.config.codebook_size]
 
             # Samples the ids using categorical sampling: [batch_size, seq_length].
-            sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
+            # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
+            sampled_ids = torch.cat([torch.multinomial(l.softmax(dim=-1), 1).squeeze(1) for l in logits])
 
             # Just updates the masked tokens.
             unknown_map = input_ids == mask_token_id
             sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
             # Defines the mask ratio for the next round. The number to mask out is
             # determined by mask_ratio * unknown_number_in_the_beginning.
-            ratio = 1.0 * (step + 1) / len(timesteps)
-            mask_ratio = noise_schedule(ratio)
+            ratio = 1.0 * (step + 1) / timesteps
+            mask_ratio = noise_schedule(torch.tensor(ratio))
             # Computes the probabilities of each selected tokens.
             probs = logits.softmax(dim=-1)
-            selected_probs = torch.gather(probs, -1, sampled_ids.long())
+            selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
             selected_probs = selected_probs.squeeze(-1)
 
             # Ignores the tokens given in the input by overwriting their confidence.
             selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
             # Gets mask lens for each sample in the batch according to the mask ratio.
-            mask_len = (seq_len * mask_ratio).floor().unsqueeze(1)
+            mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
             # Keeps at least one of prediction in this round and also masks out at least
             # one and for the next iteration
             mask_len = torch.max(
-                torch.Tensor([1], device=logits.device), torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len)
+                torch.tensor([1], device=logits.device), torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len)
             )
 
             # Adds noise for randomness
@@ -686,3 +689,5 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             masking = mask_by_random_topk(mask_len, selected_probs, temperature)
             # Masks tokens with lower confidence.
             input_ids = torch.where(masking, mask_token_id, sampled_ids)
+
+        return sampled_ids
