@@ -34,6 +34,7 @@ class PipelineMuse:
         self.transformer.to(device, dtype=dtype)
         self.device = device
         self.dtype = dtype
+        return self
 
     @torch.no_grad()
     def __call__(
@@ -71,6 +72,7 @@ class PipelineMuse:
 
         # Convert to PIL images
         images = [self.to_pil_image(image) for image in images]
+        return images
 
     def to_pil_image(self, image: torch.Tensor):
         image = image.permute(1, 2, 0).cpu().numpy()
