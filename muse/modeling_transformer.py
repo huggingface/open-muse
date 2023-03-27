@@ -632,6 +632,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
         noise_schedule=cosine_schedule,
+        **kwargs,
     ):
         """
         Generate 1:1 similar to the original MaskGit repo
