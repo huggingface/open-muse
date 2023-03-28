@@ -292,11 +292,14 @@ class TransformerLayer(nn.Module):
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         residual = hidden_states
+        if not self.use_maskgit_mlp:
+            hidden_states = self.attn_layer_norm(hidden_states)
         attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
-        hidden_states = self.attn_layer_norm(hidden_states)
+        if self.use_maskgit_mlp:
+            hidden_states = self.attn_layer_norm(hidden_states)
 
 
         if encoder_hidden_states is not None:
