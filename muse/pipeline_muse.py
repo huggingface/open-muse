@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Union
+from typing import List, Optional, Union
 
 import numpy as np
 import torch
@@ -103,10 +103,32 @@ class PipelineMuse:
         return image
 
     @classmethod
-    def from_pretrained(cls, text_encoder_path: str, vae_path: str, transformer_path: str) -> None:
-        # TODO: Make this more flexible
-        text_encoder = T5EncoderModel.from_pretrained(text_encoder_path)
-        tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
-        vae = MaskGitVQGAN.from_pretrained(vae_path)
-        transformer = MaskGitTransformer.from_pretrained(transformer_path)
+    def from_pretrained(
+        cls,
+        model_name_or_path: str = None,
+        text_encoder_path: Optional[str] = None,
+        vae_path: Optional[str] = None,
+        transformer_path: Optional[str] = None,
+    ) -> None:
+        """
+        Instantiate a PipelineMuse from a pretrained model. Either model_name_or_path or all of text_encoder_path, vae_path, and
+        transformer_path must be provided.
+        """
+        if model_name_or_path is None:
+            if text_encoder_path is None or vae_path is None or transformer_path is None:
+                raise ValueError(
+                    "If model_name_or_path is None, then text_encoder_path, vae_path, and transformer_path must be"
+                    " provided."
+                )
+
+            text_encoder = T5EncoderModel.from_pretrained(text_encoder_path)
+            tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
+            vae = MaskGitVQGAN.from_pretrained(vae_path)
+            transformer = MaskGitTransformer.from_pretrained(transformer_path)
+        else:
+            text_encoder = T5EncoderModel.from_pretrained(model_name_or_path, subfolder="text_encoder")
+            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder="text_encoder")
+            vae = MaskGitVQGAN.from_pretrained(model_name_or_path, subfolder="vae")
+            transformer = MaskGitTransformer.from_pretrained(model_name_or_path, subfolder="transformer")
+
         return cls(text_encoder, tokenizer, vae, transformer)
