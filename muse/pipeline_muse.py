@@ -31,19 +31,22 @@ from .modeling_transformer import MaskGitTransformer
 class PipelineMuse:
     def __init__(
         self,
-        text_encoder: Union[T5EncoderModel, CLIPTextModel],
-        tokenizer: PreTrainedTokenizer,
         vae: MaskGitVQGAN,
         transformer: MaskGitTransformer,
+        is_class_conditioned: bool = False,
+        text_encoder: Optional[Union[T5EncoderModel, CLIPTextModel]] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
     ) -> None:
         self.text_encoder = text_encoder
         self.tokenizer = tokenizer
         self.vae = vae
         self.transformer = transformer
+        self.is_class_conditioned = is_class_conditioned
         self.device = "cpu"
 
     def to(self, device="cpu", dtype=torch.float32) -> None:
-        self.text_encoder.to(device, dtype=dtype)
+        if not self.is_class_conditioned:
+            self.text_encoder.to(device, dtype=dtype)
         self.vae.to(device, dtype=dtype)
         self.transformer.to(device, dtype=dtype)
         self.device = device
@@ -53,7 +56,8 @@ class PipelineMuse:
     @torch.no_grad()
     def __call__(
         self,
-        text: Union[str, List[str]],
+        text: Optional[Union[str, List[str]]] = None,
+        class_ids: torch.LongTensor = None,
         timesteps: int = 8,
         guidance_scale: float = 8.0,
         temperature: float = 1.0,
@@ -61,26 +65,38 @@ class PipelineMuse:
         num_images_per_prompt: int = 1,
         use_maskgit_generate: bool = False,
     ):
-        if isinstance(text, str):
-            text = [text]
+        if text is None and class_ids is None:
+            raise ValueError("Either text or class_ids must be provided.")
 
-        input_ids = self.tokenizer(
-            text, return_tensors="pt", padding="max_length", truncation=True, max_length=16
-        ).input_ids  # TODO: remove hardcode
-        input_ids = input_ids.to(self.device)
-        encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+        if text is not None and class_ids is not None:
+            raise ValueError("Only one of text or class_ids may be provided.")
 
-        # duplicate text embeddings for each generation per prompt, using mps friendly method
-        bs_embed, seq_len, _ = encoder_hidden_states.shape
-        encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
-        encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
+        if class_ids is not None:
+            # duplicate class ids for each generation per prompt
+            class_ids = class_ids.repeat_interleave(num_images_per_prompt, dim=0)
+            model_inputs = {"class_ids": class_ids}
+        else:
+            if isinstance(text, str):
+                text = [text]
+
+            input_ids = self.tokenizer(
+                text, return_tensors="pt", padding="max_length", truncation=True, max_length=16
+            ).input_ids  # TODO: remove hardcode
+            input_ids = input_ids.to(self.device)
+            encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+
+            # duplicate text embeddings for each generation per prompt, using mps friendly method
+            bs_embed, seq_len, _ = encoder_hidden_states.shape
+            encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+            encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            model_inputs = {"encoder_hidden_states": encoder_hidden_states}
 
         generate = self.transformer.generate
         if use_maskgit_generate:
             generate = self.transformer.generate2
 
         generated_tokens = generate(
-            encoder_hidden_states=encoder_hidden_states,
+            **model_inputs,
             timesteps=timesteps,
             guidance_scale=guidance_scale,
             temperature=temperature,
@@ -109,6 +125,7 @@ class PipelineMuse:
         text_encoder_path: Optional[str] = None,
         vae_path: Optional[str] = None,
         transformer_path: Optional[str] = None,
+        is_class_conditioned: bool = False,
     ) -> None:
         """
         Instantiate a PipelineMuse from a pretrained model. Either model_name_or_path or all of text_encoder_path, vae_path, and
@@ -121,14 +138,30 @@ class PipelineMuse:
                     " provided."
                 )
 
-            text_encoder = T5EncoderModel.from_pretrained(text_encoder_path)
-            tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
+            text_encoder = None
+            tokenizer = None
+
+            if not is_class_conditioned:
+                text_encoder = T5EncoderModel.from_pretrained(text_encoder_path)
+                tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
+
             vae = MaskGitVQGAN.from_pretrained(vae_path)
             transformer = MaskGitTransformer.from_pretrained(transformer_path)
         else:
-            text_encoder = T5EncoderModel.from_pretrained(model_name_or_path, subfolder="text_encoder")
-            tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder="text_encoder")
+            text_encoder = None
+            tokenizer = None
+
+            if not is_class_conditioned:
+                text_encoder = T5EncoderModel.from_pretrained(model_name_or_path, subfolder="text_encoder")
+                tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder="text_encoder")
+
             vae = MaskGitVQGAN.from_pretrained(model_name_or_path, subfolder="vae")
             transformer = MaskGitTransformer.from_pretrained(model_name_or_path, subfolder="transformer")
 
-        return cls(text_encoder, tokenizer, vae, transformer)
+        return cls(
+            vae=vae,
+            transformer=transformer,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            is_class_conditioned=is_class_conditioned,
+        )

@@ -2,6 +2,7 @@ import json
 from argparse import ArgumentParser
 from itertools import islice
 
+import torch
 import wandb
 
 from muse import PipelineMuse
@@ -29,6 +30,7 @@ def generate_and_log(args):
         text_encoder_path=args.text_encoder,
         vae_path=args.vae,
         transformer_path=args.transformer,
+        is_class_conditioned=args.is_class_conditioned,
     ).to(device=args.device)
     pipe.transformer.enable_xformers_memory_efficient_attention()
 
@@ -41,8 +43,15 @@ def generate_and_log(args):
     table = wandb.Table(columns=["class name"] + [f"image {i}" for i in range(args.num_generations)])
     for imagenet_class_id in imagenet_class_ids:
         imagenet_class_names = [imagenet_class_mapping[str(i)] for i in imagenet_class_id]
+        class_ids = torch.tensor(imagenet_class_id).to(device=args.device, dtype=torch.long)
+
+        if args.is_class_conditioned:
+            inputs = {"class_ids": class_ids}
+        else:
+            inputs = {"text": imagenet_class_names}
+
         images = pipe(
-            imagenet_class_names,
+            **inputs,
             timesteps=args.timesteps,
             guidance_scale=args.guidance_scale,
             temperature=args.temperature,
@@ -67,6 +76,7 @@ if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--project", type=str, default="muse")
     parser.add_argument("--entity", type=str, default="psuraj")
+    parser.add_argument("--is_class_conditioned", action="store_true")
     parser.add_argument("--run_id", type=str, required=True)
     parser.add_argument("--timesteps", type=int, default=4)
     parser.add_argument("--temperature", type=float, default=1.0)
