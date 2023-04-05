@@ -56,7 +56,7 @@ class PipelineMuse:
     @torch.no_grad()
     def __call__(
         self,
-        text: Optional[Union[str, List[str]]],
+        text: Optional[Union[str, List[str]]] = None,
         class_ids: torch.LongTensor = None,
         timesteps: int = 8,
         guidance_scale: float = 8.0,
