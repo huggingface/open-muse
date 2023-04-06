@@ -57,7 +57,7 @@ class PipelineMuse:
     def __call__(
         self,
         text: Optional[Union[str, List[str]]] = None,
-        class_ids: torch.LongTensor = None,
+        class_ids: Optional[Union[int, List[int]]] = None,
         timesteps: int = 8,
         guidance_scale: float = 8.0,
         temperature: float = 1.0,
@@ -72,6 +72,10 @@ class PipelineMuse:
             raise ValueError("Only one of text or class_ids may be provided.")
 
         if class_ids is not None:
+            if isinstance(class_ids, int):
+                class_ids = [class_ids]
+
+            class_ids = torch.tensor(class_ids, device=self.device, dtype=torch.long)
             # duplicate class ids for each generation per prompt
             class_ids = class_ids.repeat_interleave(num_images_per_prompt, dim=0)
             model_inputs = {"class_ids": class_ids}
