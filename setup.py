@@ -27,7 +27,7 @@ _deps = [
     "omegaconf==2.3.0",
     "webdataset>=0.2.39",
     "wandb",
-    "huggingface_hub>0.4.0",
+    "sentencepiece",  # for T5 tokenizer
 ]
 
 _extras_dev_deps = [
