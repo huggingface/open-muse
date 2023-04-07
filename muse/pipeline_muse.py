@@ -169,3 +169,71 @@ class PipelineMuse:
             tokenizer=tokenizer,
             is_class_conditioned=is_class_conditioned,
         )
+
+class PipelineMuseInpainting(PipelineMuse):
+    @torch.no_grad()
+    def __call__(
+        self,
+        image: Image,
+        mask: torch.BoolTensor,
+        text: Optional[Union[str, List[str]]] = None,
+        class_ids: torch.LongTensor = None,
+        timesteps: int = 8,
+        guidance_scale: float = 8.0,
+        temperature: float = 1.0,
+        topk_filter_thres: float = 0.9,
+        num_images_per_prompt: int = 1,
+        use_maskgit_generate: bool = False,
+    ):
+        if text is None and class_ids is None:
+            raise ValueError("Either text or class_ids must be provided.")
+
+        if text is not None and class_ids is not None:
+            raise ValueError("Only one of text or class_ids may be provided.")
+        encode_transform = transforms.Compose([
+                transforms.Resize(256, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(256),
+                transforms.ToTensor(),
+        ])
+        pixel_values = encode_transform(image).unsqueeze(0)
+        image_tokens = self.vae.encode(pixel_values)
+        mask_token_id = self.config.mask_token_id
+        image_tokens[mask] = mask_token_id
+        if class_ids is not None:
+            # duplicate class ids for each generation per prompt
+            class_ids = class_ids.repeat_interleave(num_images_per_prompt, dim=0)
+            model_inputs = {"class_ids": class_ids}
+        else:
+            if isinstance(text, str):
+                text = [text]
+
+            input_ids = self.tokenizer(
+                text, return_tensors="pt", padding="max_length", truncation=True, max_length=16
+            ).input_ids  # TODO: remove hardcode
+            input_ids = input_ids.to(self.device)
+            encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+
+            # duplicate text embeddings for each generation per prompt, using mps friendly method
+            bs_embed, seq_len, _ = encoder_hidden_states.shape
+            encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+            encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            model_inputs = {"encoder_hidden_states": encoder_hidden_states}
+
+        generate = self.transformer.generate
+        if use_maskgit_generate:
+            generate = self.transformer.generate2
+
+        generated_tokens = generate(
+            input_ids = image_tokens
+            **model_inputs,
+            timesteps=timesteps,
+            guidance_scale=guidance_scale,
+            temperature=temperature,
+            topk_filter_thres=topk_filter_thres,
+        )
+
+        images = self.vae.decode_code(generated_tokens)
+
+        # Convert to PIL images
+        images = [self.to_pil_image(image) for image in images]
+        return images

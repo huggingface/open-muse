@@ -550,6 +550,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def generate(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
@@ -571,7 +572,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
         scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
 
         starting_temperature = temperature
@@ -626,6 +628,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def generate2(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
@@ -650,7 +653,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
 
         for step in range(timesteps):
             # prepend class token to input_ids
