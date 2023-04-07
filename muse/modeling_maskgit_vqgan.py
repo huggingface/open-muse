@@ -274,17 +274,9 @@ class VectorQuantizer(nn.Module):
         """
         # reshape z -> (batch, height, width, channel) and flatten
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
-        hidden_states_flattended = hidden_states.reshape((-1, self.embedding_dim))
 
-        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        emb_weights = self.embedding.weight
-        distance = (
-            torch.sum(hidden_states_flattended**2, dim=1, keepdims=True)
-            + torch.sum(emb_weights**2, dim=1)
-            - 2 * torch.matmul(hidden_states_flattended, emb_weights.T)
-        )
-
-        min_encoding_indices = torch.argmin(distance, axis=1).unsqueeze(1)
+        distances = self.compute_distances(hidden_states)
+        min_encoding_indices = torch.argmin(distances, axis=1).unsqueeze(1)
         min_encodings = torch.zeros(min_encoding_indices.shape[0], self.num_embeddings).to(hidden_states)
         min_encodings.scatter_(1, min_encoding_indices, 1)
 
@@ -308,6 +300,21 @@ class VectorQuantizer(nn.Module):
 
         return z_q, min_encoding_indices, loss
 
+    def compute_distances(self, hidden_states):
+        # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
+        hidden_states_flattended = hidden_states.reshape((-1, self.embedding_dim))
+        emb_weights = self.embedding.weight.t()
+
+        inputs_norm_sq = hidden_states_flattended.pow(2.0).sum(dim=1, keepdim=True)
+        codebook_t_norm_sq = emb_weights.pow(2.0).sum(dim=0, keepdim=True)
+        distances = torch.addmm(
+            inputs_norm_sq + codebook_t_norm_sq,
+            hidden_states_flattended,
+            emb_weights,
+            alpha=-2.0,
+        )
+        return distances
+
     def get_codebook_entry(self, indices):
         # indices are expected to be of shape (batch, num_tokens)
         # get quantized latent vectors
@@ -315,6 +322,22 @@ class VectorQuantizer(nn.Module):
         z_q = self.embedding(indices)
         z_q = z_q.reshape(batch, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens)), -1).permute(0, 3, 1, 2)
         return z_q
+
+    # adapted from https://github.com/kakaobrain/rq-vae-transformer/blob/main/rqvae/models/rqvae/quantizations.py#L372
+    def get_soft_code(self, hidden_states, temp=1.0, stochastic=False):
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()  # (batch, height, width, channel)
+        distances = self.compute_distances(hidden_states)  # (batch * height * width, num_embeddings)
+
+        soft_code = F.softmax(-distances / temp, dim=-1)  # (batch * height * width, num_embeddings)
+        if stochastic:
+            code = torch.multinomial(soft_code, 1)  # (batch * height * width, 1)
+        else:
+            code = distances.argmin(dim=-1)  # (batch * height * width)
+
+        code = code.reshape(hidden_states.shape[0], -1)  # (batch, height * width)
+        batch, num_tokens = code.shape
+        soft_code = soft_code.reshape(batch, num_tokens, -1)  # (batch, height * width, num_embeddings)
+        return soft_code, code
 
 
 class MaskGitVQGAN(ModelMixin, ConfigMixin):
@@ -362,6 +385,11 @@ class MaskGitVQGAN(ModelMixin, ConfigMixin):
         quantized_states = self.quantize.get_codebook_entry(codebook_indices)
         reconstructed_pixel_values = self.decode(quantized_states)
         return reconstructed_pixel_values
+
+    def get_soft_code(self, pixel_values, temp=1.0, stochastic=False):
+        hidden_states = self.encoder(pixel_values)
+        soft_code, codebook_indices = self.quantize.get_soft_code(hidden_states, temp=temp, stochastic=stochastic)
+        return soft_code, codebook_indices
 
     def forward(self, pixel_values, return_loss=False):
         hidden_states = self.encoder(pixel_values)
