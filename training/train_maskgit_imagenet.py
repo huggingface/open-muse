@@ -532,7 +532,7 @@ def generate_images(model, vq_model, accelerator, global_step):
         dtype = torch.bfloat16
 
     with torch.autocast("cuda", dtype=dtype, enabled=accelerator.mixed_precision != "no"):
-        gen_token_ids = accelerator.unwrap_model(model).generate(imagenet_class_ids, timesteps=4)
+        gen_token_ids = accelerator.unwrap_model(model).generate2(imagenet_class_ids, timesteps=8)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
