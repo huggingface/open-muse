@@ -90,3 +90,7 @@ training:
     min_masking_rate: 0.0
     label_smoothing: 0.0
     max_grad_norm: null
+    # related to vae code sampling
+    use_soft_code_target: False
+    use_stochastic_code: False
+    soft_code_temp: 1.0
