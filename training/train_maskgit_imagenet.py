@@ -110,6 +110,23 @@ def load_model_hook(models, input_dir):
         del load_model
 
 
+def soft_target_cross_entropy(logits, targets, soft_targets):
+    # ignore the first token from logits and targets (class id token)
+    logits = logits[:, 1:]
+    targets = targets[:, 1:]
+
+    log_probs = F.log_softmax(logits, dim=-1)
+    padding_mask = targets.eq(-100)
+
+    loss = torch.sum(-soft_targets * log_probs, dim=-1)
+    loss.masked_fill_(padding_mask, 0.0)
+
+    # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
+    num_active_elements = padding_mask.numel() - padding_mask.long().sum()
+    loss = loss.sum() / num_active_elements
+    return loss
+
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
@@ -347,7 +364,14 @@ def main():
     def prepare_inputs_and_labels(
         pixel_values: torch.FloatTensor, class_ids: torch.LongTensor, min_masking_rate: float = 0.0
     ):
-        image_tokens = vq_model.encode(pixel_values)[1]
+        if config.training.use_soft_code_target:
+            soft_targets, image_tokens = vq_model.get_soft_code(
+                pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+            )
+        else:
+            image_tokens = vq_model.encode(pixel_values)[1]
+            soft_targets = None
+
         batch_size, seq_len = image_tokens.shape
         # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
         # Sample a random timestep for each image
@@ -369,7 +393,7 @@ def main():
         input_ids = torch.cat([class_ids.unsqueeze(-1), input_ids], dim=-1)
         # prepend -100 to the labels as we don't want to predict the class ids
         labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
-        return input_ids, labels, mask_prob
+        return input_ids, labels, soft_targets, mask_prob
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -386,7 +410,7 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, labels, mask_prob = prepare_inputs_and_labels(
+            input_ids, labels, soft_targets, mask_prob = prepare_inputs_and_labels(
                 pixel_values, class_ids, config.training.min_masking_rate
             )
 
@@ -397,7 +421,13 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                _, loss = model(input_ids=input_ids, labels=labels, label_smoothing=config.training.label_smoothing)
+                if config.training.use_soft_code_target:
+                    logits = model(input_ids=input_ids)
+                    loss = soft_target_cross_entropy(logits, labels, soft_targets)
+                else:
+                    _, loss = model(
+                        input_ids=input_ids, labels=labels, label_smoothing=config.training.label_smoothing
+                    )
                 # Gather thexd losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
@@ -500,7 +530,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, class_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         class_ids = class_ids.to(accelerator.device, non_blocking=True)
-        input_ids, labels, _ = prepare_inputs_and_labels(pixel_values, class_ids)
+        input_ids, labels, _, _ = prepare_inputs_and_labels(pixel_values, class_ids)
         _, loss = model(input_ids=input_ids, labels=labels)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
