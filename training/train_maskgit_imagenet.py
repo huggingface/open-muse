@@ -364,9 +364,12 @@ def main():
 
     @torch.no_grad()
     def prepare_inputs_and_labels(
-        pixel_values: torch.FloatTensor, class_ids: torch.LongTensor, min_masking_rate: float = 0.0
+        pixel_values: torch.FloatTensor,
+        class_ids: torch.LongTensor,
+        min_masking_rate: float = 0.0,
+        is_train: bool = True,
     ):
-        if config.training.use_soft_code_target:
+        if config.training.use_soft_code_target and is_train:
             soft_targets, image_tokens = vq_model.get_soft_code(
                 pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
             )
@@ -532,7 +535,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, class_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         class_ids = class_ids.to(accelerator.device, non_blocking=True)
-        input_ids, labels, _, _ = prepare_inputs_and_labels(pixel_values, class_ids)
+        input_ids, labels, _, _ = prepare_inputs_and_labels(pixel_values, class_ids, is_train=False)
         _, loss = model(input_ids=input_ids, labels=labels)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
