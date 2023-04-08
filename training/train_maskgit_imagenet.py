@@ -115,6 +115,8 @@ def soft_target_cross_entropy(logits, targets, soft_targets):
     logits = logits[:, 1:]
     targets = targets[:, 1:]
 
+    logits = logits[..., : soft_targets.shape[-1]]
+
     log_probs = F.log_softmax(logits, dim=-1)
     padding_mask = targets.eq(-100)
 
