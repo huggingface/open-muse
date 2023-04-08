@@ -533,7 +533,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, class_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         class_ids = class_ids.to(accelerator.device, non_blocking=True)
-        input_ids, labels, _, _ = prepare_inputs_and_labels(pixel_values, class_ids)
+        input_ids, labels, _, _ = prepare_inputs_and_labels(pixel_values, class_ids, is_train=False)
         _, loss = model(input_ids=input_ids, labels=labels)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
