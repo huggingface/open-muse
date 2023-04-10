@@ -1,3 +1,4 @@
+# Taken from https://github.com/ai-forever/Kandinsky-2/blob/main/kandinsky2/vqgan/movq_modules.py
 # pytorch_diffusion + derived encoder decoder
 import math
 import torch
@@ -134,14 +135,23 @@ class ResnetBlock(nn.Module):
         out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
         self.use_conv_shortcut = conv_shortcut
-
-        self.norm1 = Normalize(in_channels, zq_ch, add_conv=add_conv)
+        if zq_ch:
+            self.norm1 = Normalize(in_channels, zq_ch, add_conv=add_conv)
+        else:
+            self.norm1 = torch.nn.GroupNorm(
+                num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
+            )
         self.conv1 = torch.nn.Conv2d(
             in_channels, out_channels, kernel_size=3, stride=1, padding=1
         )
         if temb_channels > 0:
             self.temb_proj = torch.nn.Linear(temb_channels, out_channels)
-        self.norm2 = Normalize(out_channels, zq_ch, add_conv=add_conv)
+        if zq_ch:
+            self.norm2 = Normalize(out_channels, zq_ch, add_conv=add_conv)
+        else:
+            self.norm2 = torch.nn.GroupNorm(
+                num_groups=32, num_channels=out_channels, eps=1e-6, affine=True
+            )
         self.dropout = torch.nn.Dropout(dropout)
         self.conv2 = torch.nn.Conv2d(
             out_channels, out_channels, kernel_size=3, stride=1, padding=1
@@ -156,16 +166,22 @@ class ResnetBlock(nn.Module):
                     in_channels, out_channels, kernel_size=1, stride=1, padding=0
                 )
 
-    def forward(self, x, temb, zq):
+    def forward(self, x, temb, zq=None):
         h = x
-        h = self.norm1(h, zq)
+        if zq is not None:
+            h = self.norm1(h, zq)
+        else:
+            h = self.norm1(h)
+
         h = nonlinearity(h)
         h = self.conv1(h)
 
         if temb is not None:
             h = h + self.temb_proj(nonlinearity(temb))[:, :, None, None]
-
-        h = self.norm2(h, zq)
+        if zq is not None:
+            h = self.norm2(h, zq)
+        else:
+            h = self.norm2(h)
         h = nonlinearity(h)
         h = self.dropout(h)
         h = self.conv2(h)
@@ -183,8 +199,12 @@ class AttnBlock(nn.Module):
     def __init__(self, in_channels, zq_ch=None, add_conv=False):
         super().__init__()
         self.in_channels = in_channels
-
-        self.norm = Normalize(in_channels, zq_ch, add_conv=add_conv)
+        if zq_ch:
+            self.norm = Normalize(in_channels, zq_ch, add_conv=add_conv)
+        else:
+            self.norm = torch.nn.GroupNorm(
+                num_groups=32, num_channels=in_channels, eps=1e-6, affine=True
+            )
         self.q = torch.nn.Conv2d(
             in_channels, in_channels, kernel_size=1, stride=1, padding=0
         )
@@ -198,9 +218,13 @@ class AttnBlock(nn.Module):
             in_channels, in_channels, kernel_size=1, stride=1, padding=0
         )
 
-    def forward(self, x, zq):
+    def forward(self, x, zq=None):
         h_ = x
-        h_ = self.norm(h_, zq)
+        if zq is not None:
+            h_ = self.norm(h_, zq)
+        else:
+            h_ = self.norm(h_)
+
         q = self.q(h_)
         k = self.k(h_)
         v = self.v(h_)
@@ -473,7 +497,9 @@ class Encoder(nn.Module):
         )
 
         # end
-        self.norm_out = Normalize(block_in)
+        self.norm_out = torch.nn.GroupNorm(
+            num_groups=32, num_channels=block_in, eps=1e-6, affine=True
+        )
         self.conv_out = torch.nn.Conv2d(
             block_in,
             2 * z_channels if double_z else z_channels,
@@ -580,7 +606,7 @@ class VectorQuantizer(nn.Module):
         back = torch.gather(used[None, :][inds.shape[0] * [0], :], 1, inds)
         return back.reshape(ishape)
 
-    def forward(self, z, temp=None, rescale_logits=False, return_logits=False):
+    def forward(self, z, return_loss=False, temp=None, rescale_logits=False, return_logits=False):
         assert temp is None or temp == 1.0, "Only for interface compatible with Gumbel"
         assert rescale_logits == False, "Only for interface compatible with Gumbel"
         assert return_logits == False, "Only for interface compatible with Gumbel"
@@ -600,6 +626,8 @@ class VectorQuantizer(nn.Module):
 
         min_encoding_indices = torch.argmin(d, dim=1)
         z_q = self.embedding(min_encoding_indices).view(z.shape)
+        if not return_loss:
+            return z_q, min_encoding_indices, None
         perplexity = None
         min_encodings = None
 
@@ -630,8 +658,7 @@ class VectorQuantizer(nn.Module):
             min_encoding_indices = min_encoding_indices.reshape(
                 z_q.shape[0], z_q.shape[2], z_q.shape[3]
             )
-
-        return z_q, loss, (perplexity, min_encodings, min_encoding_indices)
+        return z_q, min_encoding_indices, loss
 
     def get_codebook_entry(self, indices, shape):
         # shape specifying (batch, height, width, channel)
@@ -650,28 +677,42 @@ class VectorQuantizer(nn.Module):
 
         return z_q
 
-
 class MOVQ(nn.Module):
     def __init__(
         self,
-        ddconfig,
-        n_embed,
-        embed_dim,
+        in_channels=3,
+        out_ch=3,
+        ch=128,
+        ch_mult=(1, 2, 2, 4),
+        num_res_blocks=2,
+        attn_resolutions=(32,),
+        z_channels=4,
+        double_z=False,
+        n_embed=16384,
+        embed_dim=4,
+        resolution=256,
+        dropout=0.0
     ):
         super().__init__()
-        self.encoder = Encoder(**ddconfig)
-        self.decoder = MOVQDecoder(zq_ch=embed_dim, **ddconfig)
+        self.encoder = Encoder(ch=ch, out_ch=out_ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks,
+                               attn_resolutions=attn_resolutions, dropout=dropout, z_channels=z_channels,
+                               double_z=double_z, in_channels=in_channels, resolution=resolution)
+        self.decoder = MOVQDecoder(zq_ch=embed_dim, ch=ch, out_ch=out_ch, ch_mult=ch_mult, num_res_blocks=num_res_blocks,
+                                   attn_resolutions=attn_resolutions, dropout=dropout, in_channels=in_channels,
+                                   resolution=resolution, z_channels=z_channels)
         self.quantize = VectorQuantizer(
             n_embed, embed_dim, beta=0.25, remap=None, sane_index_shape=False
         )
-        self.quant_conv = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
-
-    def encode(self, x):
-        h = self.encoder(x)
-        h = self.quant_conv(h)
-        # quant, emb_loss, info = self.quantize(h)
-        return h
+        self.quant_conv = torch.nn.Conv2d(z_channels, embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim, z_channels, 1)
+    def encode(self, pixel_values, return_loss=False):
+        hidden_states = self.encoder(pixel_values)
+        hidden_states = self.quant_conv(hidden_states)
+        quantized_states, codebook_indices, codebook_loss = self.quantize(hidden_states, return_loss)
+        output = (quantized_states, codebook_indices)
+        if return_loss:
+            output = output + (codebook_loss,)
+        return output
 
     def decode(self, quant):
         quant2 = self.post_quant_conv(quant)
@@ -679,17 +720,14 @@ class MOVQ(nn.Module):
         return dec
 
     def decode_code(self, code_b):
-        batch_size = code_b.shape[0]
         quant = self.quantize.embedding(code_b.flatten())
-        grid_size = int((quant.shape[0] // batch_size) ** 0.5)
         quant = quant.view((1, 32, 32, 4))
         quant = rearrange(quant, "b h w c -> b c h w").contiguous()
-        print(quant.shape)
         quant2 = self.post_quant_conv(quant)
         dec = self.decoder(quant2, quant)
         return dec
 
     def forward(self, input):
-        quant, diff, _ = self.encode(input)
+        quant, _, diff = self.encode(input, return_loss=True)
         dec = self.decode(quant)
         return dec, diff
