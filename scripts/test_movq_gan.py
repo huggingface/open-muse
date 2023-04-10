@@ -1,9 +1,11 @@
 from argparse import ArgumentParser
 
-import torch
 import numpy as np
+import torch
 from PIL import Image
+
 from muse.modeling_maskgit_movq import MOVQ
+
 
 def generate_and_log(args):
     image_encoder = MOVQ()
@@ -16,7 +18,7 @@ def generate_and_log(args):
     image = np.transpose(image, [2, 0, 1])
     image = torch.from_numpy(image)
     _, ids = image_encoder.encode(image[None].to(args.device))
-    recon = (image_encoder.decode_code(ids).cpu().detach().numpy()+1) * 127.5
+    recon = (image_encoder.decode_code(ids).cpu().detach().numpy() + 1) * 127.5
     recon = np.transpose(recon[0], [1, 2, 0]).astype(np.uint8)
     recon = Image.fromarray(recon)
     recon.save(args.output_img)
