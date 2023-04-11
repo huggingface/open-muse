@@ -132,7 +132,7 @@ generated_tokens = maskgit_model.generate(class_ids=class_ids)
 rec_images = vq_model.decode(generated_tokens)
 ```
 
-___Note___: 
+___Note___:
 - The vq model and transformer model are kept separate to be able to scale the transformer model independently. And we may pre-encode the images for faster training.
 - The masking is also done outside the model to be able to use different masking strategies without affecting the modeling code.
 
