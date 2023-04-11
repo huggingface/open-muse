@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
+
 
 class SpatialNorm(nn.Module):
     def __init__(
@@ -87,11 +89,10 @@ class Downsample(nn.Module):
 class ResnetBlock(nn.Module):
     def __init__(
         self,
-        *,
         in_channels,
         out_channels=None,
         conv_shortcut=False,
-        dropout,
+        dropout=0.0,
         zq_ch=None,
         add_conv=False,
     ):
@@ -120,31 +121,31 @@ class ResnetBlock(nn.Module):
             else:
                 self.nin_shortcut = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0)
 
-    def forward(self, x, zq=None):
-        h = x
+    def forward(self, hidden_states, zq=None):
+        residual = hidden_states
         if zq is not None:
-            h = self.norm1(h, zq)
+            hidden_states = self.norm1(hidden_states, zq)
         else:
-            h = self.norm1(h)
+            hidden_states = self.norm1(hidden_states)
 
-        h = F.silu(h)
-        h = self.conv1(h)
+        hidden_states = F.silu(hidden_states)
+        hidden_states = self.conv1(hidden_states)
 
         if zq is not None:
-            h = self.norm2(h, zq)
+            hidden_states = self.norm2(hidden_states, zq)
         else:
-            h = self.norm2(h)
-        h = F.silu(h)
-        h = self.dropout(h)
-        h = self.conv2(h)
+            hidden_states = self.norm2(hidden_states)
+        hidden_states = F.silu(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = self.conv2(hidden_states)
 
         if self.in_channels != self.out_channels:
             if self.use_conv_shortcut:
-                x = self.conv_shortcut(x)
+                residual = self.conv_shortcut(residual)
             else:
-                x = self.nin_shortcut(x)
+                residual = self.nin_shortcut(residual)
 
-        return x + h
+        return hidden_states + residual
 
 
 class AttnBlock(nn.Module):
@@ -160,35 +161,36 @@ class AttnBlock(nn.Module):
         self.v = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
         self.proj_out = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
 
-    def forward(self, x, zq=None):
-        h_ = x
+    def forward(self, hidden_states, zq=None):
+        residual = hidden_states
         if zq is not None:
-            h_ = self.norm(h_, zq)
+            hidden_states = self.norm(hidden_states, zq)
         else:
-            h_ = self.norm(h_)
+            hidden_states = self.norm(hidden_states)
 
-        q = self.q(h_)
-        k = self.k(h_)
-        v = self.v(h_)
+        query = self.q(hidden_states)
+        key = self.k(hidden_states)
+        value = self.v(hidden_states)
 
-        # compute attention
-        b, c, h, w = q.shape
-        q = q.reshape(b, c, h * w)
-        q = q.permute(0, 2, 1)  # b,hw,c
-        k = k.reshape(b, c, h * w)  # b,c,hw
-        w_ = torch.bmm(q, k)  # b,hw,hw    w[b,i,j]=sum_c q[b,i,c]k[b,c,j]
-        w_ = w_ * (int(c) ** (-0.5))
-        w_ = F.softmax(w_, dim=2)
+        # compute attentions
+        batch, channels, height, width = query.shape
+        query = query.reshape((batch, channels, height * width))
+        query = query.permute(0, 2, 1)  # (b, hw, c)
+        key = key.reshape((batch, channels, height * width))
+
+        attn_weights = torch.bmm(query, key)  # b,hw,hw
+        attn_weights = attn_weights * (int(channels) ** -0.5)
+        attn_weights = nn.functional.softmax(attn_weights, dim=2)
 
         # attend to values
-        v = v.reshape(b, c, h * w)
-        w_ = w_.permute(0, 2, 1)  # b,hw,hw (first hw of k, second of q)
-        h_ = torch.bmm(v, w_)  # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w_[b,i,j]
-        h_ = h_.reshape(b, c, h, w)
+        value = value.reshape((batch, channels, height * width))
+        attn_weights = attn_weights.permute(0, 2, 1)
+        hidden_states = torch.bmm(value, attn_weights)
+        hidden_states = hidden_states.reshape((batch, channels, height, width))
 
-        h_ = self.proj_out(h_)
-
-        return x + h_
+        hidden_states = self.proj_out(hidden_states)
+        hidden_states = hidden_states + residual
+        return hidden_states
 
 
 class UpsamplingBlock(nn.Module):
@@ -209,7 +211,7 @@ class UpsamplingBlock(nn.Module):
         res_blocks = []
         attn_blocks = []
         for _ in range(self.config.num_res_blocks + 1):
-            res_blocks.append(ResnetBlock(block_in, block_out, zq_ch=zq_ch, dropout_prob=self.config.dropout))
+            res_blocks.append(ResnetBlock(block_in, block_out, zq_ch=zq_ch, dropout=self.config.dropout))
             block_in = block_out
             if self.curr_res in self.config.attn_resolutions:
                 attn_blocks.append(AttnBlock(block_in, zq_ch=zq_ch))
@@ -248,7 +250,7 @@ class DownsamplingBlock(nn.Module):
         res_blocks = nn.ModuleList()
         attn_blocks = nn.ModuleList()
         for _ in range(self.config.num_res_blocks):
-            res_blocks.append(ResnetBlock(block_in, block_out, dropout_prob=self.config.dropout))
+            res_blocks.append(ResnetBlock(block_in, block_out, dropout=self.config.dropout))
             block_in = block_out
             if self.curr_res in self.config.attn_resolutions:
                 attn_blocks.append(AttnBlock(block_in))
@@ -273,7 +275,7 @@ class DownsamplingBlock(nn.Module):
 
 
 class MidBlock(nn.Module):
-    def __init__(self, config, in_channels: int, dropout: float = 0.0, zq_ch=None):
+    def __init__(self, config, in_channels: int, zq_ch=None, dropout: float = 0.0):
         super().__init__()
 
         self.config = config
@@ -283,14 +285,14 @@ class MidBlock(nn.Module):
         self.block_1 = ResnetBlock(
             self.in_channels,
             self.in_channels,
-            dropout_prob=self.dropout,
+            dropout=self.dropout,
             zq_ch=zq_ch,
         )
-        self.attn_1 = AttnBlock(self.in_channels)
+        self.attn_1 = AttnBlock(self.in_channels, zq_ch=zq_ch)
         self.block_2 = ResnetBlock(
             self.in_channels,
             self.in_channels,
-            dropout_prob=self.dropout,
+            dropout=self.dropout,
             zq_ch=zq_ch,
         )
 
@@ -327,7 +329,7 @@ class Encoder(nn.Module):
 
         # middle
         mid_channels = self.config.hidden_channels * self.config.channel_mult[-1]
-        self.mid = MidBlock(config, mid_channels, self.config.dropout)
+        self.mid = MidBlock(config, mid_channels, dropout=self.config.dropout)
 
         # end
         self.norm_out = nn.GroupNorm(num_groups=32, num_channels=mid_channels, eps=1e-6, affine=True)
@@ -377,19 +379,21 @@ class MoVQDecoder(nn.Module):
         )
 
         # middle
-        self.mid = MidBlock(config, block_in, self.config.dropout, zq_ch=self.config.zq_ch)
+        self.mid = MidBlock(config, block_in, zq_ch=self.config.quantized_embed_dim, dropout=self.config.dropout)
 
         # upsampling
         upsample_blocks = []
         for i_level in reversed(range(self.config.num_resolutions)):
-            upsample_blocks.append(UpsamplingBlock(self.config, curr_res, block_idx=i_level, zq_ch=self.config.zq_ch))
+            upsample_blocks.append(
+                UpsamplingBlock(self.config, curr_res, block_idx=i_level, zq_ch=self.config.quantized_embed_dim)
+            )
             if i_level != 0:
                 curr_res = curr_res * 2
         self.up = nn.ModuleList(list(reversed(upsample_blocks)))  # reverse to get consistent order
 
         # end
         block_out = self.config.hidden_channels * self.config.channel_mult[0]
-        self.norm_out = Normalize(block_out, self.config.zq_ch, False)
+        self.norm_out = Normalize(block_out, self.config.quantized_embed_dim, False)
         self.conv_out = nn.Conv2d(
             block_out,
             self.config.num_channels,
@@ -519,59 +523,42 @@ class VectorQuantizer(nn.Module):
         return soft_code, code
 
 
-class MOVQ(nn.Module):
+class MOVQ(ModelMixin, ConfigMixin):
+    @register_to_config
     def __init__(
         self,
-        in_channels=3,
-        out_ch=3,
-        ch=128,
-        ch_mult=(1, 2, 2, 4),
+        resolution: int = 256,
+        num_channels=3,
+        out_channels=3,
+        hidden_channels=128,
+        channel_mult=(1, 2, 2, 4),
         num_res_blocks=2,
         attn_resolutions=(32,),
         z_channels=4,
         double_z=False,
-        n_embed=16384,
-        embed_dim=4,
-        resolution=256,
+        num_embeddings=16384,
+        quantized_embed_dim=4,
         dropout=0.0,
+        resample_with_conv: bool = True,
+        commitment_cost: float = 0.25,
     ):
         super().__init__()
-        self.encoder = Encoder(
-            ch=ch,
-            out_ch=out_ch,
-            ch_mult=ch_mult,
-            num_res_blocks=num_res_blocks,
-            attn_resolutions=attn_resolutions,
-            dropout=dropout,
-            z_channels=z_channels,
-            double_z=double_z,
-            in_channels=in_channels,
-            resolution=resolution,
-        )
-        self.decoder = MoVQDecoder(
-            zq_ch=embed_dim,
-            ch=ch,
-            out_ch=out_ch,
-            ch_mult=ch_mult,
-            num_res_blocks=num_res_blocks,
-            attn_resolutions=attn_resolutions,
-            dropout=dropout,
-            in_channels=in_channels,
-            resolution=resolution,
-            z_channels=z_channels,
-        )
-        self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.25, remap=None, sane_index_shape=False)
-        self.quant_conv = torch.nn.Conv2d(z_channels, embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(embed_dim, z_channels, 1)
+
+        self.config.num_resolutions = len(channel_mult)
+        self.config.reduction_factor = 2 ** (self.config.num_resolutions - 1)
+        self.config.latent_size = resolution // self.config.reduction_factor
+
+        self.encoder = Encoder(self.config)
+        self.decoder = MoVQDecoder(self.config)
+        self.quantize = VectorQuantizer(num_embeddings, quantized_embed_dim, commitment_cost=commitment_cost)
+        self.quant_conv = torch.nn.Conv2d(z_channels, quantized_embed_dim, 1)
+        self.post_quant_conv = torch.nn.Conv2d(quantized_embed_dim, z_channels, 1)
 
     def encode(self, pixel_values, return_loss=False):
         hidden_states = self.encoder(pixel_values)
         hidden_states = self.quant_conv(hidden_states)
         quantized_states, codebook_indices, codebook_loss = self.quantize(hidden_states, return_loss)
-        output = (quantized_states, codebook_indices)
-        if return_loss:
-            output = output + (codebook_loss,)
-        return output
+        return quantized_states, codebook_indices, codebook_loss
 
     def decode(self, quant):
         quant2 = self.post_quant_conv(quant)
@@ -585,10 +572,9 @@ class MOVQ(nn.Module):
         return reconstructed_pixel_values
 
     def forward(self, pixel_values, return_loss=False):
-        hidden_states = self.encoder(pixel_values)
-        quantized_states, codebook_indices, codebook_loss = self.quantize(hidden_states, return_loss)
+        quantized_states, codebook_indices, codebook_loss = self.encode(pixel_values, return_loss)
         reconstructed_pixel_values = self.decode(quantized_states)
-        outputs = (reconstructed_pixel_values, quantized_states, codebook_indices)
+        output = (reconstructed_pixel_values, codebook_indices)
         if return_loss:
-            outputs = outputs + (codebook_loss,)
-        return outputs
+            output = output + (codebook_loss,)
+        return output
