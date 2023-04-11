@@ -88,7 +88,13 @@ class ClassificationDataset:
                 return input_ids[0]
 
             processing_pipeline = [
-                wds.rename(image="jpg;png;jpeg;webp", input_ids="cls", text_raw="cls", class_id="cls"),
+                wds.rename(
+                    image="jpg;png;jpeg;webp",
+                    input_ids="cls",
+                    text_raw="cls",
+                    class_id="cls",
+                    handler=wds.warn_and_continue,
+                ),
                 wds.map(filter_keys(set(["image", "input_ids", "text_raw", "class_idx"]))),
                 wds.map_dict(
                     image=transform.train_transform,
@@ -99,7 +105,7 @@ class ClassificationDataset:
             ]
         else:
             processing_pipeline = [
-                wds.rename(image="jpg;png;jpeg;webp", class_id="cls"),
+                wds.rename(image="jpg;png;jpeg;webp", class_id="cls", handler=wds.warn_and_continue),
                 wds.map(filter_keys(set(["image", "class_id"]))),
                 wds.map_dict(image=transform.train_transform, class_id=lambda x: int(x)),
                 wds.to_tuple("image", "class_id"),
