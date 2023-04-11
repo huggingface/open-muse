@@ -558,7 +558,10 @@ class MOVQ(ModelMixin, ConfigMixin):
         hidden_states = self.encoder(pixel_values)
         hidden_states = self.quant_conv(hidden_states)
         quantized_states, codebook_indices, codebook_loss = self.quantize(hidden_states, return_loss)
-        return quantized_states, codebook_indices, codebook_loss
+        output = (quantized_states, codebook_indices)
+        if return_loss:
+            output = output + (codebook_loss,)
+        return output
 
     def decode(self, quant):
         quant2 = self.post_quant_conv(quant)
@@ -572,7 +575,9 @@ class MOVQ(ModelMixin, ConfigMixin):
         return reconstructed_pixel_values
 
     def forward(self, pixel_values, return_loss=False):
-        quantized_states, codebook_indices, codebook_loss = self.encode(pixel_values, return_loss)
+        hidden_states = self.encoder(pixel_values)
+        hidden_states = self.quant_conv(hidden_states)
+        quantized_states, codebook_indices, codebook_loss = self.quantize(hidden_states, return_loss)
         reconstructed_pixel_values = self.decode(quantized_states)
         output = (reconstructed_pixel_values, codebook_indices)
         if return_loss:
