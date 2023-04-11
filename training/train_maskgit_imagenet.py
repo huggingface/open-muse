@@ -35,7 +35,7 @@ from PIL import Image
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 
 import muse
-from muse import MaskGitTransformer, MaskGitVQGAN
+from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
@@ -87,6 +87,15 @@ def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]
         assert False
 
     return ret
+
+
+def get_vq_model_class(model_type):
+    if model_type == "movq":
+        return MOVQ
+    elif model_type == "maskgit_vqgan":
+        return MaskGitVQGAN
+    else:
+        raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
 
 # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
@@ -223,7 +232,9 @@ def main():
     # MODELS and OPTIMIZER  #
     #########################
     logger.info("Loading models and optimizer")
-    vq_model = MaskGitVQGAN.from_pretrained(config.model.vq_model.pretrained)
+
+    vq_class = get_vq_model_class(config.model.vq_model.type)
+    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
     model = MaskGitTransformer(**config.model.transformer)
     mask_id = model.config.mask_token_id
 

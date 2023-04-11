@@ -17,6 +17,7 @@ experiment:
 
 model:
     vq_model:
+        type: "maskgit_vqgan"
         pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
 
     transformer:
