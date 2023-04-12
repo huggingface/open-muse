@@ -570,7 +570,6 @@ class MOVQ(ModelMixin, ConfigMixin):
 
     def decode_code(self, codebook_indices):
         quantized_states = self.quantize.get_codebook_entry(codebook_indices)
-        quantized_states = self.post_quant_conv(quantized_states)
         reconstructed_pixel_values = self.decode(quantized_states)
         return reconstructed_pixel_values
 
