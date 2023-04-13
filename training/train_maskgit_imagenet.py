@@ -27,7 +27,7 @@ import torch.nn.functional as F
 import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed
+from accelerate.utils import DistributedType, set_seed
 from data import ClassificationDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
@@ -98,27 +98,6 @@ def get_vq_model_class(model_type):
         raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
 
-# create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-def save_model_hook(models, weights, output_dir):
-    for model in models:
-        model.save_pretrained(output_dir)
-        # make sure to pop weight so that corresponding model is not saved again
-        weights.pop()
-
-
-def load_model_hook(models, input_dir):
-    while len(models) > 0:
-        # pop models so that they are not loaded again
-        model = models.pop()
-
-        # load muse style into model
-        load_model = MaskGitTransformer.from_pretrained(input_dir)
-        model.register_to_config(**load_model.config)
-
-        model.load_state_dict(load_model.state_dict())
-        del load_model
-
-
 def soft_target_cross_entropy(logits, targets, soft_targets):
     # ignore the first token from logits and targets (class id token)
     logits = logits[:, 1:]
@@ -177,6 +156,11 @@ def main():
         logging_dir=config.experiment.logging_dir,
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes.
     )
+
+    if accelerator.distributed_type == DistributedType.DEEPSPEED:
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -244,10 +228,6 @@ def main():
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
-
-    # Create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-    accelerator.register_save_state_pre_hook(save_model_hook)
-    accelerator.register_load_state_pre_hook(load_model_hook)
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
@@ -368,6 +348,7 @@ def main():
                 logger.info("Not resuming the lr scheduler.")
                 accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
             accelerator.load_state(path)
+            accelerator.wait_for_everyone()
             if not resume_lr_scheduler:
                 accelerator._schedulers = [lr_scheduler]
             global_step = int(os.path.basename(path).split("-")[1])
@@ -506,8 +487,8 @@ def main():
                     validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
 
                 # Save model checkpoint
-                if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
-                    save_checkpoint(config, accelerator, global_step + 1)
+                if (global_step + 1) % config.experiment.save_every == 0:
+                    save_checkpoint(model, config, accelerator, global_step + 1)
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
@@ -526,7 +507,7 @@ def main():
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
         validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
-        save_checkpoint(config, accelerator, global_step)
+    save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
@@ -598,11 +579,24 @@ def generate_images(model, vq_model, accelerator, global_step):
     wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
-def save_checkpoint(config, accelerator, global_step):
+def save_checkpoint(model, config, accelerator, global_step):
     save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
+
+    # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
+    # XXX: could also make this conditional on deepspeed
+    state_dict = accelerator.get_state_dict(model)
+
+    if accelerator.is_main_process:
+        unwrapped_model = accelerator.unwrap_model(model)
+        unwrapped_model.save_pretrained(
+            save_path / "unwrapped_model",
+            save_function=accelerator.save,
+            state_dict=state_dict,
+        )
+        json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
+        logger.info(f"Saved state to {save_path}")
+
     accelerator.save_state(save_path)
-    json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
-    logger.info(f"Saved state to {save_path}")
 
 
 def log_grad_norm(model, accelerator, global_step):
