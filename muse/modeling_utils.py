@@ -333,6 +333,7 @@ class ModelMixin(torch.nn.Module):
         save_directory: Union[str, os.PathLike],
         is_main_process: bool = True,
         save_function: Callable = None,
+        state_dict: Optional[Dict[str, torch.Tensor]] = None,
     ):
         """
         Save a model and its configuration file to a directory, so that it can be re-loaded using the
@@ -349,6 +350,8 @@ class ModelMixin(torch.nn.Module):
                 The function to use to save the state dictionary. Useful on distributed training like TPUs when one
                 need to replace `torch.save` by another method. Can be configured with the environment variable
                 `DIFFUSERS_SAVE_MODE`.
+            state_dict (`Dict[str, torch.Tensor]`, *optional*):
+                The state dictionary to save. If `None`, the model's state dictionary will be saved.
         """
         if os.path.isfile(save_directory):
             logger.error(f"Provided path ({save_directory}) should be a directory, not a file")
@@ -367,7 +370,8 @@ class ModelMixin(torch.nn.Module):
             model_to_save.save_config(save_directory)
 
         # Save the model
-        state_dict = model_to_save.state_dict()
+        if state_dict is None:
+            state_dict = model_to_save.state_dict()
 
         weights_name = WEIGHTS_NAME
 
