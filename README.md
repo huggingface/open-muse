@@ -1,5 +1,5 @@
-# muse-open-reproduction
-A repo to train the best and fastest text2image model!
+# open-muse
+An open-reproduction effortto reproduce the transformer based [MUSE](https://muse-model.github.io/) model for fast text2image generation.
 
 ## Goal
 This repo is for reproduction of the [MUSE](https://arxiv.org/abs/2301.00704) model. The goal is to create a simple and scalable repo, to reproduce MUSE and build knowedge about VQ + transformers at scale.
