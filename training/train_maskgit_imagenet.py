@@ -389,7 +389,8 @@ def main():
         # prepend the class ids to the image tokens
         input_ids = torch.cat([class_ids.unsqueeze(-1), input_ids], dim=-1)
         # prepend -100 to the labels as we don't want to predict the class ids
-        labels = torch.cat([-100 * torch.ones_like(class_ids).unsqueeze(-1), labels], dim=-1)
+        labels_mask = torch.ones_like(class_ids, device=image_tokens.device).unsqueeze(-1).fill_(-100)
+        labels = torch.cat([labels_mask, labels], dim=-1)
         return input_ids, labels, soft_targets, mask_prob
 
     batch_time_m = AverageMeter()
