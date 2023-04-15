@@ -296,7 +296,7 @@ def main():
         config.lr_scheduler.scheduler,
         optimizer=optimizer,
         num_training_steps=config.training.max_train_steps,
-        num_warmup_steps=config.lr_scheduler.params.warmup_steps * config.training.gradient_accumulation_steps,
+        num_warmup_steps=config.lr_scheduler.params.warmup_steps,
     )
 
     # Prepare everything with accelerator
@@ -318,9 +318,9 @@ def main():
     # Train!
     logger.info("***** Running training *****")
     logger.info(f"  Num training steps = {config.training.max_train_steps}")
+    logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
     logger.info(f"  Instantaneous batch size per device = { config.training.batch_size}")
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
-    logger.info(f"  Gradient Accumulation steps = {config.training.gradient_accumulation_steps}")
     global_step = 0
     first_epoch = 0
 
