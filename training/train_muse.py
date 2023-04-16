@@ -37,7 +37,7 @@ from torch.optim import AdamW  # why is shampoo not available in PT :(
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 import muse
-from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN
+from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
@@ -92,7 +92,9 @@ def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]
 
 
 def get_vq_model_class(model_type):
-    if model_type == "movq":
+    if model_type == "vqgan":
+        return VQGANModel
+    elif model_type == "movq":
         return MOVQ
     elif model_type == "maskgit_vqgan":
         return MaskGitVQGAN
