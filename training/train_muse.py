@@ -37,7 +37,7 @@ from torch.optim import AdamW  # why is shampoo not available in PT :(
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 import muse
-from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN
+from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
@@ -92,7 +92,9 @@ def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]
 
 
 def get_vq_model_class(model_type):
-    if model_type == "movq":
+    if model_type == "vqgan":
+        return VQGANModel
+    elif model_type == "movq":
         return MOVQ
     elif model_type == "maskgit_vqgan":
         return MaskGitVQGAN
@@ -272,8 +274,21 @@ def main():
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
+    # no decay on bias and layernorm and embedding
+    no_decay = ["bias", "layer_norm.weight", "mlm_ln.weight", "embeddings.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": optimizer_config.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+
     optimizer = optimizer_cls(
-        model.parameters(),
+        optimizer_grouped_parameters,
         lr=optimizer_config.learning_rate,
         betas=(optimizer_config.beta1, optimizer_config.beta2),
         weight_decay=optimizer_config.weight_decay,
@@ -574,7 +589,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _ = prepare_inputs_and_labels(pixel_values, input_ids)
+        input_ids, encoder_hidden_states, labels, _, _ = prepare_inputs_and_labels(pixel_values, input_ids)
         _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)

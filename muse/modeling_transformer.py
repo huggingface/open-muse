@@ -407,6 +407,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
+        use_codebook_size_for_output=False,
         **kwargs,
     ):
         super().__init__()
@@ -459,12 +460,13 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         if use_encoder_layernorm:
             self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
 
+        self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
         if use_mlm_layer:
             self.mlm_layer = MlmLayer(
-                self.hidden_size, self.vocab_size, norm_type, layer_norm_eps, use_mlm_layernorm, use_bias
+                self.hidden_size, self.output_size, norm_type, layer_norm_eps, use_mlm_layernorm, use_bias
             )
         else:
-            self.to_logits = nn.Linear(self.hidden_size, self.vocab_size, bias=use_bias)
+            self.to_logits = nn.Linear(self.hidden_size, self.output_size, bias=use_bias)
 
         self.gradient_checkpointing = False
 
@@ -543,7 +545,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         if labels is not None:
             loss = F.cross_entropy(
-                logits.view(-1, self.vocab_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
+                logits.view(-1, self.output_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
             )
             return logits, loss
         return logits
