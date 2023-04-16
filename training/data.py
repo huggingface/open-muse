@@ -15,14 +15,28 @@
 
 # This file is heavily inspired by https://github.com/mlfoundations/open_clip/blob/main/src/training/data.py
 
+import itertools
 import json
 import math
+import random
+import re
 from typing import List, Union
 
 import webdataset as wds
+from braceexpand import braceexpand
 from torch.utils.data import default_collate
 from torchvision import transforms
 from transformers import PreTrainedTokenizer
+
+person_token = ["a person", "someone", "somebody"]
+
+
+def replace_person_token(t):
+    "Used for CC12M"
+    t = re.sub("<person>([,\s]*(and)*[,\s]*<person>)+", " people ", t)
+    while "<person>" in t:
+        t = t.replace("<person>", f" {random.choices(person_token)} ", 1)
+    return t
 
 
 def filter_keys(key_set):
@@ -197,19 +211,29 @@ class Text2ImageDataset:
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
         def tokenize(text):
+            text = replace_person_token(text)
             input_ids = tokenizer(
                 text, max_length=max_seq_length, padding="max_length", truncation=True, return_tensors="pt"
             ).input_ids
             return input_ids[0]
 
+        if isinstance(train_shards_path_or_url, list):
+            train_shards_path_or_url = [list(braceexpand(urls)) for urls in train_shards_path_or_url]
+            # flatten list using itertools
+            train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
+
+        if isinstance(eval_shards_path_or_url, list):
+            eval_shards_path_or_url = [list(braceexpand(urls)) for urls in eval_shards_path_or_url]
+            # flatten list using itertools
+            eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
+
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
-            wds.shuffle(100),
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
             wds.shuffle(shuffle_buffer_size),
             wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", input_ids="text"),
+            wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
             wds.map(filter_keys(set(["image", "input_ids"]))),
             wds.map_dict(image=transform.train_transform, input_ids=tokenize),
             wds.to_tuple("image", "input_ids"),
@@ -241,7 +265,7 @@ class Text2ImageDataset:
             wds.split_by_worker,
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
             wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", input_ids="text"),
+            wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
             wds.map(filter_keys(set(["image", "input_ids"]))),
             wds.map_dict(image=transform.train_transform, input_ids=tokenize),
             wds.to_tuple("image", "input_ids"),
