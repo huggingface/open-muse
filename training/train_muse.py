@@ -274,8 +274,21 @@ def main():
     else:
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
+    # no decay on bias and layernorm and embedding
+    no_decay = ["bias", "layer_norm.weight", "mlm_ln.weight", "embeddings.weight"]
+    optimizer_grouped_parameters = [
+        {
+            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+            "weight_decay": optimizer_config.weight_decay,
+        },
+        {
+            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
+            "weight_decay": 0.0,
+        },
+    ]
+
     optimizer = optimizer_cls(
-        model.parameters(),
+        optimizer_grouped_parameters,
         lr=optimizer_config.learning_rate,
         betas=(optimizer_config.beta1, optimizer_config.beta2),
         weight_decay=optimizer_config.weight_decay,
