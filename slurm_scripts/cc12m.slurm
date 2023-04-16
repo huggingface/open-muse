@@ -29,7 +29,6 @@ CMD=" \
     wandb.entity=psuraj \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
-    training.seed=9345104 \
     training.batch_size=64 \
     "
 
