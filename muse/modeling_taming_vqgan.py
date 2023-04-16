@@ -256,11 +256,12 @@ class DownsamplingBlock(nn.Module):
 
 
 class MidBlock(nn.Module):
-    def __init__(self, config, in_channels: int, dropout: float):
+    def __init__(self, config, in_channels: int, no_attn: False, dropout: float):
         super().__init__()
 
         self.config = config
         self.in_channels = in_channels
+        self.no_attn = no_attn
         self.dropout = dropout
 
         self.block_1 = ResnetBlock(
@@ -268,7 +269,8 @@ class MidBlock(nn.Module):
             self.in_channels,
             dropout_prob=self.dropout,
         )
-        self.attn_1 = AttnBlock(self.in_channels)
+        if not no_attn:
+            self.attn_1 = AttnBlock(self.in_channels)
         self.block_2 = ResnetBlock(
             self.in_channels,
             self.in_channels,
@@ -277,7 +279,8 @@ class MidBlock(nn.Module):
 
     def forward(self, hidden_states):
         hidden_states = self.block_1(hidden_states)
-        hidden_states = self.attn_1(hidden_states)
+        if not self.no_attn:
+            hidden_states = self.attn_1(hidden_states)
         hidden_states = self.block_2(hidden_states)
         return hidden_states
 
@@ -308,7 +311,7 @@ class Encoder(nn.Module):
 
         # middle
         mid_channels = self.config.hidden_channels * self.config.channel_mult[-1]
-        self.mid = MidBlock(config, mid_channels, self.config.dropout)
+        self.mid = MidBlock(config, mid_channels, self.config.no_attn_mid_block, self.config.dropout)
 
         # end
         self.norm_out = nn.GroupNorm(num_groups=32, num_channels=mid_channels, eps=1e-6, affine=True)
@@ -358,7 +361,7 @@ class Decoder(nn.Module):
         )
 
         # middle
-        self.mid = MidBlock(config, block_in, self.config.dropout)
+        self.mid = MidBlock(config, block_in, self.config.no_attn_mid_block, self.config.dropout)
 
         # upsampling
         upsample_blocks = []
@@ -478,7 +481,7 @@ class VectorQuantizer(nn.Module):
         # get quantized latent vectors
         batch, num_tokens = indices.shape
         z_q = self.embedding(indices)
-        z_q = z_q.reshape(batch, -1, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens))).permute(0, 3, 1, 2)
+        z_q = z_q.reshape(batch, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens)), -1).permute(0, 3, 1, 2)
         return z_q
 
     # adapted from https://github.com/kakaobrain/rq-vae-transformer/blob/main/rqvae/models/rqvae/quantizations.py#L372
@@ -508,6 +511,7 @@ class VQGANModel(ModelMixin, ConfigMixin):
         channel_mult: Tuple = (1, 1, 2, 2, 4),
         num_res_blocks: int = 2,
         attn_resolutions: int = (16,),
+        no_attn_mid_block: bool = False,
         z_channels: int = 256,
         num_embeddings: int = 1024,
         quantized_embed_dim: int = 256,
