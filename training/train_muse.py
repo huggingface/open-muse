@@ -610,7 +610,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
 
     # read validation prompts from file
     if config.dataset.params.validation_prompts_file is not None:
-        with open(config.dataset.validation_prompts_file, "r") as f:
+        with open(config.dataset.params.validation_prompts_file, "r") as f:
             validation_prompts = f.read().splitlines()
     else:
         validation_prompts = imagenet_class_names
