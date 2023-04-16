@@ -1,5 +1,5 @@
-# muse-open-reproduction
-A repo to train the best and fastest text2image model!
+# open-muse
+An open-reproduction effortto reproduce the transformer based [MUSE](https://muse-model.github.io/) model for fast text2image generation.
 
 ## Goal
 This repo is for reproduction of the [MUSE](https://arxiv.org/abs/2301.00704) model. The goal is to create a simple and scalable repo, to reproduce MUSE and build knowedge about VQ + transformers at scale.
@@ -54,7 +54,7 @@ vq_model = MaskGitVQGAN.from_pretrained("openMUSE/maskgit-vqgan-imagenet-f16-256
 encode_transform = = transforms.Compose(
     [
         transforms.Resize(256, interpolation=transforms.InterpolationMode.BILINEAR),
-        transforms.CenterCrop(256)
+        transforms.CenterCrop(256),
         transforms.ToTensor(),
     ]
 )
@@ -132,9 +132,19 @@ generated_tokens = maskgit_model.generate(class_ids=class_ids)
 rec_images = vq_model.decode(generated_tokens)
 ```
 
-___Note___: 
+___Note___:
 - The vq model and transformer model are kept separate to be able to scale the transformer model independently. And we may pre-encode the images for faster training.
 - The masking is also done outside the model to be able to use different masking strategies without affecting the modeling code.
+
+## Basic explanation of MaskGit Generation Process
+
+1. Maskgits is a transformer that outputs logits given a sequence of tokens of both vq and class-conditioned label token
+
+2. The way the denoising process is done is to mask out with mask token ids and gradually denoise
+
+3. In the original implementation, this is done by first using a softmax on the last dim and randomly sampling as a categorical distribution. This will give our predicted tokens for each maskid. Then we get the probabilities for those tokens to be chosen. Finally, we get the topk highest confidence probabilities when gumbel*temp is added to it. Gumbel distribution is like a shifted normal distribution towards 0 which is used to model extreme events. So in extreme scenarios, we will like to see a different token being chosen from the default one
+
+4. For the lucidrian implementation, it first removes the highest-scoring (lowest probability) tokens by masking them with a given masking ratio. Then, except for the highest 10% of the logits that we get, we set it to -infinity so when we do the gumbel distribution on it, they will be ignored. Then update the input ids and the scores where the scores are just 1-the probability given by the softmax of the logits at the predicted ids interestingly
 
 ## Training
 For class-conditional imagenet we are using `accelerate` for DDP training and `webdataset` for data loading. The training script is available in `training/train_maskgit_imagenet.py`.

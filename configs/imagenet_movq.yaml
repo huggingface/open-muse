@@ -3,37 +3,37 @@ wandb:
 
 experiment:
     project: "muse"
-    name: "imagenet"
-    output_dir: "imagenet"
+    name: "imagenet-movq"
+    output_dir: "imagenet-movq"
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
     save_every: 1000
     eval_every: 500
     generate_every: 1000
-    log_every: 50
-    log_grad_norm_every: 100
+    log_every: 30
+    log_grad_norm_every: 500
     resume_from_checkpoint: False
     resume_lr_scheduler: True
 
 model:
     vq_model:
-        type: "maskgit_vqgan"
-        pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
+        type: "movq"
+        pretrained: "openMUSE/movq-lion-high-res-f8-16384"
 
     transformer:
-        vocab_size: 2048 # (1024 + 1000 + 1 = 2025 -> Vq + Imagenet + <mask>, use 2048 for even division by 8)
-        max_position_embeddings: 264 # (256 + 1 for class id, use 264 for even division by 8)
+        vocab_size: 17392 # (16384 + 1000 + 1 = 17385 -> Vq + Imagenet + <mask>, use 2048 for even division by 8)
+        max_position_embeddings: 1040 # (1024 + 1 for class id, use 264 for even division by 8)
         hidden_size: 768
         num_hidden_layers: 24
         num_attention_heads: 16
         intermediate_size: 3072
-        codebook_size: 1024
-        num_vq_tokens: 256
+        codebook_size: 16384
+        num_vq_tokens: 1024
         num_classes: 1000
         initializer_range: 0.02
         norm_type: "layernorm"
         layer_norm_eps: 1e-6
-        use_normformer: True
+        use_normformer: False
         use_encoder_layernorm: True
         use_mlm_layer: True
         use_mlm_layernorm: True
@@ -81,12 +81,12 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    batch_size: 192 # on 80GB A100
+    batch_size: 48 # on 80GB A100
     mixed_precision: "bf16"
     enable_tf32: True
     use_ema: False
     seed: 42
-    max_train_steps: 50000
+    max_train_steps: 100000
     overfit_one_batch: False
     min_masking_rate: 0.0
     label_smoothing: 0.0

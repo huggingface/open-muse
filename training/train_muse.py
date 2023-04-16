@@ -319,7 +319,7 @@ def main():
         config.lr_scheduler.scheduler,
         optimizer=optimizer,
         num_training_steps=config.training.max_train_steps,
-        num_warmup_steps=config.lr_scheduler.params.warmup_steps * config.training.gradient_accumulation_steps,
+        num_warmup_steps=config.lr_scheduler.params.warmup_steps,
     )
 
     # Prepare everything with accelerator
@@ -576,7 +576,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
 
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
-        gen_token_ids = accelerator.unwrap_model(model).generate(
+        gen_token_ids = accelerator.unwrap_model(model).generate2(
             encoder_hidden_states=encoder_hidden_states,
             guidance_scale=config.training.guidance_scale,
             timesteps=config.training.generation_timesteps,
