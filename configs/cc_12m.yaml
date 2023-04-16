@@ -5,8 +5,8 @@ experiment:
     project: "muse"
     name: "imagenet-text2image"
     output_dir: "imagenet-text2image"
-    max_train_examples: 1281167 # total number of imagenet examples
-    max_eval_examples: 12800
+    max_train_examples: 13873055 # (#cc12m 10969594 + #cc3m 2903461)
+    max_eval_examples: 13532
     save_every: 1000
     eval_every: 1000
     generate_every: 1000
@@ -57,7 +57,6 @@ dataset:
             - "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC12M/{00000..02484}.tar -"
             - "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC3M/train/{00000..00663}.tar -"
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC3M/valid/{00000..00003}.tar -"
-        imagenet_class_mapping_path: "/fsx/suraj/data/imagenet-class-mapping.json"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
         num_workers: 4
