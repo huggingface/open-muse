@@ -28,7 +28,7 @@ import torch.nn.functional as F
 import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import set_seed
+from accelerate.utils import DistributedType, set_seed
 from data import ClassificationDataset, Text2ImageDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
@@ -37,7 +37,7 @@ from torch.optim import AdamW  # why is shampoo not available in PT :(
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 import muse
-from muse import MaskGitTransformer, MaskGitVQGAN
+from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 
@@ -91,25 +91,32 @@ def flatten_omega_conf(cfg: Any, resolve: bool = False) -> List[Tuple[str, Any]]
     return ret
 
 
-# create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-def save_model_hook(models, weights, output_dir):
-    for model in models:
-        model.save_pretrained(output_dir)
-        # make sure to pop weight so that corresponding model is not saved again
-        weights.pop()
+def get_vq_model_class(model_type):
+    if model_type == "movq":
+        return MOVQ
+    elif model_type == "maskgit_vqgan":
+        return MaskGitVQGAN
+    else:
+        raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
 
-def load_model_hook(models, input_dir):
-    while len(models) > 0:
-        # pop models so that they are not loaded again
-        model = models.pop()
+def soft_target_cross_entropy(logits, targets, soft_targets):
+    # ignore the first token from logits and targets (class id token)
+    logits = logits[:, 1:]
+    targets = targets[:, 1:]
 
-        # load muse style into model
-        load_model = MaskGitTransformer.from_pretrained(input_dir)
-        model.register_to_config(**load_model.config)
+    logits = logits[..., : soft_targets.shape[-1]]
 
-        model.load_state_dict(load_model.state_dict())
-        del load_model
+    log_probs = F.log_softmax(logits, dim=-1)
+    padding_mask = targets.eq(-100)
+
+    loss = torch.sum(-soft_targets * log_probs, dim=-1)
+    loss.masked_fill_(padding_mask, 0.0)
+
+    # Take the mean over the label dimensions, then divide by the number of active elements (i.e. not-padded):
+    num_active_elements = padding_mask.numel() - padding_mask.long().sum()
+    loss = loss.sum() / num_active_elements
+    return loss
 
 
 class AverageMeter(object):
@@ -151,6 +158,11 @@ def main():
         logging_dir=config.experiment.logging_dir,
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
     )
+
+    if accelerator.distributed_type == DistributedType.DEEPSPEED:
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -216,7 +228,8 @@ def main():
     else:
         raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
 
-    vq_model = MaskGitVQGAN.from_pretrained(config.model.vq_model.pretrained)
+    vq_class = get_vq_model_class(config.model.vq_model.type)
+    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
     model = MaskGitTransformer(**config.model.transformer)
     mask_id = model.config.mask_token_id
 
@@ -227,10 +240,6 @@ def main():
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
-
-    # Create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-    accelerator.register_save_state_pre_hook(save_model_hook)
-    accelerator.register_load_state_pre_hook(load_model_hook)
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
@@ -389,9 +398,19 @@ def main():
 
     @torch.no_grad()
     def prepare_inputs_and_labels(
-        pixel_values: torch.FloatTensor, input_ids: torch.LongTensor, min_masking_rate: float = 0.0
+        pixel_values: torch.FloatTensor,
+        input_ids: torch.LongTensor,
+        min_masking_rate: float = 0.0,
+        is_train: bool = True,
     ):
-        image_tokens = vq_model.encode(pixel_values)[1]
+        if config.training.use_soft_code_target and is_train:
+            soft_targets, image_tokens = vq_model.get_soft_code(
+                pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+            )
+        else:
+            image_tokens = vq_model.encode(pixel_values)[1]
+            soft_targets = None
+
         encoder_hidden_states = text_encoder(input_ids)[0]
 
         batch_size, seq_len = image_tokens.shape
@@ -409,7 +428,7 @@ def main():
         input_ids = torch.where(mask, mask_id, image_tokens)
         labels = torch.where(mask, image_tokens, -100)
 
-        return input_ids, encoder_hidden_states, labels, mask_prob
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -426,7 +445,7 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, encoder_hidden_states, labels, mask_prob = prepare_inputs_and_labels(
+            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob = prepare_inputs_and_labels(
                 pixel_values, input_ids, config.training.min_masking_rate
             )
 
@@ -437,13 +456,22 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                _, loss = model(
-                    input_ids=input_ids,
-                    encoder_hidden_states=encoder_hidden_states,
-                    labels=labels,
-                    label_smoothing=config.training.label_smoothing,
-                    cond_dropout_prob=config.training.cond_dropout_prob,
-                )
+                if config.training.use_soft_code_target:
+                    logits = model(
+                        input_ids=input_ids,
+                        encoder_hidden_states=encoder_hidden_states,
+                        cond_dropout_prob=config.training.cond_dropout_prob,
+                    )
+                    loss = soft_target_cross_entropy(logits, labels, soft_targets)
+                else:
+                    _, loss = model(
+                        input_ids=input_ids,
+                        encoder_hidden_states=encoder_hidden_states,
+                        labels=labels,
+                        label_smoothing=config.training.label_smoothing,
+                        cond_dropout_prob=config.training.cond_dropout_prob,
+                    )
+
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
@@ -506,8 +534,8 @@ def main():
                     validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
 
                 # Save model checkpoint
-                if (global_step + 1) % config.experiment.save_every == 0 and accelerator.is_main_process:
-                    save_checkpoint(config, accelerator, global_step + 1)
+                if (global_step + 1) % config.experiment.save_every == 0:
+                    save_checkpoint(model, config, accelerator, global_step + 1)
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
@@ -526,7 +554,7 @@ def main():
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
         validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
-        save_checkpoint(config, accelerator, global_step)
+    save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
@@ -600,11 +628,24 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
-def save_checkpoint(config, accelerator, global_step):
+def save_checkpoint(model, config, accelerator, global_step):
     save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
+
+    # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
+    # XXX: could also make this conditional on deepspeed
+    state_dict = accelerator.get_state_dict(model)
+
+    if accelerator.is_main_process:
+        unwrapped_model = accelerator.unwrap_model(model)
+        unwrapped_model.save_pretrained(
+            save_path / "unwrapped_model",
+            save_function=accelerator.save,
+            state_dict=state_dict,
+        )
+        json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
+        logger.info(f"Saved state to {save_path}")
+
     accelerator.save_state(save_path)
-    json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
-    logger.info(f"Saved state to {save_path}")
 
 
 def log_grad_norm(model, accelerator, global_step):

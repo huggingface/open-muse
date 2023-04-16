@@ -102,3 +102,7 @@ training:
     max_grad_norm: null
     guidance_scale: 2.0
     generation_timesteps: 4
+    # related to vae code sampling
+    use_soft_code_target: False
+    use_stochastic_code: False
+    soft_code_temp: 1.0
