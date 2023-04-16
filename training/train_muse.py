@@ -608,8 +608,15 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     imagenet_class_names = ['jay', 'castle', 'coffee mug', 'desk', 'Eskimo dog,  husky', 'valley,  vale', 'red wine', 'coral reef', 'mixing bowl', 'cleaver,  meat cleaver,  chopper', 'vine snake', 'bloodhound,  sleuthhound', 'barbershop', 'ski', 'otter', 'snowmobile']
     # fmt: on
 
+    # read validation prompts from file
+    if config.dataset.validation_prompts_file is not None:
+        with open(config.dataset.validation_prompts_file, "r") as f:
+            validation_prompts = f.read().splitlines()
+    else:
+        validation_prompts = imagenet_class_names
+
     input_ids = tokenizer(
-        imagenet_class_names,
+        validation_prompts,
         return_tensors="pt",
         padding="max_length",
         truncation=True,
@@ -639,7 +646,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     pil_images = [Image.fromarray(image) for image in images]
 
     # Log images
-    wandb_images = [wandb.Image(image, caption=imagenet_class_names[i]) for i, image in enumerate(pil_images)]
+    wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
     wandb.log({"generated_images": wandb_images}, step=global_step)
 
 

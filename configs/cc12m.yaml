@@ -59,6 +59,7 @@ dataset:
             - "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC12M/{00000..02484}.tar -"
             - "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC3M/train/{00000..00663}.tar -"
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC3M/valid/{00000..00003}.tar -"
+        validation_prompts_file: "validation_prompts/cc_validation_prompts.txt"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
         num_workers: 4
