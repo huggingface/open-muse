@@ -217,12 +217,12 @@ class Text2ImageDataset:
             ).input_ids
             return input_ids[0]
 
-        if isinstance(train_shards_path_or_url, list):
+        if not isinstance(train_shards_path_or_url, str):
             train_shards_path_or_url = [list(braceexpand(urls)) for urls in train_shards_path_or_url]
             # flatten list using itertools
             train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
 
-        if isinstance(eval_shards_path_or_url, list):
+        if not isinstance(eval_shards_path_or_url, str):
             eval_shards_path_or_url = [list(braceexpand(urls)) for urls in eval_shards_path_or_url]
             # flatten list using itertools
             eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
