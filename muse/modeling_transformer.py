@@ -221,6 +221,21 @@ class FeedForward(nn.Module):
         hidden_states = self.wo(hidden_states)
         return hidden_states
 
+# Default Maskgit MLP
+class Mlp(nn.Module):
+    def __init__(self, hidden_size, intermediate_size, hidden_dropout=0.0, layer_norm_eps=1e-5, use_bias=False):
+        super().__init__()
+        self.intermediate_output = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
+        self.layer_output = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
+        self.layer_norm = LayerNorm(hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+        self.dropout = nn.Dropout(hidden_dropout)
+
+    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        layer_output = F.gelu(self.intermediate_output(hidden_states))
+        layer_output = self.layer_output(layer_output)
+        layer_output =  self.dropout(layer_output)
+        hidden_states = self.layer_norm(layer_output+hidden_states)
+        return hidden_states
 
 # PreLN Transformer layer
 class TransformerLayer(nn.Module):
@@ -237,6 +252,7 @@ class TransformerLayer(nn.Module):
         layer_norm_eps=1e-5,
         use_normformer=True,
         use_bias=False,
+        use_maskgit_mlp=False
     ):
         super().__init__()
 
@@ -250,17 +266,21 @@ class TransformerLayer(nn.Module):
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
+        self.use_maskgit_mlp = use_maskgit_mlp
+        if use_maskgit_mlp:
+            self.ffn = Mlp(self.hidden_size, self.intermediate_size, hidden_dropout, layer_norm_eps, use_bias)
+        else:
+            self.ffn = FeedForward(
+                self.hidden_size,
+                self.intermediate_size,
+                hidden_dropout,
+                norm_type,
+                layer_norm_eps,
+                use_normformer,
+                use_bias,
+            )
         if use_normformer:
             self.post_attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
-        self.ffn = FeedForward(
-            self.hidden_size,
-            self.intermediate_size,
-            hidden_dropout,
-            norm_type,
-            layer_norm_eps,
-            use_normformer,
-            use_bias,
-        )
 
         if add_cross_attention:
             self.crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
@@ -272,12 +292,15 @@ class TransformerLayer(nn.Module):
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         residual = hidden_states
-
-        hidden_states = self.attn_layer_norm(hidden_states)
+        if not self.use_maskgit_mlp:
+            hidden_states = self.attn_layer_norm(hidden_states)
         attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
+        if self.use_maskgit_mlp:
+            hidden_states = self.attn_layer_norm(hidden_states)
+
 
         if encoder_hidden_states is not None:
             residual = hidden_states
@@ -294,6 +317,8 @@ class TransformerLayer(nn.Module):
 
         residual = hidden_states
         hidden_states = self.ffn(hidden_states)
+        if self.use_maskgit_mlp:
+            return hidden_states
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -309,7 +334,7 @@ class Embed(nn.Module):
         norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_bias=False,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         use_embeddings_project=False,
     ):
         super().__init__()
@@ -319,14 +344,14 @@ class Embed(nn.Module):
         self.hidden_size = hidden_size
         self.hidden_dropout = hidden_dropout
         self.max_position_embeddings = max_position_embeddings
-        self.layer_norm_embedddings = layer_norm_embedddings
+        self.layer_norm_embeddings = layer_norm_embeddings
         self.use_embeddings_project = use_embeddings_project
 
         self.word_embeddings = nn.Embedding(self.vocab_size, self.embedding_size)
         self.position_embeddings = nn.Embedding(self.max_position_embeddings, self.embedding_size)
         self.dropout = nn.Dropout(self.hidden_dropout)
 
-        if layer_norm_embedddings:
+        if layer_norm_embeddings:
             norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
             self.embeddings_ln = norm_cls(self.embedding_size, eps=layer_norm_eps)
 
@@ -336,14 +361,11 @@ class Embed(nn.Module):
     def forward(self, input_ids):
         seq_length = input_ids.shape[-1]
         position_ids = torch.arange(seq_length)[None, :].to(input_ids.device)
-
         word_embeddings = self.word_embeddings(input_ids)
         position_embeddings = self.position_embeddings(position_ids)
         input_embeddings = word_embeddings + position_embeddings
-
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             input_embeddings = self.embeddings_ln(input_embeddings)
-
         if self.use_embeddings_project:
             input_embeddings = self.embedding_hidden_mapping(input_embeddings)
 
@@ -404,6 +426,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         use_mlm_layer=True,
         use_mlm_layernorm=True,
         use_bias=False,
+        layer_norm_embeddings=False,
+        use_maskgit_mlp=False,
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
@@ -430,9 +454,10 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             self.hidden_size,
             self.hidden_dropout,
             self.max_position_embeddings,
-            use_bias,
-            norm_type,
-            layer_norm_eps,
+            layer_norm_eps=layer_norm_eps,
+            use_bias=use_bias,
+            layer_norm_embeddings=layer_norm_embeddings,
+            norm_type=norm_type
         )
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
@@ -453,6 +478,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
+                    use_maskgit_mlp=use_maskgit_mlp,
                 )
                 for _ in range(self.num_hidden_layers)
             ]
@@ -515,7 +541,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             batch_size = encoder_hidden_states.shape[0]
             mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
             encoder_hidden_states = encoder_hidden_states * mask
-
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
 
@@ -534,7 +559,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                 )
-
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
 

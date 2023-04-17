@@ -3,7 +3,8 @@ output.jpg
 __pycache__/
 *.py[cod]
 *$py.class
-
+models
+*.png
 # C extensions
 *.so
 

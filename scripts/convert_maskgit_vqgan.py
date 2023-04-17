@@ -21,9 +21,16 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 from flax.traverse_util import flatten_dict
-from maskgit.utils import restore_from_path
-
 from muse import MaskGitVQGAN
+import tensorflow as tf
+import flax
+
+def restore_from_path(path):
+  with tf.io.gfile.GFile(path, "rb") as f:
+    state = flax.serialization.from_bytes(None, f.read())
+  return state
+
+
 
 logger = logging.getLogger(__name__)
 
