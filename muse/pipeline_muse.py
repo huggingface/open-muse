@@ -26,6 +26,7 @@ from transformers import (
 
 from .modeling_maskgit_vqgan import MaskGitVQGAN
 from .modeling_transformer import MaskGitTransformer
+from torchvision import transforms
 
 
 class PipelineMuse:
@@ -195,10 +196,11 @@ class PipelineMuseInpainting(PipelineMuse):
                 transforms.CenterCrop(256),
                 transforms.ToTensor(),
         ])
-        pixel_values = encode_transform(image).unsqueeze(0)
-        image_tokens = self.vae.encode(pixel_values)
-        mask_token_id = self.config.mask_token_id
-        image_tokens[mask] = mask_token_id
+        pixel_values = encode_transform(image).unsqueeze(0).to(self.device)
+        _, image_tokens = self.vae.encode(pixel_values)
+        mask_token_id = self.transformer.config.mask_token_id
+
+        image_tokens[mask[None]] = mask_token_id
         if class_ids is not None:
             # duplicate class ids for each generation per prompt
             class_ids = class_ids.repeat_interleave(num_images_per_prompt, dim=0)
@@ -224,7 +226,7 @@ class PipelineMuseInpainting(PipelineMuse):
             generate = self.transformer.generate2
 
         generated_tokens = generate(
-            input_ids = image_tokens
+            input_ids = image_tokens,
             **model_inputs,
             timesteps=timesteps,
             guidance_scale=guidance_scale,

@@ -1,5 +1,8 @@
 # Byte-compiled / optimized / DLL files
+output*.jpg
 output.jpg
+segmented.jpg
+
 __pycache__/
 *.py[cod]
 *$py.class
