@@ -379,6 +379,71 @@ class MlmLayer(nn.Module):
         return logits
 
 
+class ConvIn(nn.Module):
+    def __init__(
+        self,
+        vocab_size,
+        embedding_size,
+        hidden_size,
+        patch_size=2,
+        norm_type="layernorm",
+        layer_norm_eps=1e-5,
+        use_bias=False,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.embeddings = nn.Embedding(vocab_size, embedding_size)
+        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        self.norm = norm_cls(embedding_size, eps=layer_norm_eps)
+        self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
+        self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
+
+    def forward(self, input_ids):
+        batch_size, seq_length = input_ids.shape
+        height, width = int(seq_length**0.5), int(seq_length**0.5)
+        input_ids = input_ids.view(-1, height, width)
+        embeddings = self.embeddings(input_ids)
+        embeddings = self.norm(embeddings)
+        embeddings = embeddings.permute(0, 3, 1, 2)
+        embeddings = self.pixel_unshuffle(embeddings)
+        embeddings = self.conv(embeddings)
+        embeddings = embeddings.permute(0, 2, 3, 1).view(batch_size, -1, self.hidden_size)
+        return embeddings
+
+
+class ConvOut(nn.Module):
+    def __init__(
+        self,
+        vocab_size,
+        embedding_size,
+        hidden_size,
+        patch_size=2,
+        norm_type="layernorm",
+        layer_norm_eps=1e-5,
+        use_bias=False,
+    ):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.conv1 = nn.Conv2d(hidden_size, embedding_size * (patch_size**2), kernel_size=1, bias=use_bias)
+        self.pixel_shuffle = nn.PixelShuffle(patch_size)
+        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        self.norm = norm_cls(embedding_size, eps=layer_norm_eps)
+        self.conv2 = nn.Conv2d(embedding_size, vocab_size, kernel_size=1, bias=use_bias)
+
+    def forward(self, hidden_states):
+        batch_size, seq_length, hidden_size = hidden_states.shape
+        height, width = int(seq_length**0.5), int(seq_length**0.5)
+        hidden_states = hidden_states.view(batch_size, height, width, hidden_size).permute(0, 3, 1, 2)
+        hidden_states = self.conv1(hidden_states)
+        hidden_states = self.pixel_shuffle(hidden_states)
+        hidden_states = hidden_states.permute(0, 2, 3, 1)
+        hidden_states = self.norm(hidden_states)
+        hidden_states = hidden_states.permute(0, 3, 1, 2)
+        logits = self.conv2(hidden_states)
+        logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
+        return logits
+
+
 class MaskGitTransformer(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
 
@@ -408,6 +473,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
         use_codebook_size_for_output=False,
+        use_conv_in_out=False,
         **kwargs,
     ):
         super().__init__()
@@ -424,16 +490,26 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
 
-        self.embed = Embed(
-            self.vocab_size,
-            self.hidden_size,
-            self.hidden_size,
-            self.hidden_dropout,
-            self.max_position_embeddings,
-            use_bias,
-            norm_type,
-            layer_norm_eps,
-        )
+        if use_conv_in_out:
+            self.embed = ConvIn(
+                vocab_size,
+                hidden_size // 2,
+                hidden_size,
+                norm_type=norm_type,
+                layer_norm_eps=layer_norm_eps,
+                use_bias=use_bias,
+            )
+        else:
+            self.embed = Embed(
+                self.vocab_size,
+                self.hidden_size,
+                self.hidden_size,
+                self.hidden_dropout,
+                self.max_position_embeddings,
+                use_bias,
+                norm_type,
+                layer_norm_eps,
+            )
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
@@ -462,9 +538,19 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
         if use_mlm_layer:
-            self.mlm_layer = MlmLayer(
-                self.hidden_size, self.output_size, norm_type, layer_norm_eps, use_mlm_layernorm, use_bias
-            )
+            if use_conv_in_out:
+                self.mlm_layer = ConvOut(
+                    self.output_size,
+                    self.hidden_size // 2,
+                    hidden_size,
+                    norm_type=norm_type,
+                    layer_norm_eps=layer_norm_eps,
+                    use_bias=use_bias,
+                )
+            else:
+                self.mlm_layer = MlmLayer(
+                    self.hidden_size, self.output_size, norm_type, layer_norm_eps, use_mlm_layernorm, use_bias
+                )
         else:
             self.to_logits = nn.Linear(self.hidden_size, self.output_size, bias=use_bias)
 
