@@ -408,7 +408,7 @@ class ConvEmbed(nn.Module):
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.norm = norm_cls(embedding_size, eps=layer_norm_eps)
+        self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps)
         if patch_size > 1:
             self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
@@ -418,7 +418,7 @@ class ConvEmbed(nn.Module):
         height, width = int(seq_length**0.5), int(seq_length**0.5)
         input_ids = input_ids.view(-1, height, width)
         embeddings = self.embeddings(input_ids)
-        embeddings = self.norm(embeddings)
+        embeddings = self.layer_norm(embeddings)
         embeddings = embeddings.permute(0, 3, 1, 2)
         if self.patch_size > 1:
             embeddings = self.pixel_unshuffle(embeddings)
@@ -440,6 +440,7 @@ class ConvMlmLayer(nn.Module):
     ):
         super().__init__()
         self.vocab_size = vocab_size
+        self.patch_size = patch_size
         self.conv1 = nn.Conv2d(hidden_size, embedding_size * (patch_size**2), kernel_size=1, bias=use_bias)
         if patch_size > 1:
             self.pixel_shuffle = nn.PixelShuffle(patch_size)
@@ -453,7 +454,7 @@ class ConvMlmLayer(nn.Module):
         hidden_states = self.conv1(hidden_states)
         if self.patch_size > 1:
             hidden_states = self.pixel_shuffle(hidden_states)
-        hidden_states = self.norm(hidden_states)
+        hidden_states = self.layer_norm(hidden_states)
         logits = self.conv2(hidden_states)
         logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
         return logits
