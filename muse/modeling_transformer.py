@@ -398,6 +398,7 @@ class ConvEmbed(nn.Module):
         embedding_size,
         hidden_size,
         patch_size=2,
+        max_position_embeddings=256,
         norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_bias=False,
@@ -405,6 +406,7 @@ class ConvEmbed(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.patch_size = patch_size
+        self.max_position_embeddings = max_position_embeddings
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
@@ -412,6 +414,7 @@ class ConvEmbed(nn.Module):
         if patch_size > 1:
             self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
+        self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
 
     def forward(self, input_ids):
         batch_size, seq_length = input_ids.shape
@@ -424,6 +427,9 @@ class ConvEmbed(nn.Module):
             embeddings = self.pixel_unshuffle(embeddings)
         embeddings = self.conv(embeddings)
         embeddings = embeddings.permute(0, 2, 3, 1).view(batch_size, -1, self.hidden_size)
+        position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
+        position_embeddings = self.position_embeddings(position_ids)
+        embeddings = embeddings + position_embeddings
         return embeddings
 
 
