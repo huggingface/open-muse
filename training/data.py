@@ -272,7 +272,7 @@ class Text2ImageDataset:
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
-            tarfile_to_samples_nothrow(handler=wds.warn_and_continue),
+            tarfile_to_samples_nothrow,
             wds.shuffle(shuffle_buffer_size),
             wds.decode("pil", handler=wds.ignore_and_continue),
             wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
