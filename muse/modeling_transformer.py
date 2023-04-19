@@ -462,6 +462,7 @@ class ConvMlmLayer(nn.Module):
             hidden_states = self.pixel_shuffle(hidden_states)
         hidden_states = self.layer_norm(hidden_states)
         logits = self.conv2(hidden_states)
+        logits = F.gelu(logits)
         logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
         return logits
 
