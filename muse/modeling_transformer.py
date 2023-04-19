@@ -391,7 +391,7 @@ class MlmLayer(nn.Module):
         return logits
 
 
-class ConvIn(nn.Module):
+class ConvEmbed(nn.Module):
     def __init__(
         self,
         vocab_size,
@@ -427,7 +427,7 @@ class ConvIn(nn.Module):
         return embeddings
 
 
-class ConvOut(nn.Module):
+class ConvMlmLayer(nn.Module):
     def __init__(
         self,
         vocab_size,
@@ -489,6 +489,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         num_classes=None,  # set for class-conditioned generation
         use_codebook_size_for_output=False,
         use_conv_in_out=False,
+        patch_size=1,
         **kwargs,
     ):
         super().__init__()
@@ -506,10 +507,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
 
         if use_conv_in_out:
-            self.embed = ConvIn(
+            self.embed = ConvEmbed(
                 vocab_size,
-                hidden_size // 2,
                 hidden_size,
+                hidden_size,
+                patch_size=patch_size,
                 norm_type=norm_type,
                 layer_norm_eps=layer_norm_eps,
                 use_bias=use_bias,
@@ -554,10 +556,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
         if use_mlm_layer:
             if use_conv_in_out:
-                self.mlm_layer = ConvOut(
+                self.mlm_layer = ConvMlmLayer(
                     self.output_size,
-                    self.hidden_size // 2,
+                    self.hidden_size,
                     hidden_size,
+                    patch_size=patch_size,
                     norm_type=norm_type,
                     layer_norm_eps=layer_norm_eps,
                     use_bias=use_bias,
