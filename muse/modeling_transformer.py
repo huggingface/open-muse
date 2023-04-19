@@ -100,6 +100,18 @@ class LayerNorm(nn.Module):
         return F.layer_norm(x, self.weight.shape, self.weight, self.bias, self.eps)
 
 
+class Norm2D(nn.Module):
+    def __init__(self, dim, eps=1e-5, use_bias=False, norm_type="layernorm"):
+        super().__init__()
+        if norm_type == "layernorm":
+            self.norm = LayerNorm(dim, eps, use_bias)
+        elif norm_type == "rmsnorm":
+            self.norm = RMSNorm(dim, eps)
+
+    def forward(self, x):
+        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+
+
 class Attention(nn.Module):
     def __init__(self, hidden_size, num_heads, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
         super().__init__()
@@ -392,10 +404,13 @@ class ConvIn(nn.Module):
     ):
         super().__init__()
         self.hidden_size = hidden_size
+        self.patch_size = patch_size
+
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
         self.norm = norm_cls(embedding_size, eps=layer_norm_eps)
-        self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
+        if patch_size > 1:
+            self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
 
     def forward(self, input_ids):
@@ -405,7 +420,8 @@ class ConvIn(nn.Module):
         embeddings = self.embeddings(input_ids)
         embeddings = self.norm(embeddings)
         embeddings = embeddings.permute(0, 3, 1, 2)
-        embeddings = self.pixel_unshuffle(embeddings)
+        if self.patch_size > 1:
+            embeddings = self.pixel_unshuffle(embeddings)
         embeddings = self.conv(embeddings)
         embeddings = embeddings.permute(0, 2, 3, 1).view(batch_size, -1, self.hidden_size)
         return embeddings
@@ -425,9 +441,9 @@ class ConvOut(nn.Module):
         super().__init__()
         self.vocab_size = vocab_size
         self.conv1 = nn.Conv2d(hidden_size, embedding_size * (patch_size**2), kernel_size=1, bias=use_bias)
-        self.pixel_shuffle = nn.PixelShuffle(patch_size)
-        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.norm = norm_cls(embedding_size, eps=layer_norm_eps)
+        if patch_size > 1:
+            self.pixel_shuffle = nn.PixelShuffle(patch_size)
+        self.layer_norm = Norm2D(embedding_size, norm_type=norm_type, eps=layer_norm_eps, use_bias=use_bias)
         self.conv2 = nn.Conv2d(embedding_size, vocab_size, kernel_size=1, bias=use_bias)
 
     def forward(self, hidden_states):
@@ -435,10 +451,9 @@ class ConvOut(nn.Module):
         height, width = int(seq_length**0.5), int(seq_length**0.5)
         hidden_states = hidden_states.view(batch_size, height, width, hidden_size).permute(0, 3, 1, 2)
         hidden_states = self.conv1(hidden_states)
-        hidden_states = self.pixel_shuffle(hidden_states)
-        hidden_states = hidden_states.permute(0, 2, 3, 1)
+        if self.patch_size > 1:
+            hidden_states = self.pixel_shuffle(hidden_states)
         hidden_states = self.norm(hidden_states)
-        hidden_states = hidden_states.permute(0, 3, 1, 2)
         logits = self.conv2(hidden_states)
         logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
         return logits
