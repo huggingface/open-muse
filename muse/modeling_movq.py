@@ -465,7 +465,7 @@ class VectorQuantizer(nn.Module):
         r"""
         Args:
             num_embeddings: number of vectors in the quantized space.
-            embedding_dim: dimensionality of the tensors in the quantized space.
+            embedding_dim: dimensionaity of the tensors in the quantized space.
                 Inputs to the modules must be in this format as well.
             commitment_cost: scalar which controls the weighting of the loss terms
                 (see equation 4 in the paper https://arxiv.org/abs/1711.00937 - this variable is Beta).
@@ -518,17 +518,7 @@ class VectorQuantizer(nn.Module):
     def compute_distances(self, hidden_states):
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
         hidden_states_flattended = hidden_states.reshape((-1, self.embedding_dim))
-        emb_weights = self.embedding.weight.t()
-
-        inputs_norm_sq = hidden_states_flattended.pow(2.0).sum(dim=1, keepdim=True)
-        codebook_t_norm_sq = emb_weights.pow(2.0).sum(dim=0, keepdim=True)
-        distances = torch.addmm(
-            inputs_norm_sq + codebook_t_norm_sq,
-            hidden_states_flattended,
-            emb_weights,
-            alpha=-2.0,
-        )
-        return distances
+        return torch.cdist(hidden_states_flattended, self.embedding.weight)
 
     def get_codebook_entry(self, indices):
         # indices are expected to be of shape (batch, num_tokens)
@@ -552,6 +542,14 @@ class VectorQuantizer(nn.Module):
         batch, num_tokens = code.shape
         soft_code = soft_code.reshape(batch, num_tokens, -1)  # (batch, height * width, num_embeddings)
         return soft_code, code
+
+    def get_code(self, hidden_states):
+        # reshape z -> (batch, height, width, channel)
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
+        distances = self.compute_distances(hidden_states)
+        indices = torch.argmin(distances, axis=1).unsqueeze(1)
+        indices = indices.reshape(hidden_states.shape[0], -1)
+        return indices
 
 
 class MOVQ(ModelMixin, ConfigMixin):
@@ -603,6 +601,12 @@ class MOVQ(ModelMixin, ConfigMixin):
         quantized_states = self.quantize.get_codebook_entry(codebook_indices)
         reconstructed_pixel_values = self.decode(quantized_states)
         return reconstructed_pixel_values
+
+    def get_code(self, pixel_values):
+        hidden_states = self.encoder(pixel_values)
+        hidden_states = self.quant_conv(hidden_states)
+        codebook_indices = self.quantize.get_code(hidden_states)
+        return codebook_indices
 
     def forward(self, pixel_values, return_loss=False):
         hidden_states = self.encoder(pixel_values)

@@ -500,6 +500,14 @@ class VectorQuantizer(nn.Module):
         soft_code = soft_code.reshape(batch, num_tokens, -1)  # (batch, height * width, num_embeddings)
         return soft_code, code
 
+    def get_code(self, hidden_states):
+        # reshape z -> (batch, height, width, channel)
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
+        distances = self.compute_distances(hidden_states)
+        indices = torch.argmin(distances, axis=1).unsqueeze(1)
+        indices = indices.reshape(hidden_states.shape[0], -1)
+        return indices
+
 
 class VQGANModel(ModelMixin, ConfigMixin):
     @register_to_config
@@ -559,6 +567,12 @@ class VQGANModel(ModelMixin, ConfigMixin):
         quantized_states = self.quantize.get_codebook_entry(codebook_indices)
         reconstructed_pixel_values = self.decode(quantized_states)
         return reconstructed_pixel_values
+
+    def get_code(self, pixel_values):
+        hidden_states = self.encoder(pixel_values)
+        hidden_states = self.quant_conv(hidden_states)
+        codebook_indices = self.quantize.get_code(hidden_states)
+        return codebook_indices
 
     def forward(self, pixel_values, return_loss=False):
         hidden_states = self.encoder(pixel_values)
