@@ -475,6 +475,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self,
         vocab_size,  # codebook_size + 1 (for the mask token), for class-conditioned generation it'll be codebook_size + num_classes + 1
         hidden_size=768,
+        embedding_size=None,
         num_hidden_layers=12,
         num_attention_heads=12,
         intermediate_size=3072,
@@ -510,6 +511,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.attention_dropout = attention_dropout
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
+        self.embedding_size = embedding_size or hidden_size
         self.register_to_config(mask_token_id=vocab_size - 1)
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
@@ -517,7 +519,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         if use_conv_in_out:
             self.embed = ConvEmbed(
                 vocab_size,
-                hidden_size,
+                embedding_size,
                 hidden_size,
                 patch_size=patch_size,
                 norm_type=norm_type,
@@ -566,7 +568,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             if use_conv_in_out:
                 self.mlm_layer = ConvMlmLayer(
                     self.output_size,
-                    self.hidden_size,
+                    embedding_size,
                     hidden_size,
                     patch_size=patch_size,
                     norm_type=norm_type,
