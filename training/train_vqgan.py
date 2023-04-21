@@ -498,7 +498,6 @@ def main():
                     logs = {
                         "step_loss": avg_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
-                        "avg_masking_rate": avg_masking_rate.item(),
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
