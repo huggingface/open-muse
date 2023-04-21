@@ -423,7 +423,7 @@ def main():
                 pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
             )
         else:
-            image_tokens = vq_model.get_code(pixel_values)[1]
+            image_tokens = vq_model.get_code(pixel_values)
             soft_targets = None
 
         encoder_hidden_states = text_encoder(input_ids)[0]
