@@ -20,3 +20,4 @@ from .modeling_movq import MOVQ
 from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer
 from .pipeline_muse import PipelineMuse
+from .sampling import get_mask_chedule

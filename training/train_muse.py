@@ -37,9 +37,8 @@ from torch.optim import AdamW  # why is shampoo not available in PT :(
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 import muse
-from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel
+from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel, get_mask_chedule
 from muse.lr_schedulers import get_scheduler
-from muse.sampling import cosine_schedule
 
 try:
     import apex
@@ -433,7 +432,8 @@ def main():
         # Sample a random timestep for each image
         timesteps = torch.rand(batch_size, device=image_tokens.device)
         # Sample a random mask probability for each image using timestep and cosine schedule
-        mask_prob = cosine_schedule(timesteps)
+        mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
+        mask_prob = mask_schedule(timesteps)
         mask_prob = mask_prob.clip(min_masking_rate)
         # creat a random mask for each image
         num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
@@ -624,12 +624,14 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     ).input_ids
     encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
 
+    mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate2(
             encoder_hidden_states=encoder_hidden_states,
             guidance_scale=config.training.guidance_scale,
             timesteps=config.training.generation_timesteps,
+            noise_schedule=mask_schedule,
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.

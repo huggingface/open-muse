@@ -26,13 +26,28 @@ def top_k(logits, thres=0.9):
     return probs
 
 
-def cosine_schedule(t):
-    return torch.cos(t * math.pi * 0.5)
-
-
 def mask_by_random_topk(mask_len, probs, temperature=1.0):
     confidence = log(probs) + temperature * gumbel_noise(probs)
     sorted_confidence = torch.sort(confidence, dim=-1).values
     cut_off = torch.gather(sorted_confidence, 1, mask_len.long())
     masking = confidence < cut_off
     return masking
+
+
+def cosine_schedule(t):
+    return torch.cos(t * math.pi * 0.5)
+
+
+def linear_schedule(t):
+    mask_ratio = 1 - t
+    mask_ratio = mask_ratio.clamp(min=1e-6, max=1.0)
+    return mask_ratio
+
+
+def get_mask_chedule(method):
+    if method == "cosine":
+        return cosine_schedule
+    elif method == "linear":
+        return linear_schedule
+    else:
+        raise ValueError("Unknown schedule method: {}".format(method))
