@@ -540,7 +540,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
-            self.encoder_proj_layer_norm = norm_type(hidden_size, eps=layer_norm_eps)
+            self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
 
         self.transformer_layers = nn.ModuleList(
             [
