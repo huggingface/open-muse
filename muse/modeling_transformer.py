@@ -748,6 +748,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
         noise_schedule=cosine_schedule,
+        generator: torch.Generator = None,
         **kwargs,
     ):
         """
@@ -793,7 +794,9 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             # Samples the ids using categorical sampling: [batch_size, seq_length].
             # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
-            sampled_ids = torch.stack([torch.multinomial(l.softmax(dim=-1), 1).squeeze(1) for l in logits])
+            sampled_ids = torch.stack(
+                [torch.multinomial(l.softmax(dim=-1), 1, generator=generator).squeeze(1) for l in logits]
+            )
 
             # Just updates the masked tokens.
             unknown_map = input_ids == mask_token_id
@@ -819,7 +822,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             # Adds noise for randomness
             temperature = temperature * (1.0 - ratio)
-            masking = mask_by_random_topk(mask_len, selected_probs, temperature)
+            masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
             # Masks tokens with lower confidence.
             input_ids = torch.where(masking, mask_token_id, sampled_ids)
 
