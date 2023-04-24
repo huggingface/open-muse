@@ -23,6 +23,35 @@ from torch import nn
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 
+class SpatialNorm(nn.Module):
+    def __init__(
+        self,
+        zq_channels,
+        num_channels,
+        norm_layer=nn.GroupNorm,
+        freeze_norm_layer=False,
+        add_conv=False,
+        **norm_layer_params,
+    ):
+        super().__init__()
+        self.norm_layer = norm_layer(num_channels=num_channels, **norm_layer_params)
+        if freeze_norm_layer:
+            for p in self.norm_layer.parameters:
+                p.requires_grad = False
+        self.add_conv = add_conv
+        if self.add_conv:
+            self.conv = nn.Conv2d(zq_channels, zq_channels, kernel_size=3, stride=1, padding=1)
+        self.conv_y = nn.Conv2d(zq_channels, num_channels, kernel_size=1, stride=1, padding=0)
+        self.conv_b = nn.Conv2d(zq_channels, num_channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, f, zq):
+        f_size = f.shape[-2:]
+        zq = F.interpolate(zq, size=f_size, mode="nearest")
+        if self.add_conv:
+            zq = self.conv(zq)
+        norm_f = self.norm_layer(f)
+        new_f = norm_f * self.conv_y(zq) + self.conv_b(zq)
+        return new_f
 
 class Upsample(nn.Module):
     def __init__(self, in_channels: int, with_conv: bool):
@@ -69,6 +98,7 @@ class ResnetBlock(nn.Module):
         out_channels: int = None,
         use_conv_shortcut: bool = False,
         dropout_prob: float = 0.0,
+        zq_ch: int = None,
     ):
         super().__init__()
 
@@ -76,8 +106,10 @@ class ResnetBlock(nn.Module):
         self.out_channels = out_channels
         self.out_channels_ = self.in_channels if self.out_channels is None else self.out_channels
         self.use_conv_shortcut = use_conv_shortcut
-
-        self.norm1 = nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
+        if zq_ch:
+            self.norm1 = SpatialNorm(num_groups=32, zq_channels=zq_ch, num_channels=in_channels, eps=1e-6, affine=True)
+        else:
+            self.norm1 = nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
         self.conv1 = nn.Conv2d(
             self.in_channels,
             self.out_channels_,
@@ -85,8 +117,10 @@ class ResnetBlock(nn.Module):
             stride=1,
             padding=1,
         )
-
-        self.norm2 = nn.GroupNorm(num_groups=32, num_channels=self.out_channels_, eps=1e-6, affine=True)
+        if zq_ch:
+            self.norm2 = SpatialNorm(num_groups=32, zq_channels=zq_ch, num_channels=self.out_channels_, eps=1e-6, affine=True)
+        else:
+            self.norm2 = nn.GroupNorm(num_groups=32, num_channels=self.out_channels_, eps=1e-6, affine=True)
         self.dropout = nn.Dropout(dropout_prob)
         self.conv2 = nn.Conv2d(
             self.out_channels_,
@@ -114,13 +148,20 @@ class ResnetBlock(nn.Module):
                     padding=0,
                 )
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, quantized_states=None):
         residual = hidden_states
-        hidden_states = self.norm1(hidden_states)
+        if quantized_states:
+            hidden_states = self.norm1(hidden_states, quantized_states)
+        else:
+            hidden_states = self.norm1(hidden_states)
+
         hidden_states = F.silu(hidden_states)
         hidden_states = self.conv1(hidden_states)
 
-        hidden_states = self.norm2(hidden_states)
+        if quantized_states:
+            hidden_states = self.norm2(hidden_states, quantized_states)
+        else:
+            hidden_states = self.norm2(hidden_states)
         hidden_states = F.silu(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.conv2(hidden_states)
@@ -135,19 +176,25 @@ class ResnetBlock(nn.Module):
 
 
 class AttnBlock(nn.Module):
-    def __init__(self, in_channels: int):
+    def __init__(self, in_channels: int, zq_ch: int = None):
         super().__init__()
 
         self.in_channels = in_channels
         conv = partial(nn.Conv2d, self.in_channels, self.in_channels, kernel_size=1, stride=1, padding=0)
-
-        self.norm = nn.GroupNorm(num_groups=32, num_channels=self.in_channels, eps=1e-6, affine=True)
+        if zq_ch:
+            self.norm = SpatialNorm(num_groups=32, zq_channels=zq_ch, num_channels=self.in_channels, eps=1e-6, affine=True)
+        else:
+            self.norm = nn.GroupNorm(num_groups=32, num_channels=self.in_channels, eps=1e-6, affine=True)
         self.q, self.k, self.v = conv(), conv(), conv()
         self.proj_out = conv()
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, quantized_states=None):
         residual = hidden_states
-        hidden_states = self.norm(hidden_states)
+        if quantized_states:
+            hidden_states = self.norm(hidden_states, quantized_states)
+        else:
+            hidden_states = self.norm(hidden_states)
+
 
         query = self.q(hidden_states)
         key = self.k(hidden_states)
@@ -175,7 +222,7 @@ class AttnBlock(nn.Module):
 
 
 class UpsamplingBlock(nn.Module):
-    def __init__(self, config, curr_res: int, block_idx: int):
+    def __init__(self, config, curr_res: int, block_idx: int, zq_ch: int = None):
         super().__init__()
 
         self.config = config
@@ -192,10 +239,10 @@ class UpsamplingBlock(nn.Module):
         res_blocks = []
         attn_blocks = []
         for _ in range(self.config.num_res_blocks + 1):
-            res_blocks.append(ResnetBlock(block_in, block_out, dropout_prob=self.config.dropout))
+            res_blocks.append(ResnetBlock(block_in, block_out, dropout_prob=self.config.dropout, zq_ch=zq_ch))
             block_in = block_out
             if self.curr_res in self.config.attn_resolutions:
-                attn_blocks.append(AttnBlock(block_in))
+                attn_blocks.append(AttnBlock(block_in, zq_ch=zq_ch))
 
         self.block = nn.ModuleList(res_blocks)
         self.attn = nn.ModuleList(attn_blocks)
@@ -204,11 +251,11 @@ class UpsamplingBlock(nn.Module):
         if self.block_idx != 0:
             self.upsample = Upsample(block_in, self.config.resample_with_conv)
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, quantized_states=None):
         for i, res_block in enumerate(self.block):
-            hidden_states = res_block(hidden_states)
+            hidden_states = res_block(hidden_states, quantized_states)
             if len(self.attn) > 1:
-                hidden_states = self.attn[i](hidden_states)
+                hidden_states = self.attn[i](hidden_states, quantized_states)
 
         if self.upsample is not None:
             hidden_states = self.upsample(hidden_states)
@@ -256,7 +303,7 @@ class DownsamplingBlock(nn.Module):
 
 
 class MidBlock(nn.Module):
-    def __init__(self, config, in_channels: int, no_attn: False, dropout: float):
+    def __init__(self, config, in_channels: int, no_attn: False, dropout: float, zq_ch: int = None):
         super().__init__()
 
         self.config = config
@@ -268,13 +315,15 @@ class MidBlock(nn.Module):
             self.in_channels,
             self.in_channels,
             dropout_prob=self.dropout,
+            zq_ch=zq_ch
         )
         if not no_attn:
-            self.attn_1 = AttnBlock(self.in_channels)
+            self.attn_1 = AttnBlock(self.in_channels, zq_ch=zq_ch)
         self.block_2 = ResnetBlock(
             self.in_channels,
             self.in_channels,
             dropout_prob=self.dropout,
+            zq_ch=zq_ch
         )
 
     def forward(self, hidden_states):
@@ -341,7 +390,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, zq_ch=None):
         super().__init__()
 
         self.config = config
@@ -361,19 +410,22 @@ class Decoder(nn.Module):
         )
 
         # middle
-        self.mid = MidBlock(config, block_in, self.config.no_attn_mid_block, self.config.dropout)
+        self.mid = MidBlock(config, block_in, self.config.no_attn_mid_block, self.config.dropout, zq_ch=zq_ch)
 
         # upsampling
         upsample_blocks = []
         for i_level in reversed(range(self.config.num_resolutions)):
-            upsample_blocks.append(UpsamplingBlock(self.config, curr_res, block_idx=i_level))
+            upsample_blocks.append(UpsamplingBlock(self.config, curr_res, block_idx=i_level, zq_ch=zq_ch))
             if i_level != 0:
                 curr_res = curr_res * 2
         self.up = nn.ModuleList(list(reversed(upsample_blocks)))  # reverse to get consistent order
 
         # end
         block_out = self.config.hidden_channels * self.config.channel_mult[0]
-        self.norm_out = nn.GroupNorm(num_groups=32, num_channels=block_out, eps=1e-6, affine=True)
+        if zq_ch is not None:
+            self.norm_out = SpatialNorm(num_groups=32, zq_channels=zq_ch, num_channels=block_out, eps=1e-6, affine=True)
+        else:
+            self.norm_out = nn.GroupNorm(num_groups=32, num_channels=block_out, eps=1e-6, affine=True)
         self.conv_out = nn.Conv2d(
             block_out,
             self.config.num_channels,
@@ -382,19 +434,22 @@ class Decoder(nn.Module):
             padding=1,
         )
 
-    def forward(self, hidden_states):
+    def forward(self, hidden_states, quantized_states=None):
         # z to block_in
         hidden_states = self.conv_in(hidden_states)
 
         # middle
-        hidden_states = self.mid(hidden_states)
+        hidden_states = self.mid(hidden_states, quantized_states)
 
         # upsampling
         for block in reversed(self.up):
-            hidden_states = block(hidden_states)
+            hidden_states = block(hidden_states, quantized_states)
 
         # end
-        hidden_states = self.norm_out(hidden_states)
+        if quantized_states:
+            hidden_states = self.norm_out(hidden_states, quantized_states)
+        else:
+            hidden_states = self.norm_out(hidden_states)
         hidden_states = F.silu(hidden_states)
         hidden_states = self.conv_out(hidden_states)
 
@@ -518,15 +573,27 @@ class VQGANModel(ModelMixin, ConfigMixin):
         dropout: float = 0.0,
         resample_with_conv: bool = True,
         commitment_cost: float = 0.25,
+        use_z_channels: bool = False,
     ):
         super().__init__()
-
+        self.use_z_channels = use_z_channels
+        self.resolution = resolution
+        self.channel_mult = channel_mult
         self.config.num_resolutions = len(channel_mult)
         self.config.reduction_factor = 2 ** (self.config.num_resolutions - 1)
         self.config.latent_size = resolution // self.config.reduction_factor
+        self.config.no_attn_mid_block = no_attn_mid_block
+        self.config.attn_resolutions = attn_resolutions
+        self.config.z_channels = z_channels
+        self.config.num_embeddings = num_embeddings
+        self.config.quantized_embed_dim = quantized_embed_dim
+
 
         self.encoder = Encoder(self.config)
-        self.decoder = Decoder(self.config)
+        if use_z_channels:
+            self.decoder = Decoder(self.config, zq_ch=self.config.z_channels)
+        else:
+            self.decoder = Decoder(self.config)
         self.quantize = VectorQuantizer(
             self.config.num_embeddings, self.config.quantized_embed_dim, self.config.commitment_cost
         )
@@ -552,7 +619,10 @@ class VQGANModel(ModelMixin, ConfigMixin):
 
     def decode(self, quantized_states):
         hidden_states = self.post_quant_conv(quantized_states)
-        reconstructed_pixel_values = self.decoder(hidden_states)
+        if self.use_z_channels:
+            reconstructed_pixel_values = self.decoder(hidden_states, quantized_states)
+        else:
+            reconstructed_pixel_values = self.decoder(hidden_states)
         return reconstructed_pixel_values
 
     def decode_code(self, codebook_indices):
