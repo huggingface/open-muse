@@ -37,7 +37,14 @@ from torch.optim import AdamW  # why is shampoo not available in PT :(
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 import muse
-from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel, get_mask_chedule
+from muse import (
+    MOVQ,
+    MaskGitTransformer,
+    MaskGiTUViT,
+    MaskGitVQGAN,
+    VQGANModel,
+    get_mask_chedule,
+)
 from muse.lr_schedulers import get_scheduler
 
 try:
@@ -231,7 +238,9 @@ def main():
 
     vq_class = get_vq_model_class(config.model.vq_model.type)
     vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
-    model = MaskGitTransformer(**config.model.transformer)
+
+    model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+    model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
 
     # Freeze the text model and VQGAN
