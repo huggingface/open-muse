@@ -22,7 +22,7 @@ model:
     
     text_encoder:
         type: "t5"
-        pretrained: "google/t5-v1_1-large"
+        pretrained: "openMUSE/t5-v1_1-large-enc"
     
     architecture: "uvit"
 
