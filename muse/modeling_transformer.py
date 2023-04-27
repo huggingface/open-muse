@@ -1023,7 +1023,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         initializer_range=0.02,
         norm_type="layernorm",  # or rmsnorm
         layer_norm_eps=1e-5,
-        use_normformer=True,
+        use_normformer=False,
         use_encoder_layernorm=True,
         use_bias=False,
         codebook_size=1024,
