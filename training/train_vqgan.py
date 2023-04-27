@@ -315,8 +315,15 @@ def main():
         raise ValueError(f"Optimizer {optimizer_type} not supported")
 
     optimizer = optimizer_cls(
-        list(model.parameters())+list(discriminator.parameters()),
+        list(model.parameters()),
         lr=optimizer_config.learning_rate,
+        betas=(optimizer_config.beta1, optimizer_config.beta2),
+        weight_decay=optimizer_config.weight_decay,
+        eps=optimizer_config.epsilon,
+    )
+    discr_optimizer = optimizer_cls(
+        list(discriminator.parameters()),
+        lr=optimizer_config.discr_learning_rate,
         betas=(optimizer_config.beta1, optimizer_config.beta2),
         weight_decay=optimizer_config.weight_decay,
         eps=optimizer_config.epsilon,
@@ -360,11 +367,18 @@ def main():
         num_training_steps=config.training.max_train_steps,
         num_warmup_steps=config.lr_scheduler.params.warmup_steps,
     )
+    discr_lr_scheduler = get_scheduler(
+        config.lr_scheduler.scheduler,
+        optimizer=discr_optimizer,
+        num_training_steps=config.training.max_train_steps,
+        num_warmup_steps=config.lr_scheduler.params.warmup_steps,
+    )
+
 
     # Prepare everything with accelerator
     logger.info("Preparing model, optimizer and dataloaders")
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
-    model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
+    model, discriminator, optimizer, discr_optimizer, lr_scheduler, discr_lr_scheduler = accelerator.prepare(model, discriminator, optimizer, discr_optimizer, lr_scheduler, discr_lr_scheduler)
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -420,20 +434,28 @@ def main():
     end = time.time()
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
+    avg_gen_loss, avg_discr_loss = 0, 0
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for i, batch in enumerate(train_dataloader):
             pixel_values, _ = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
-
+            generator_step = ((i // config.training.gradient_accumulation_steps) % 2) == 0
 
             # Train Step
-            with accelerator.accumulate(model):
-                # encode images to the latent space and get the commit loss from vq tokenization
-                fmap, commit_loss = model.encode(pixel_values, return_loss=True)
-                fmap = model.decode(fmap)
-                if i % 2 == 0:
+            # The behavior of accelerator.accumulate is to 
+            # 1. Check if gradients are synced(reached gradient-accumulation_steps)
+            # 2. If so sync gradients by stopping the not syncing process
+            if generator_step:
+                with accelerator.accumulate(model):
+                    if optimizer_type == "fused_adamw":
+                        optimizer.zero_grad()
+                    else:
+                        optimizer.zero_grad(set_to_none=True)
+                    # encode images to the latent space and get the commit loss from vq tokenization
+                    fmap, commit_loss = model.encode(pixel_values, return_loss=True)
+                    fmap = model.decode(fmap)
                     # Return regular loss
                     # reconstruction loss. Pixel level differences between input vs output
                     if config.training.vae_loss == "l2":
@@ -455,38 +477,51 @@ def main():
                     loss += commit_loss
                     loss += perceptual_loss
                     loss += adaptive_weight*gen_loss
-                elif i % 2 == 1:
-                    # Return discriminator loss
+                    # Gather thexd losses across all processes for logging (if we use distributed training).
+                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+                    accelerator.backward(loss)
+
+                    if config.training.max_grad_norm is not None and accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+
+                    optimizer.step()
+                    lr_scheduler.step()
+                    # log gradient norm before zeroing it
+                    if (
+                        accelerator.sync_gradients
+                        and (global_step + 1) % config.experiment.log_grad_norm_every == 0
+                        and accelerator.is_main_process
+                    ):
+                        log_grad_norm(model, accelerator, global_step + 1)
+            else:
+                # Return discriminator loss
+                with accelerator.accumulate(discriminator):
+                    if optimizer_type == "fused_adamw":
+                        discr_optimizer.zero_grad()
+                    else:
+                        discr_optimizer.zero_grad(set_to_none=True)
                     fake = discriminator(pixel_values)
                     real = discriminator(fmap)
                     loss = (F.relu(1 + fake) + F.relu(1 - real)).mean()
                     gp = gradient_penalty(pixel_values, real)
                     loss += gp
-                # Gather thexd losses across all processes for logging (if we use distributed training).
-                avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
-                accelerator.backward(loss)
+                    avg_discr_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+                    accelerator.backward(loss)
 
-                if config.training.max_grad_norm is not None and accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
+                    if config.training.max_grad_norm is not None and accelerator.sync_gradients:
+                        accelerator.clip_grad_norm_(discriminator.parameters(), config.training.max_grad_norm)
 
-                optimizer.step()
-                lr_scheduler.step()
-
-                # log gradient norm before zeroing it
-                if (
-                    accelerator.sync_gradients
-                    and (global_step + 1) % config.experiment.log_grad_norm_every == 0
-                    and accelerator.is_main_process
-                ):
-                    log_grad_norm(model, accelerator, global_step + 1)
-
-                if optimizer_type == "fused_adamw":
-                    optimizer.zero_grad()
-                else:
-                    optimizer.zero_grad(set_to_none=True)
-
+                    discr_optimizer.step()
+                    discr_lr_scheduler.step()
+                    if (
+                        accelerator.sync_gradients
+                        and (global_step + 1) % config.experiment.log_grad_norm_every == 0
+                        and accelerator.is_main_process
+                    ):
+                        log_grad_norm(discriminator, accelerator, global_step + 1)
             # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
+            if accelerator.sync_gradients and not generator_step:
+                # wait for both generator and discriminator to settle
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
@@ -496,7 +531,8 @@ def main():
                         config.training.gradient_accumulation_steps * config.training.batch_size / batch_time_m.val
                     )
                     logs = {
-                        "step_loss": avg_loss.item(),
+                        "step_gen_loss": avg_gen_loss.item(),
+                        "step_discr_loss": avg_discr_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
@@ -506,7 +542,8 @@ def main():
 
                     logger.info(
                         f"Step: {global_step + 1} "
-                        f"Loss: {avg_loss.item():0.4f} "
+                        f"Generator Loss: {avg_gen_loss.item():0.4f} "
+                        f"Discriminator Loss: {avg_discr_loss.item():0.4f} "
                         f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
@@ -515,18 +552,13 @@ def main():
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
                     data_time_m.reset()
-
-                # Evaluate model on main process
-                if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
-
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
                     save_checkpoint(model, config, accelerator, global_step + 1)
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    generate_images(model, vq_model, accelerator, global_step + 1)
+                    generate_images(model, discriminator, accelerator, global_step + 1)
 
                 global_step += 1
                 # TODO: Add generation
@@ -539,8 +571,6 @@ def main():
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    if accelerator.is_main_process:
-        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
     save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
@@ -550,26 +580,6 @@ def main():
 
     accelerator.end_training()
 
-
-@torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels):
-    logger.info("Evaluating...")
-    model.eval()
-    eval_loss = 0
-    now = time.time()
-    for i, batch in enumerate(eval_dataloader):
-        pixel_values, class_ids = batch
-        pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-        class_ids = class_ids.to(accelerator.device, non_blocking=True)
-        input_ids, labels, _, _ = prepare_inputs_and_labels(pixel_values, class_ids, is_train=False)
-        _, loss = model(input_ids=input_ids, labels=labels)
-        eval_loss += loss.mean()
-    eval_loss = eval_loss / (i + 1)
-    eval_time = time.time() - now
-
-    logger.info(f"Step: {global_step} Eval Loss: {eval_loss.item():0.4f} Eval time: {eval_time:0.2f} s")
-    accelerator.log({"eval_loss": eval_loss.item()}, step=global_step)
-    model.train()
 
 
 @torch.no_grad()
@@ -613,12 +623,13 @@ def generate_images(model, vq_model, accelerator, global_step):
     wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
-def save_checkpoint(model, config, accelerator, global_step):
+def save_checkpoint(model, discriminator, config, accelerator, global_step):
     save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
 
     # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
     # XXX: could also make this conditional on deepspeed
     state_dict = accelerator.get_state_dict(model)
+    discr_state_dict = accelerator.get_state_dict(discriminator)
 
     if accelerator.is_main_process:
         unwrapped_model = accelerator.unwrap_model(model)
@@ -627,6 +638,7 @@ def save_checkpoint(model, config, accelerator, global_step):
             save_function=accelerator.save,
             state_dict=state_dict,
         )
+        torch.save(discr_state_dict, save_path / "unwrapped_discriminator")
         json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
         logger.info(f"Saved state to {save_path}")
 
