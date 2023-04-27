@@ -1045,6 +1045,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
         self.register_to_config(mask_token_id=vocab_size - 1)
+        self.register_to_config(block_out_channels=tuple(block_out_channels))
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
 
