@@ -25,13 +25,15 @@ from transformers import (
 )
 
 from .modeling_maskgit_vqgan import MaskGitVQGAN
+from .modeling_movq import MOVQ
+from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer
 
 
 class PipelineMuse:
     def __init__(
         self,
-        vae: MaskGitVQGAN,
+        vae: Union[VQGANModel, MOVQ, MaskGitVQGAN],
         transformer: MaskGitTransformer,
         is_class_conditioned: bool = False,
         text_encoder: Optional[Union[T5EncoderModel, CLIPTextModel]] = None,
@@ -64,6 +66,7 @@ class PipelineMuse:
         topk_filter_thres: float = 0.9,
         num_images_per_prompt: int = 1,
         use_maskgit_generate: bool = False,
+        generator: Optional[torch.Generator] = None,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -105,6 +108,7 @@ class PipelineMuse:
             guidance_scale=guidance_scale,
             temperature=temperature,
             topk_filter_thres=topk_filter_thres,
+            generator=generator,
         )
 
         images = self.vae.decode_code(generated_tokens)
@@ -142,25 +146,41 @@ class PipelineMuse:
                     " provided."
                 )
 
-            text_encoder = None
-            tokenizer = None
+            text_encoder_args = None
+            tokenizer_args = None
 
             if not is_class_conditioned:
-                text_encoder = T5EncoderModel.from_pretrained(text_encoder_path)
-                tokenizer = AutoTokenizer.from_pretrained(text_encoder_path)
+                text_encoder_args = {"pretrained_model_name_or_path": text_encoder_path}
+                tokenizer_args = {"pretrained_model_name_or_path": text_encoder_path}
 
-            vae = MaskGitVQGAN.from_pretrained(vae_path)
-            transformer = MaskGitTransformer.from_pretrained(transformer_path)
+            vae_args = {"pretrained_model_name_or_path": vae_path}
+            transformer_args = {"pretrained_model_name_or_path": transformer_path}
         else:
-            text_encoder = None
-            tokenizer = None
+            text_encoder_args = None
+            tokenizer_args = None
 
             if not is_class_conditioned:
-                text_encoder = T5EncoderModel.from_pretrained(model_name_or_path, subfolder="text_encoder")
-                tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder="text_encoder")
+                text_encoder_args = {"pretrained_model_name_or_path": text_encoder_path, "subfolder": "text_encoder"}
+                tokenizer_args = {"pretrained_model_name_or_path": text_encoder_path, "subfolder": "tokenizer"}
 
-            vae = MaskGitVQGAN.from_pretrained(model_name_or_path, subfolder="vae")
-            transformer = MaskGitTransformer.from_pretrained(model_name_or_path, subfolder="transformer")
+            vae_args = {"pretrained_model_name_or_path": vae_path, "subfolder": "vae"}
+            transformer_args = {"pretrained_model_name_or_path": transformer_path, "subfolder": "transformer"}
+
+        if not is_class_conditioned:
+            text_encoder = T5EncoderModel.from_pretrained(**text_encoder_args)
+            tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
+        transformer = MaskGitTransformer.from_pretrained(**transformer_args)
+
+        # Hacky way to load different VQ models
+        vae_config = MaskGitVQGAN.load_config(**vae_args)
+        if vae_config["_class_name"] == "VQGANModel":
+            vae = VQGANModel.from_pretrained(**vae_args)
+        elif vae_config["_class_name"] == "MaskGitVQGAN":
+            vae = MaskGitVQGAN.from_pretrained(**vae_args)
+        elif vae_config["_class_name"] == "MOVQ":
+            vae = MOVQ.from_pretrained(**vae_args)
+        else:
+            raise ValueError(f"Unknown VAE class: {vae_config['_class_name']}")
 
         return cls(
             vae=vae,
