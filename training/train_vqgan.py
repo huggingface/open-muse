@@ -558,7 +558,7 @@ def main():
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    generate_images(model, discriminator, accelerator, global_step + 1)
+                    generate_images(model, pixel_values[:config.training.num_validation_log], accelerator, global_step + 1)
 
                 global_step += 1
                 # TODO: Add generation
@@ -583,17 +583,9 @@ def main():
 
 
 @torch.no_grad()
-def generate_images(model, vq_model, accelerator, global_step):
+def generate_images(model, original_images, accelerator, global_step):
     logger.info("Generating images...")
-    # fmt: off
-    imagenet_class_names = ["Jay", "Castle", "coffee mug", "desk", "Husky", "Valley", "Red wine", "Coral reef", "Mixing bowl", "Cleaver", "Vine Snake", "Bloodhound", "Barbershop", "Ski", "Otter", "Snowmobile"]
-    # fmt: on
-    imagenet_class_ids = torch.tensor(
-        [17, 483, 504, 526, 248, 979, 966, 973, 659, 499, 59, 163, 424, 795, 360, 802],
-        device=accelerator.device,
-        dtype=torch.long,
-    )
-
+    original_images = torch.clone(original_images)
     # Generate images
     model.eval()
     dtype = torch.float32
@@ -603,24 +595,30 @@ def generate_images(model, vq_model, accelerator, global_step):
         dtype = torch.bfloat16
 
     with torch.autocast("cuda", dtype=dtype, enabled=accelerator.mixed_precision != "no"):
-        gen_token_ids = accelerator.unwrap_model(model).generate2(imagenet_class_ids, timesteps=8)
+        _, enc_token_ids = accelerator.unwrap_model(model).encode(original_images)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
-    gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
-    images = vq_model.decode_code(gen_token_ids)
+    gen_token_ids = torch.clamp(enc_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
+    images = model.decode_code(enc_token_ids)
     model.train()
 
     # Convert to PIL images
     images = 2.0 * images - 1.0
+    original_images = 2.0 * original_images - 1.0
     images = torch.clamp(images, -1.0, 1.0)
+    original_images = torch.clamp(original_images, -1.0, 1.0)
     images = (images + 1.0) / 2.0
+    original_images = (original_images + 1.0) / 2.0
     images *= 255.0
+    original_images *= 255.0
     images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+    original_images = original_images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+    images = np.concatenate([original_images, images], axis=2)
     pil_images = [Image.fromarray(image) for image in images]
 
     # Log images
-    wandb_images = [wandb.Image(image, caption=imagenet_class_names[i]) for i, image in enumerate(pil_images)]
-    wandb.log({"generated_images": wandb_images}, step=global_step)
+    wandb_images = [wandb.Image(image, caption="Original, Generated") for image in pil_images)]
+    wandb.log({"vae_images": wandb_images}, step=global_step)
 
 
 def save_checkpoint(model, discriminator, config, accelerator, global_step):
