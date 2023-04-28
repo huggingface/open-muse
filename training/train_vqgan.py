@@ -20,7 +20,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, List, Tuple
-
+from ema import EMAModel
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -272,6 +272,9 @@ def main():
 
     vq_class = get_vq_model_class(config.model.vq_model.type)
     model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+    if config.training.use_ema:
+        ema_model = EMAModel(model.parameters(), model_cls=vq_class, model_config=model.config)
+
     discriminator = Discriminator(config)
     # TODO: Add timm_discriminator_backend to config.training. Set default to vgg16
     idx = _map_layer_to_idx(config.training.timm_discriminator_backend,\
@@ -521,6 +524,8 @@ def main():
                         log_grad_norm(discriminator, accelerator, global_step + 1)
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients and not generator_step:
+                if config.training.use_ema:
+                    ema_model.step(model.parameters())
                 # wait for both generator and discriminator to settle
                 batch_time_m.update(time.time() - end)
                 end = time.time()
@@ -576,6 +581,8 @@ def main():
     # Save the final trained checkpoint
     if accelerator.is_main_process:
         model = accelerator.unwrap_model(model)
+        if config.training.use_ema:
+            ema_model.copy_to(model.parameters())
         model.save_pretrained(config.experiment.output_dir)
 
     accelerator.end_training()
