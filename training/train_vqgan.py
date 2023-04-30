@@ -280,7 +280,7 @@ def main():
     discriminator = Discriminator(config)
     # TODO: Add timm_discriminator_backend to config.training. Set default to vgg16
     idx = _map_layer_to_idx(config.training.timm_discriminator_backend,\
-                            config.training.timm_disc_layers, config.training.timm_discr_offset)
+                            config.training.timm_disc_layers.split("|"), config.training.timm_discr_offset)
 
     timm_discriminator = timm.create_model(
         config.training.timm_discriminator_backend,

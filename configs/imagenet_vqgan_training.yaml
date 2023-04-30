@@ -50,7 +50,7 @@ discriminator:
     act: "silu"
     discr_layers: 4
 optimizer:
-    name: fused_adamw
+    name: adamw
     params: # default adamw params
         learning_rate: 1e-4
         scale_lr: False # scale learning rate by total batch size
@@ -58,6 +58,7 @@ optimizer:
         beta2: 0.999
         weight_decay: 0.01
         epsilon: 1e-8
+        discr_learning_rate: 1e-4
 
 
 lr_scheduler:
@@ -86,4 +87,7 @@ training:
     use_soft_code_target: False
     use_stochastic_code: False
     soft_code_temp: 1.0
+    timm_discriminator_backend: "vgg19"
+    timm_disc_layers: "features|pre_logits|head"
+    timm_discr_offset: 0
 
