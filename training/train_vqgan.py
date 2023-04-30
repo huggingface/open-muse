@@ -12,7 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import json
 import logging
 import math
@@ -459,7 +458,8 @@ def main():
                     else:
                         optimizer.zero_grad(set_to_none=True)
                     # encode images to the latent space and get the commit loss from vq tokenization
-                    fmap, commit_loss = model.encode(pixel_values, return_loss=True)
+
+                    fmap, _, commit_loss = model.encode(pixel_values, return_loss=True)
                     fmap = model.decode(fmap)
                     # Return regular loss
                     # reconstruction loss. Pixel level differences between input vs output
@@ -471,7 +471,7 @@ def main():
                     perceptual_loss = get_perceptual_loss(pixel_values, fmap, timm_discriminator)
                     # generator loss
                     gen_loss = -discriminator(fmap).mean()
-                    last_dec_layer = model.decode.conv_out.weight
+                    last_dec_layer = model.decoder.conv_out.weight
                     norm_grad_wrt_perceptual_loss = grad_layer_wrt_loss(
                         perceptual_loss, last_dec_layer
                     ).norm(p=2)
@@ -505,8 +505,10 @@ def main():
                         discr_optimizer.zero_grad()
                     else:
                         discr_optimizer.zero_grad(set_to_none=True)
-                    fake = discriminator(pixel_values)
-                    real = discriminator(fmap)
+                    fmap.detach_()
+                    pixel_values.requires_grad_()
+                    real = discriminator(pixel_values)
+                    fake = discriminator(fmap)
                     loss = (F.relu(1 + fake) + F.relu(1 - real)).mean()
                     gp = gradient_penalty(pixel_values, real)
                     loss += gp
@@ -607,7 +609,7 @@ def generate_images(model, original_images, accelerator, global_step):
         _, enc_token_ids = accelerator.unwrap_model(model).encode(original_images)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
-    gen_token_ids = torch.clamp(enc_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
+    enc_token_ids = torch.clamp(enc_token_ids, max=accelerator.unwrap_model(model).config.num_embeddings - 1)
     images = model.decode_code(enc_token_ids)
     model.train()
 
