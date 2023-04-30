@@ -21,7 +21,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, reduce
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
@@ -1048,6 +1048,414 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+
+        if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
+            self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
+            self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
+
+        # Embeddings
+        self.embed = ConvEmbed(
+            vocab_size,
+            in_channels,
+            block_out_channels[0],
+            patch_size=patch_size,
+            norm_type=norm_type,
+            layer_norm_eps=layer_norm_eps,
+            use_position_embeddings=use_position_embeddings,
+            use_bias=use_bias,
+        )
+
+        # Downsample
+        output_channels = block_out_channels[0]
+        self.down_blocks = nn.ModuleList([])
+        for i in range(len(block_out_channels)):
+            is_first_block = i == 0
+            input_channels = output_channels
+            output_channels = block_out_channels[i]
+            self.down_blocks.append(
+                DownsampleBlock(
+                    input_channels=input_channels,
+                    output_channels=output_channels,
+                    skip_channels=0,
+                    num_res_blocks=num_res_blocks,
+                    kernel_size=3,
+                    dropout=hidden_dropout,
+                    add_downsample=not is_first_block,
+                    use_bias=use_bias,
+                )
+            )
+
+        # Mid Transformer
+        self.transformer_layers = nn.ModuleList(
+            [
+                TransformerLayer(
+                    hidden_size=self.hidden_size,
+                    intermediate_size=self.intermediate_size,
+                    num_attention_heads=self.num_attention_heads,
+                    encoder_hidden_size=encoder_hidden_size,
+                    add_cross_attention=add_cross_attention,
+                    hidden_dropout=self.hidden_dropout,
+                    attention_dropout=self.attention_dropout,
+                    norm_type=norm_type,
+                    layer_norm_eps=layer_norm_eps,
+                    use_normformer=use_normformer,
+                    use_bias=use_bias,
+                )
+                for _ in range(self.num_hidden_layers)
+            ]
+        )
+        if use_encoder_layernorm:
+            self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+
+        # Up sample
+        reversed_block_out_channels = list(reversed(block_out_channels))
+        output_channels = reversed_block_out_channels[0]
+        self.up_blocks = nn.ModuleList([])
+        for i in range(len(reversed_block_out_channels)):
+            is_final_block = i == len(block_out_channels) - 1
+            input_channel = reversed_block_out_channels[i]
+            output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
+            prev_output_channels = output_channels if i != 0 else 0
+            self.up_blocks.append(
+                UpsampleBlock(
+                    input_channels=input_channel,
+                    skip_channels=prev_output_channels,
+                    output_channels=output_channels,
+                    num_res_blocks=num_res_blocks,
+                    kernel_size=3,
+                    dropout=hidden_dropout,
+                    add_upsample=not is_final_block,
+                    use_bias=use_bias,
+                )
+            )
+
+        # Output
+        self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
+        self.mlm_layer = ConvMlmLayer(
+            self.output_size,
+            in_channels,
+            block_out_channels[0],
+            patch_size=patch_size,
+            norm_type=norm_type,
+            layer_norm_eps=layer_norm_eps,
+            use_bias=use_bias,
+        )
+        self.gradient_checkpointing = False
+
+        # --- WEIGHT INIT ---
+        self.apply(self._init_weights)  # General init
+        nn.init.constant_(self.mlm_layer.conv1.weight, 0)
+        nn.init.normal_(self.embed.embeddings.weight, std=np.sqrt(1 / vocab_size))
+        nn.init.normal_(self.mlm_layer.conv2.weight, std=np.sqrt(1 / codebook_size))
+
+    def _init_weights(self, module):
+        """
+        Initialize the weights according to the original implementation.
+        https://github.com/google-research/maskgit/blob/main/maskgit/nets/maskgit_transformer.py#L37
+        """
+        # TODO: make this configurable
+        if isinstance(module, (nn.Linear, nn.Conv2d)):
+            nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
+        elif isinstance(module, (nn.LayerNorm, RMSNorm)):
+            module.weight.data.fill_(1.0)
+            if hasattr(module, "bias") and module.bias is not None:
+                module.bias.data.zero_()
+
+    def forward(
+        self,
+        input_ids,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        labels=None,
+        label_smoothing=0.0,
+        cond_dropout_prob=0.0,
+    ):
+        if self.config.add_cross_attention and encoder_hidden_states is None:
+            raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
+
+        hidden_states = self.embed(input_ids)
+
+        if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
+            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
+
+        # condition dropout for classifier free guidance
+        if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
+            batch_size = encoder_hidden_states.shape[0]
+            mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
+            encoder_hidden_states = encoder_hidden_states * mask
+
+        down_block_res_samples = ()
+        for down_block in self.down_blocks:
+            hidden_states, res_samples = down_block(hidden_states)
+            down_block_res_samples += res_samples
+
+        batch_size, channels, height, width = hidden_states.shape
+        hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+
+        for layer in self.transformer_layers:
+            if self.gradient_checkpointing:
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+
+                    return custom_forward
+
+                hidden_states = checkpoint(
+                    create_custom_forward(layer), hidden_states, encoder_hidden_states, encoder_attention_mask
+                )
+            else:
+                hidden_states = layer(
+                    hidden_states,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
+                )
+
+        if self.config.use_encoder_layernorm:
+            hidden_states = self.encoder_layer_norm(hidden_states)
+
+        hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
+
+        for i, up_block in enumerate(self.up_blocks):
+            res_samples = down_block_res_samples[-self.config.num_res_blocks :]
+            down_block_res_samples = down_block_res_samples[: -self.config.num_res_blocks]
+            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None)
+
+        batch_size, channels, height, width = hidden_states.shape
+        hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+        logits = self.mlm_layer(hidden_states)
+
+        if labels is not None:
+            loss = F.cross_entropy(
+                logits.view(-1, self.output_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
+            )
+            return logits, loss
+        return logits
+
+    def _set_gradient_checkpointing(self, module, value=False):
+        self.gradient_checkpointing = True
+        if isinstance(module, (DownsampleBlock, UpsampleBlock)):
+            module.gradient_checkpointing = value
+
+    def generate2(
+        self,
+        class_ids: torch.LongTensor = None,
+        encoder_hidden_states: torch.FloatTensor = None,
+        temperature=1.0,
+        timesteps=18,  # ideal number of steps is 18 in maskgit paper
+        guidance_scale=0,
+        noise_schedule=cosine_schedule,
+        generator: torch.Generator = None,
+        **kwargs,
+    ):
+        """
+        Generate 1:1 similar to the original MaskGit repo
+        https://github.com/google-research/maskgit/blob/main/maskgit/libml/parallel_decode.py#L79
+        """
+        # begin with all image token ids masked
+        mask_token_id = self.config.mask_token_id
+        seq_len = self.config.num_vq_tokens
+
+        batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
+        shape = (batch_size, seq_len)
+
+        # shift the class ids by the codebook size
+        if class_ids is not None:
+            class_ids += self.config.codebook_size
+
+        # initialize with all image tokens masked
+        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+
+        for step in range(timesteps):
+            # prepend class token to input_ids
+            if class_ids is not None:
+                input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+
+            # classifier free guidance
+            if encoder_hidden_states is not None and guidance_scale > 0:
+                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                model_input = torch.cat([input_ids] * 2)
+                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits = cond_logits[..., : self.config.codebook_size]
+                uncond_logits = uncond_logits[..., : self.config.codebook_size]
+                logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
+            else:
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
+                logits = logits[..., : self.config.codebook_size]
+
+            # remove class token
+            if class_ids is not None:
+                input_ids = input_ids[:, 1:]
+                logits = logits[:, 1:]
+
+            # Samples the ids using categorical sampling: [batch_size, seq_length].
+            # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
+            sampled_ids = torch.stack(
+                [torch.multinomial(l.softmax(dim=-1), 1, generator=generator).squeeze(1) for l in logits]
+            )
+
+            # Just updates the masked tokens.
+            unknown_map = input_ids == mask_token_id
+            sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
+            # Defines the mask ratio for the next round. The number to mask out is
+            # determined by mask_ratio * unknown_number_in_the_beginning.
+            ratio = 1.0 * (step + 1) / timesteps
+            mask_ratio = noise_schedule(torch.tensor(ratio))
+            # Computes the probabilities of each selected tokens.
+            probs = logits.softmax(dim=-1)
+            selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
+            selected_probs = selected_probs.squeeze(-1)
+
+            # Ignores the tokens given in the input by overwriting their confidence.
+            selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
+            # Gets mask lens for each sample in the batch according to the mask ratio.
+            mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
+            # Keeps at least one of prediction in this round and also masks out at least
+            # one and for the next iteration
+            mask_len = torch.max(
+                torch.tensor([1], device=logits.device), torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len)
+            )
+
+            # Adds noise for randomness
+            temperature = temperature * (1.0 - ratio)
+            masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
+            # Masks tokens with lower confidence.
+            input_ids = torch.where(masking, mask_token_id, sampled_ids)
+
+        return sampled_ids
+
+# Taken and slightly adapted from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/max_vit.py
+class SqueezeExcitation(nn.Module):
+    def __init__(self, dim, shrinkage_rate = 0.25):
+        super().__init__()
+        hidden_dim = int(dim * shrinkage_rate)
+
+        self.gate = nn.Sequential(
+            nn.Linear(dim, hidden_dim, bias = False),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, dim, bias = False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        hidden = reduce(x, 'b c h w -> b c', 'mean')
+        hidden = self.gate(hidden)
+        hidden = rearrange(hidden, 'b c -> b c 1 1')
+        return x * hidden
+
+class MBConvResidual(nn.Module):
+    def __init__(self, fn, dropout = 0.):
+        super().__init__()
+        self.fn = fn
+        self.dropsample = Dropsample(dropout)
+
+    def forward(self, x):
+        out = self.fn(x)
+        out = self.dropsample(out)
+        return out + x
+
+class Dropsample(nn.Module):
+    def __init__(self, prob = 0):
+        super().__init__()
+        self.prob = prob
+    def forward(self, x):
+        device = x.device
+
+        if self.prob == 0. or (not self.training):
+            return x
+
+        keep_mask = torch.FloatTensor((x.shape[0], 1, 1, 1), device = device).uniform_() > self.prob
+        return x * keep_mask / (1 - self.prob)
+
+def MBConv(
+    dim_in,
+    dim_out,
+    *,
+    downsample,
+    expansion_rate = 4,
+    shrinkage_rate = 0.25,
+    dropout = 0.,
+    norm_cls=nn.BatchNorm2d
+):
+    hidden_dim = int(expansion_rate * dim_out)
+    stride = 2 if downsample else 1
+
+    net = nn.Sequential(
+        nn.Conv2d(dim_in, hidden_dim, 1),
+        norm_cls(hidden_dim),
+        nn.GELU(),
+        nn.Conv2d(hidden_dim, hidden_dim, 3, stride = stride, padding = 1, groups = hidden_dim),
+        norm_cls(hidden_dim),
+        nn.GELU(),
+        SqueezeExcitation(hidden_dim, shrinkage_rate = shrinkage_rate),
+        nn.Conv2d(hidden_dim, dim_out, 1),
+        norm_cls(dim_out)
+    )
+
+    if dim_in == dim_out and not downsample:
+        net = MBConvResidual(net, dropout = dropout)
+
+    return net
+
+
+class MaskGiTMaxViT(ModelMixin, ConfigMixin):
+    _supports_gradient_checkpointing = True
+
+    @register_to_config
+    def __init__(
+        self,
+        vocab_size,  # codebook_size + 1 (for the mask token), for class-conditioned generation it'll be codebook_size + num_classes + 1
+        hidden_size=768,
+        in_channels=384,
+        block_out_channels=(768, 768),
+        num_res_blocks=2,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        intermediate_size=3072,
+        hidden_dropout=0.1,
+        attention_dropout=0.1,
+        max_position_embeddings=256,  # for clas-conditioned generation it'll be 256 + 1 (for the class token)
+        add_cross_attention=False,
+        encoder_hidden_size=1024,  # T5-large
+        project_encoder_hidden_states=False,
+        initializer_range=0.02,
+        norm_type="groupnorm2d",  # or rmsnorm
+        layer_norm_eps=1e-5,
+        use_normformer=False,
+        use_encoder_layernorm=True,
+        use_bias=False,
+        codebook_size=1024,
+        num_vq_tokens=256,
+        num_classes=None,  # set for class-conditioned generation
+        use_position_embeddings=False,
+        use_codebook_size_for_output=False,
+        patch_size=1,
+        **kwargs,
+    ):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        self.num_hidden_layers = num_hidden_layers
+        self.num_attention_heads = num_attention_heads
+        self.intermediate_size = intermediate_size
+        self.hidden_dropout = hidden_dropout
+        self.attention_dropout = attention_dropout
+        self.max_position_embeddings = max_position_embeddings
+        self.initializer_range = initializer_range
+        self.register_to_config(mask_token_id=vocab_size - 1)
+        self.register_to_config(block_out_channels=tuple(block_out_channels))
+        if norm_type == "batchnorm":
+            norm_cls = partial(nn.BatchNorm2d, use_bias=use_bias)
+        elif norm_type == 'layernorm":
+            norm_cls = partial(LayerNorm, use_bias=use_bias)
+        else:
+            norm_cls = RMSNorm
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
