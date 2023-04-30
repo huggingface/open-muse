@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
 output.jpg
+imagenet-vqgan-training
 wandb
 __pycache__/
 *.py[cod]

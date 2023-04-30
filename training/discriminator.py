@@ -20,13 +20,16 @@ class Discriminator(nn.Module):
         config
     ):
         super().__init__()
-        dims = config.discriminator.dims
+        dim = config.discriminator.dim
+        discr_layers = config.discriminator.discr_layers
+        layer_mults = list(map(lambda t: 2**t, range(discr_layers)))
+        layer_dims = [dim * mult for mult in layer_mults]
+        dims = (dim, *layer_dims)
         channels=config.discriminator.channels
         groups=config.discriminator.groups
         init_kernel_size=config.discriminator.init_kernel_size
         kernel_size=config.discriminator.kernel_size
         act=config.discriminator.act
-
         activation = get_activation(act)
         dim_pairs = zip(dims[:-1], dims[1:])
 

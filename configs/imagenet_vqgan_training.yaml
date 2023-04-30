@@ -42,13 +42,13 @@ dataset:
         center_crop: True
         random_flip: False
 discriminator:
-    dims: 96
+    dim: 64
     channels: 3
     groups: 32
     init_kernel_size: 5
-    kernel_size: 5
+    kernel_size: 3
     act: "silu"
-
+    discr_layers: 4
 optimizer:
     name: fused_adamw
     params: # default adamw params
