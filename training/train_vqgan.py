@@ -35,7 +35,7 @@ from PIL import Image
 from torch.optim import AdamW  # why is shampoo not available in PT :(
 
 import muse
-from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN
+from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
 from training.discriminator import Discriminator
@@ -97,6 +97,8 @@ def get_vq_model_class(model_type):
         return MOVQ
     elif model_type == "maskgit_vqgan":
         return MaskGitVQGAN
+    elif model_type == "taming_vqgan":
+        return VQGANModel
     else:
         raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
@@ -624,7 +626,7 @@ def generate_images(model, original_images, accelerator, global_step):
     pil_images = [Image.fromarray(image) for image in images]
 
     # Log images
-    wandb_images = [wandb.Image(image, caption="Original, Generated") for image in pil_images)]
+    wandb_images = [wandb.Image(image, caption="Original, Generated") for image in pil_images]
     wandb.log({"vae_images": wandb_images}, step=global_step)
 
 

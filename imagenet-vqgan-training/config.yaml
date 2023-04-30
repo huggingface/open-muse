@@ -1,0 +1,78 @@
+wandb:
+  entity: null
+  run_id: nx8ufxdm
+experiment:
+  project: muse
+  name: imagenet-vqgan-training
+  output_dir: imagenet-vqgan-training
+  max_train_examples: 1281167
+  max_eval_examples: 12800
+  save_every: 1000
+  eval_every: 1000
+  generate_every: 1000
+  log_every: 30
+  log_grad_norm_every: 500
+  resume_from_checkpoint: false
+  resume_lr_scheduler: true
+  logging_dir: imagenet-vqgan-training\logs
+model:
+  vq_model:
+    type: taming_vqgan
+    pretrained: openMUSE/vqgan-f16-8192-laion
+  gradient_checkpointing: true
+  enable_xformers_memory_efficient_attention: true
+dataset:
+  type: classification
+  params:
+    train_shards_path_or_url: pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-train-{000000..000320}.tar
+      -
+    eval_shards_path_or_url: pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar
+      -
+    imagenet_class_mapping_path: /fsx/suraj/data/imagenet-class-mapping.json
+    dataset.params.validation_prompts_file: null
+    batch_size: ${training.batch_size}
+    shuffle_buffer_size: 1000
+    num_workers: 4
+    resolution: 256
+    pin_memory: true
+    persistent_workers: true
+  preprocessing:
+    max_seq_length: 16
+    resolution: 256
+    center_crop: true
+    random_flip: false
+discriminator:
+  dims: 64
+optimizer:
+  name: fused_adamw
+  params:
+    learning_rate: 0.0001
+    scale_lr: false
+    beta1: 0.9
+    beta2: 0.999
+    weight_decay: 0.01
+    epsilon: 1.0e-08
+lr_scheduler:
+  scheduler: constant_with_warmup
+  params:
+    learning_rate: ${optimizer.params.learning_rate}
+    warmup_steps: 1000
+training:
+  gradient_accumulation_steps: 2
+  batch_size: 64
+  mixed_precision: 'no'
+  enable_tf32: true
+  use_ema: false
+  seed: 9345104
+  max_train_steps: 200000
+  overfit_one_batch: false
+  cond_dropout_prob: 0.1
+  min_masking_rate: 0.0
+  label_smoothing: 0.0
+  max_grad_norm: null
+  guidance_scale: 2.0
+  generation_timesteps: 8
+  use_soft_code_target: false
+  use_stochastic_code: false
+  soft_code_temp: 1.0
+config: ./configs/imagenet_vqgan_training.yaml

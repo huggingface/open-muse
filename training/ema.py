@@ -8,9 +8,7 @@ from typing import Any, Dict, Iterable, Optional, Union
 
 import numpy as np
 import torch
-
-from .utils import deprecate
-
+from training.deprecate_utils import deprecate
 
 def enable_full_determinism(seed: int):
     """
