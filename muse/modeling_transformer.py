@@ -365,6 +365,63 @@ class Attention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         return attn_output
 
+class MaxVitAttention(Attention):
+    def __init__(self, hidden_size, num_heads, window_size=7, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
+        super().__init__(hidden_size, num_heads, encoder_hidden_size=encoder_hidden_size, attention_dropout=attention_dropout, use_bias=use_bias)
+        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.heads)
+
+        pos = torch.arange(window_size)
+        grid = torch.stack(torch.meshgrid(pos, pos, indexing = 'ij'))
+        grid = rearrange(grid, 'c i j -> (i j) c')
+        rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
+        rel_pos += window_size - 1
+        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
+
+        self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        batch, height, width, window_height, window_width, _ = hidden_states.shape
+
+        # flatten
+
+        x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
+
+        # project for queries, keys, values
+
+        q, k, v = self.to_qkv(x).chunk(3, dim = -1)
+
+        # split heads
+
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d ) -> b h n d', h = h), (q, k, v))
+
+        # scale
+
+        q = q * self.scale
+
+        # sim
+
+        sim = einsum('b h i d, b h j d -> b h i j', q, k)
+
+        # add positional bias
+
+        bias = self.rel_pos_bias(self.rel_pos_indices)
+        sim = sim + rearrange(bias, 'i j h -> h i j')
+
+        # attention
+
+        attn = self.attend(sim)
+
+        # aggregate
+
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+
+        # merge heads
+
+        out = rearrange(out, 'b h (w1 w2) d -> b w1 w2 (h d)', w1 = window_height, w2 = window_width)
+
+        # combine heads out
+
+        out = self.to_out(out)
+        return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
 
 # Normformer style GLU FeedForward
 class FeedForward(nn.Module):
@@ -1381,21 +1438,20 @@ def MBConv(
     expansion_rate = 4,
     shrinkage_rate = 0.25,
     dropout = 0.,
-    norm_cls=nn.BatchNorm2d
 ):
     hidden_dim = int(expansion_rate * dim_out)
     stride = 2 if downsample else 1
 
     net = nn.Sequential(
         nn.Conv2d(dim_in, hidden_dim, 1),
-        norm_cls(hidden_dim),
+        nn.BatchNorm2d(hidden_dim),
         nn.GELU(),
         nn.Conv2d(hidden_dim, hidden_dim, 3, stride = stride, padding = 1, groups = hidden_dim),
-        norm_cls(hidden_dim),
+        nn.BatchNorm2d(hidden_dim),
         nn.GELU(),
         SqueezeExcitation(hidden_dim, shrinkage_rate = shrinkage_rate),
         nn.Conv2d(hidden_dim, dim_out, 1),
-        norm_cls(dim_out)
+        nn.BatchNorm2d(dim_out)
     )
 
     if dim_in == dim_out and not downsample:
@@ -1403,7 +1459,37 @@ def MBConv(
 
     return net
 
+class MaxVitBlock(nn.Module):
+    def __init__(self, stage_dim_in, layer_dim, norm_cls=LayerNorm, window_size=7, mbconv_expansion_rate=4, mbconv_shrinkage_rate=0.25, is_first=False, dropout=0.0, num_heads=3):
+        super().__init__()
+        self.mb_conv = MBConv(
+            stage_dim_in,
+            layer_dim,
+            downsample = is_first,
+            expansion_rate = mbconv_expansion_rate,
+            shrinkage_rate = mbconv_shrinkage_rate
+        )
+        self.window_size = window_size
+        self.norm0 = norm_cls(layer_dim)
+        self.attn0 = MaxVitAttention(hidden_size = layer_dim, num_heads = num_heads, attention_dropout = dropout, window_size = window_size)
+        nn.Sequential(
+                    ,
+                    PreNormResidual(layer_dim, ),
+                    PreNormResidual(layer_dim, FeedForward(dim = layer_dim, dropout = dropout)),
+                    Rearrange('b x y w1 w2 d -> b d (x w1) (y w2)'),
 
+                    Rearrange('b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = w, w2 = w),  # grid-like attention
+                    PreNormResidual(layer_dim, Attention(dim = layer_dim, dim_head = dim_head, dropout = dropout, window_size = w)),
+                    PreNormResidual(layer_dim, FeedForward(dim = layer_dim, dropout = dropout)),
+                    Rearrange('b x y w1 w2 d -> b d (w1 x) (w2 y)'),
+                )
+    def forward(self, x):
+        hidden = self.mb_conv(x)
+        # block like attention(local attention)
+        hidden = rearrange(x, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden = self.norm1(hidden)
+
+        None
 class MaskGiTMaxViT(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
 
@@ -1414,6 +1500,7 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
         hidden_size=768,
         in_channels=384,
         block_out_channels=(768, 768),
+        depth = (2, 2),
         num_res_blocks=2,
         num_hidden_layers=12,
         num_attention_heads=12,
@@ -1436,6 +1523,10 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
         use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
+        hidden_conv_stem=None,
+        window_size = 7,                  # window size for block and grids
+        mbconv_expansion_rate = 4,        # expansion rate of MBConv
+        mbconv_shrinkage_rate = 0.25,     # shrinkage rate of squeeze-excitation in MBConv
         **kwargs,
     ):
         super().__init__()
@@ -1448,11 +1539,18 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
         self.attention_dropout = attention_dropout
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
+        if hidden_conv_stem:
+            dim_conv_stem = hidden_conv_stem
+        else:
+            dim_conv_stem = hidden_size
+
+        self.conv_stem = nn.Sequential(
+            nn.Conv2d(in_channels, dim_conv_stem, 3, stride = 2, padding = 1),
+            nn.Conv2d(dim_conv_stem, dim_conv_stem, 3, padding = 1)
+        )
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.register_to_config(block_out_channels=tuple(block_out_channels))
-        if norm_type == "batchnorm":
-            norm_cls = partial(nn.BatchNorm2d, use_bias=use_bias)
-        elif norm_type == 'layernorm":
+        if norm_type == "layernorm":
             norm_cls = partial(LayerNorm, use_bias=use_bias)
         else:
             norm_cls = RMSNorm
@@ -1473,6 +1571,36 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
             use_bias=use_bias,
         )
 
+        num_stages = len(depth)
+
+        dims = tuple(map(lambda i: (2 ** i) * dim, range(num_stages)))
+        dims = (dim_conv_stem, *dims)
+        dim_pairs = tuple(zip(dims[:-1], dims[1:]))
+
+        self.layers = nn.ModuleList([])
+
+        # shorthand for window size for efficient block - grid like attention
+
+        w = window_size
+
+        # iterate through stages
+
+        for ind, ((layer_dim_in, layer_dim), layer_depth) in enumerate(zip(dim_pairs, depth)):
+            for stage_ind in range(layer_depth):
+                is_first = stage_ind == 0
+                stage_dim_in = layer_dim_in if is_first else layer_dim
+
+                block = 
+
+                self.layers.append(block)
+
+        # mlp head out
+
+        self.mlp_head = nn.Sequential(
+            Reduce('b d h w -> b d', 'mean'),
+            nn.LayerNorm(dims[-1]),
+            nn.Linear(dims[-1], num_classes)
+        )
         # Downsample
         output_channels = block_out_channels[0]
         self.down_blocks = nn.ModuleList([])
@@ -1493,49 +1621,49 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
                 )
             )
 
-        # Mid Transformer
-        self.transformer_layers = nn.ModuleList(
-            [
-                TransformerLayer(
-                    hidden_size=self.hidden_size,
-                    intermediate_size=self.intermediate_size,
-                    num_attention_heads=self.num_attention_heads,
-                    encoder_hidden_size=encoder_hidden_size,
-                    add_cross_attention=add_cross_attention,
-                    hidden_dropout=self.hidden_dropout,
-                    attention_dropout=self.attention_dropout,
-                    norm_type=norm_type,
-                    layer_norm_eps=layer_norm_eps,
-                    use_normformer=use_normformer,
-                    use_bias=use_bias,
-                )
-                for _ in range(self.num_hidden_layers)
-            ]
-        )
-        if use_encoder_layernorm:
-            self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+        # # Mid Transformer
+        # self.transformer_layers = nn.ModuleList(
+        #     [
+        #         TransformerLayer(
+        #             hidden_size=self.hidden_size,
+        #             intermediate_size=self.intermediate_size,
+        #             num_attention_heads=self.num_attention_heads,
+        #             encoder_hidden_size=encoder_hidden_size,
+        #             add_cross_attention=add_cross_attention,
+        #             hidden_dropout=self.hidden_dropout,
+        #             attention_dropout=self.attention_dropout,
+        #             norm_type=norm_type,
+        #             layer_norm_eps=layer_norm_eps,
+        #             use_normformer=use_normformer,
+        #             use_bias=use_bias,
+        #         )
+        #         for _ in range(self.num_hidden_layers)
+        #     ]
+        # )
+        # if use_encoder_layernorm:
+        #     self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
 
-        # Up sample
-        reversed_block_out_channels = list(reversed(block_out_channels))
-        output_channels = reversed_block_out_channels[0]
-        self.up_blocks = nn.ModuleList([])
-        for i in range(len(reversed_block_out_channels)):
-            is_final_block = i == len(block_out_channels) - 1
-            input_channel = reversed_block_out_channels[i]
-            output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
-            prev_output_channels = output_channels if i != 0 else 0
-            self.up_blocks.append(
-                UpsampleBlock(
-                    input_channels=input_channel,
-                    skip_channels=prev_output_channels,
-                    output_channels=output_channels,
-                    num_res_blocks=num_res_blocks,
-                    kernel_size=3,
-                    dropout=hidden_dropout,
-                    add_upsample=not is_final_block,
-                    use_bias=use_bias,
-                )
-            )
+        # # Up sample
+        # reversed_block_out_channels = list(reversed(block_out_channels))
+        # output_channels = reversed_block_out_channels[0]
+        # self.up_blocks = nn.ModuleList([])
+        # for i in range(len(reversed_block_out_channels)):
+        #     is_final_block = i == len(block_out_channels) - 1
+        #     input_channel = reversed_block_out_channels[i]
+        #     output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
+        #     prev_output_channels = output_channels if i != 0 else 0
+        #     self.up_blocks.append(
+        #         UpsampleBlock(
+        #             input_channels=input_channel,
+        #             skip_channels=prev_output_channels,
+        #             output_channels=output_channels,
+        #             num_res_blocks=num_res_blocks,
+        #             kernel_size=3,
+        #             dropout=hidden_dropout,
+        #             add_upsample=not is_final_block,
+        #             use_bias=use_bias,
+        #         )
+        #     )
 
         # Output
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
