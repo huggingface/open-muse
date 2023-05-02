@@ -365,52 +365,6 @@ class Attention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         return attn_output
 
-class MaxVitAttention(Attention):
-    def __init__(self, hidden_size, num_heads, window_size=7, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
-        super().__init__(hidden_size, num_heads, encoder_hidden_size=encoder_hidden_size, attention_dropout=attention_dropout, use_bias=use_bias)
-        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.heads)
-
-        pos = torch.arange(window_size)
-        grid = torch.stack(torch.meshgrid(pos, pos, indexing = 'ij'))
-        grid = rearrange(grid, 'c i j -> (i j) c')
-        rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
-        rel_pos += window_size - 1
-        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
-
-        self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
-    def attention(self, query, key, value, attention_mask=None):
-        batch, seq_len = query.shape[:2]
-        kv_seq_len = key.shape[1]
-        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
-
-        attn_weights = torch.baddbmm(
-            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
-            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
-            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
-            alpha=1 / self.scale_attn,
-        )
-        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
-        bias = self.rel_pos_bias(self.rel_pos_indices)
-        attn_weights = attn_weights + rearrange(bias, 'i j h -> h i j')
-        # Apply the attention mask
-        if attention_mask is not None:
-            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        # re-assemble all head outputs side by side
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
-        return attn_output
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
-        batch, height, width, window_height, window_width, _ = hidden_states.shape
-        # flatten
-        x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
-        out = super().forward(x, encoder_attention_mask=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask)
-        out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
-
-        # combine heads out
-        return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
-
 # Normformer style GLU FeedForward
 class FeedForward(nn.Module):
     def __init__(
@@ -1447,6 +1401,53 @@ def MBConv(
 
     return net
 
+class MaxVitAttention(Attention):
+    def __init__(self, hidden_size, num_heads, window_size=7, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
+        super().__init__(hidden_size, num_heads, encoder_hidden_size=encoder_hidden_size, attention_dropout=attention_dropout, use_bias=use_bias)
+        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.heads)
+
+        # TODO: Maybe make this more comprehensible. This is basically positional embeddings for our grid
+        pos = torch.arange(window_size)
+        grid = torch.stack(torch.meshgrid(pos, pos, indexing = 'ij'))
+        grid = rearrange(grid, 'c i j -> (i j) c')
+        rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
+        rel_pos += window_size - 1
+        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
+
+        self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
+    def attention(self, query, key, value, attention_mask=None):
+        batch, seq_len = query.shape[:2]
+        kv_seq_len = key.shape[1]
+        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
+
+        attn_weights = torch.baddbmm(
+            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
+            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            alpha=1 / self.scale_attn,
+        )
+        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
+        bias = self.rel_pos_bias(self.rel_pos_indices)
+        attn_weights = attn_weights + rearrange(bias, 'i j h -> h i j')
+        # Apply the attention mask
+        if attention_mask is not None:
+            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        # re-assemble all head outputs side by side
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
+        return attn_output
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        batch, height, width, window_height, window_width, _ = hidden_states.shape
+        # flatten
+        x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
+        out = super().forward(x, encoder_attention_mask=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask)
+        out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
+
+        # combine heads out
+        return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
+
 class MaxVitBlock(nn.Module):
     def __init__(self, stage_dim_in, layer_dim, norm_cls=LayerNorm, window_size=7, mbconv_expansion_rate=4, mbconv_shrinkage_rate=0.25, is_first=False, dropout=0.0,\
                 num_heads=3):
@@ -1469,6 +1470,10 @@ class MaxVitBlock(nn.Module):
         self.norm3 = norm_cls(layer_dim)
         self.ff1 = FeedForward(hidden_size=layer_dim, intermediate_size=4*layer_dim, hidden_dropout=dropout)
     def forward(self, hidden, encoder_hidden_states=None, encoder_attention_mask=None):
+        # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives 
+        # our local attention once positional embeddings are added to it
+        # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
+        # This helps us make a "global" grid of window_size x window_size
         hidden = self.mb_conv(hidden)
         # block like attention(local attention)
         hidden = rearrange(hidden, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
@@ -1477,6 +1482,7 @@ class MaxVitBlock(nn.Module):
         hidden = self.norm1(hidden)
         hidden = self.ff0(hidden)
         hidden = rearrange(hidden, 'b x y w1 w2 d -> b d (x w1) (y w2)')
+        # grid-like attention(global attention)
         hidden = rearrange(hidden, 'b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
         hidden = self.norm2(hidden)
         hidden = self.attn1(hidden, encoder_hidden_states, encoder_attention_mask)
