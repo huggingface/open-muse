@@ -1641,15 +1641,7 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
             mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
             encoder_hidden_states = encoder_hidden_states * mask
 
-        down_block_res_samples = ()
-        for down_block in self.down_blocks:
-            hidden_states, res_samples = down_block(hidden_states)
-            down_block_res_samples += res_samples
-
-        batch_size, channels, height, width = hidden_states.shape
-        hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
-
-        for layer in self.transformer_layers:
+        for layer in self.layers:
             if self.gradient_checkpointing:
 
                 def create_custom_forward(module):
@@ -1670,13 +1662,6 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
-
-        hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
-
-        for i, up_block in enumerate(self.up_blocks):
-            res_samples = down_block_res_samples[-self.config.num_res_blocks :]
-            down_block_res_samples = down_block_res_samples[: -self.config.num_res_blocks]
-            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None)
 
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
