@@ -1565,89 +1565,21 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
             use_bias=use_bias,
         )
 
-        num_stages = len(depth)
-
-        dims = tuple(map(lambda i: (2 ** i) * dim, range(num_stages)))
-        dims = (dim_conv_stem, *dims)
-        dim_pairs = tuple(zip(dims[:-1], dims[1:]))
-
         self.layers = nn.ModuleList([])
 
         # iterate through stages
 
-        for ind, ((layer_dim_in, layer_dim), layer_depth) in enumerate(zip(dim_pairs, depth)):
+        for i in range(len(block_out_channels)):
+            layer_depth = depth[i]
             for stage_ind in range(layer_depth):
                 is_first = stage_ind == 0
-                stage_dim_in = layer_dim_in if is_first else layer_dim
+                output_channels = block_out_channels[i]
+                stage_dim_in = hidden_conv_stem if is_first else output_channels
 
-                block = MaxVitBlock(stage_dim_in, layer_dim, norm_cls=norm_cls, window_size=window_size, mbconv_expansion_rate=mbconv_shrinkage_rate,\
+                block = MaxVitBlock(stage_dim_in, output_channels, norm_cls=norm_cls, window_size=window_size, mbconv_expansion_rate=mbconv_shrinkage_rate,\
                                     mbconv_shrinkage_rate=mbconv_shrinkage_rate, is_first=is_first, dropout=attention_dropout, num_heads=num_heads)
 
                 self.layers.append(block)
-
-        # Downsample
-        output_channels = block_out_channels[0]
-        self.down_blocks = nn.ModuleList([])
-        for i in range(len(block_out_channels)):
-            is_first_block = i == 0
-            input_channels = output_channels
-            output_channels = block_out_channels[i]
-            self.down_blocks.append(
-                DownsampleBlock(
-                    input_channels=input_channels,
-                    output_channels=output_channels,
-                    skip_channels=0,
-                    num_res_blocks=num_res_blocks,
-                    kernel_size=3,
-                    dropout=hidden_dropout,
-                    add_downsample=not is_first_block,
-                    use_bias=use_bias,
-                )
-            )
-
-        # # Mid Transformer
-        # self.transformer_layers = nn.ModuleList(
-        #     [
-        #         TransformerLayer(
-        #             hidden_size=self.hidden_size,
-        #             intermediate_size=self.intermediate_size,
-        #             num_attention_heads=self.num_attention_heads,
-        #             encoder_hidden_size=encoder_hidden_size,
-        #             add_cross_attention=add_cross_attention,
-        #             hidden_dropout=self.hidden_dropout,
-        #             attention_dropout=self.attention_dropout,
-        #             norm_type=norm_type,
-        #             layer_norm_eps=layer_norm_eps,
-        #             use_normformer=use_normformer,
-        #             use_bias=use_bias,
-        #         )
-        #         for _ in range(self.num_hidden_layers)
-        #     ]
-        # )
-        # if use_encoder_layernorm:
-        #     self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
-
-        # # Up sample
-        # reversed_block_out_channels = list(reversed(block_out_channels))
-        # output_channels = reversed_block_out_channels[0]
-        # self.up_blocks = nn.ModuleList([])
-        # for i in range(len(reversed_block_out_channels)):
-        #     is_final_block = i == len(block_out_channels) - 1
-        #     input_channel = reversed_block_out_channels[i]
-        #     output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
-        #     prev_output_channels = output_channels if i != 0 else 0
-        #     self.up_blocks.append(
-        #         UpsampleBlock(
-        #             input_channels=input_channel,
-        #             skip_channels=prev_output_channels,
-        #             output_channels=output_channels,
-        #             num_res_blocks=num_res_blocks,
-        #             kernel_size=3,
-        #             dropout=hidden_dropout,
-        #             add_upsample=not is_final_block,
-        #             use_bias=use_bias,
-        #         )
-        #     )
 
         # Output
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
