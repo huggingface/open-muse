@@ -1448,7 +1448,8 @@ def MBConv(
     return net
 
 class MaxVitBlock(nn.Module):
-    def __init__(self, stage_dim_in, layer_dim, norm_cls=LayerNorm, window_size=7, mbconv_expansion_rate=4, mbconv_shrinkage_rate=0.25, is_first=False, dropout=0.0, num_heads=3):
+    def __init__(self, stage_dim_in, layer_dim, norm_cls=LayerNorm, window_size=7, mbconv_expansion_rate=4, mbconv_shrinkage_rate=0.25, is_first=False, dropout=0.0,\
+                num_heads=3):
         super().__init__()
         self.mb_conv = MBConv(
             stage_dim_in,
@@ -1460,24 +1461,28 @@ class MaxVitBlock(nn.Module):
         self.window_size = window_size
         self.norm0 = norm_cls(layer_dim)
         self.attn0 = MaxVitAttention(hidden_size = layer_dim, num_heads = num_heads, attention_dropout = dropout, window_size = window_size)
-        nn.Sequential(
-                    ,
-                    PreNormResidual(layer_dim, ),
-                    PreNormResidual(layer_dim, FeedForward(dim = layer_dim, dropout = dropout)),
-                    Rearrange('b x y w1 w2 d -> b d (x w1) (y w2)'),
-
-                    Rearrange('b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = w, w2 = w),  # grid-like attention
-                    PreNormResidual(layer_dim, Attention(dim = layer_dim, dim_head = dim_head, dropout = dropout, window_size = w)),
-                    PreNormResidual(layer_dim, FeedForward(dim = layer_dim, dropout = dropout)),
-                    Rearrange('b x y w1 w2 d -> b d (w1 x) (w2 y)'),
-                )
-    def forward(self, x):
-        hidden = self.mb_conv(x)
+        self.norm1 = norm_cls(layer_dim)
+        # In lucidrian's code the implementation of feedforward is different
+        self.ff0 = FeedForward(hidden_size=layer_dim, intermediate_size=4*layer_dim, hidden_dropout=dropout)
+        self.norm2 = norm_cls(layer_dim)
+        self.attn1 = MaxVitAttention(hidden_size = layer_dim, num_heads = num_heads, attention_dropout = dropout, window_size = window_size)
+        self.norm3 = norm_cls(layer_dim)
+        self.ff1 = FeedForward(hidden_size=layer_dim, intermediate_size=4*layer_dim, hidden_dropout=dropout)
+    def forward(self, hidden, encoder_hidden_states=None, encoder_attention_mask=None):
+        hidden = self.mb_conv(hidden)
         # block like attention(local attention)
-        hidden = rearrange(x, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden = rearrange(hidden, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden = self.norm0(hidden)
+        hidden = self.attn0(hidden, encoder_hidden_states, encoder_attention_mask)
         hidden = self.norm1(hidden)
-
-        None
+        hidden = self.ff0(hidden)
+        hidden = rearrange(hidden, 'b x y w1 w2 d -> b d (x w1) (y w2)')
+        hidden = rearrange(hidden, 'b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden = self.norm2(hidden)
+        hidden = self.attn1(hidden, encoder_hidden_states, encoder_attention_mask)
+        hidden = self.norm3(hidden)
+        hidden = self.ff1(hidden)
+        return rearrange(hidden, 'b x y w1 w2 d -> b d (w1 x) (w2 y)')
 class MaskGiTMaxViT(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
 
@@ -1515,6 +1520,7 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
         window_size = 7,                  # window size for block and grids
         mbconv_expansion_rate = 4,        # expansion rate of MBConv
         mbconv_shrinkage_rate = 0.25,     # shrinkage rate of squeeze-excitation in MBConv
+        num_heads=3,
         **kwargs,
     ):
         super().__init__()
@@ -1567,10 +1573,6 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
 
         self.layers = nn.ModuleList([])
 
-        # shorthand for window size for efficient block - grid like attention
-
-        w = window_size
-
         # iterate through stages
 
         for ind, ((layer_dim_in, layer_dim), layer_depth) in enumerate(zip(dim_pairs, depth)):
@@ -1578,17 +1580,11 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
                 is_first = stage_ind == 0
                 stage_dim_in = layer_dim_in if is_first else layer_dim
 
-                block = 
+                block = MaxVitBlock(stage_dim_in, layer_dim, norm_cls=norm_cls, window_size=window_size, mbconv_expansion_rate=mbconv_shrinkage_rate,\
+                                    mbconv_shrinkage_rate=mbconv_shrinkage_rate, is_first=is_first, dropout=attention_dropout, num_heads=num_heads)
 
                 self.layers.append(block)
 
-        # mlp head out
-
-        self.mlp_head = nn.Sequential(
-            Reduce('b d h w -> b d', 'mean'),
-            nn.LayerNorm(dims[-1]),
-            nn.Linear(dims[-1], num_classes)
-        )
         # Downsample
         output_channels = block_out_channels[0]
         self.down_blocks = nn.ModuleList([])
