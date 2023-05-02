@@ -378,49 +378,37 @@ class MaxVitAttention(Attention):
         rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
 
         self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
+    def attention(self, query, key, value, attention_mask=None):
+        batch, seq_len = query.shape[:2]
+        kv_seq_len = key.shape[1]
+        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
+
+        attn_weights = torch.baddbmm(
+            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
+            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            alpha=1 / self.scale_attn,
+        )
+        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
+        bias = self.rel_pos_bias(self.rel_pos_indices)
+        attn_weights = attn_weights + rearrange(bias, 'i j h -> h i j')
+        # Apply the attention mask
+        if attention_mask is not None:
+            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        # re-assemble all head outputs side by side
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
+        return attn_output
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         batch, height, width, window_height, window_width, _ = hidden_states.shape
-
         # flatten
-
         x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
-
-        # project for queries, keys, values
-
-        q, k, v = self.to_qkv(x).chunk(3, dim = -1)
-
-        # split heads
-
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d ) -> b h n d', h = h), (q, k, v))
-
-        # scale
-
-        q = q * self.scale
-
-        # sim
-
-        sim = einsum('b h i d, b h j d -> b h i j', q, k)
-
-        # add positional bias
-
-        bias = self.rel_pos_bias(self.rel_pos_indices)
-        sim = sim + rearrange(bias, 'i j h -> h i j')
-
-        # attention
-
-        attn = self.attend(sim)
-
-        # aggregate
-
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
-
-        # merge heads
-
-        out = rearrange(out, 'b h (w1 w2) d -> b w1 w2 (h d)', w1 = window_height, w2 = window_width)
+        out = super().forward(x, encoder_attention_mask=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask)
+        out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
 
         # combine heads out
-
-        out = self.to_out(out)
         return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
 
 # Normformer style GLU FeedForward
