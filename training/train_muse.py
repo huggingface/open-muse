@@ -42,8 +42,8 @@ from muse import (
     MaskGitTransformer,
     MaskGiTUViT,
     MaskGitVQGAN,
-    VQGANModel,
     PaellaVQModel,
+    VQGANModel,
     get_mask_chedule,
 )
 from muse.lr_schedulers import get_scheduler

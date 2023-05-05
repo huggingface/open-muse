@@ -216,6 +216,9 @@ class PaellaVQModel(ModelMixin, ConfigMixin):
         x = self.out_block(x)
         return x
 
+    def get_code(self, pixel_values):
+        return self.encode(pixel_values)[1]
+
     def forward(self, x, quantize=False):
         qe = self.encode(x)[0]
         x = self.decode(qe)
