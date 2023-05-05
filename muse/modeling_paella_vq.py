@@ -32,7 +32,7 @@ class VectorQuantizer(nn.Module):
         self.codebook_dim = embedding_dim
         self.commitment_cost = commitment_cost
 
-        self.codebook = nn.codebook(num_embeddings, embedding_dim)
+        self.codebook = nn.Embedding(num_embeddings, embedding_dim)
         self.codebook.weight.data.uniform_(-1.0 / num_embeddings, 1.0 / num_embeddings)
 
     def forward(self, hidden_states, return_loss=False):
@@ -199,7 +199,7 @@ class PaellaVQModel(ModelMixin, ConfigMixin):
         x = self.down_blocks(x)
         # qe, (vq_loss, commit_loss), indices = self.vquantizer(x, dim=1)
         # return qe / self.scale_factor, x / self.scale_factor, indices, vq_loss + commit_loss * 0.25
-        quantized_states, codebook_indices, codebook_loss = self.quantize(x)
+        quantized_states, codebook_indices, codebook_loss = self.vquantizer(x)
         quantized_states = quantized_states / self.scale_factor
         output = (quantized_states, codebook_indices, codebook_loss)
         return output
@@ -211,12 +211,12 @@ class PaellaVQModel(ModelMixin, ConfigMixin):
         return x
 
     def decode_code(self, codebook_indices):
-        x = self.quantize.get_codebook_entry(codebook_indices)
+        x = self.vquantizer.get_codebook_entry(codebook_indices)
         x = self.up_blocks(x)
         x = self.out_block(x)
         return x
 
     def forward(self, x, quantize=False):
-        qe = self.encode(x, quantize)[0]
+        qe = self.encode(x)[0]
         x = self.decode(qe)
         return x
