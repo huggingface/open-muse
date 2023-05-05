@@ -43,6 +43,7 @@ from muse import (
     MaskGiTUViT,
     MaskGitVQGAN,
     VQGANModel,
+    PaellaVQModel,
     get_mask_chedule,
 )
 from muse.lr_schedulers import get_scheduler
@@ -104,6 +105,8 @@ def get_vq_model_class(model_type):
         return MOVQ
     elif model_type == "maskgit_vqgan":
         return MaskGitVQGAN
+    elif model_type == "paella_vq":
+        return PaellaVQModel
     else:
         raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
