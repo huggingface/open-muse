@@ -1,4 +1,6 @@
 # Byte-compiled / optimized / DLL files
+generated
+real
 output.jpg
 __pycache__/
 *.py[cod]
