@@ -73,18 +73,8 @@ class VectorQuantizer(nn.Module):
 
     def compute_distances(self, hidden_states):
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        hidden_states_flattended = hidden_states.reshape((-1, self.codebook_dim))
-        emb_weights = self.codebook.weight.t()
-
-        inputs_norm_sq = hidden_states_flattended.pow(2.0).sum(dim=1, keepdim=True)
-        codebook_t_norm_sq = emb_weights.pow(2.0).sum(dim=0, keepdim=True)
-        distances = torch.addmm(
-            inputs_norm_sq + codebook_t_norm_sq,
-            hidden_states_flattended,
-            emb_weights,
-            alpha=-2.0,
-        )
-        return distances
+        hidden_states_flattended = hidden_states.reshape((-1, self.embedding_dim))
+        return torch.cdist(hidden_states_flattended, self.embedding.weight)
 
     def get_codebook_entry(self, indices):
         # indices are expected to be of shape (batch, num_tokens)
@@ -109,6 +99,14 @@ class VectorQuantizer(nn.Module):
         batch, num_tokens = code.shape
         soft_code = soft_code.reshape(batch, num_tokens, -1)  # (batch, height * width, num_embeddings)
         return soft_code, code
+
+    def get_code(self, hidden_states):
+        # reshape z -> (batch, height, width, channel)
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
+        distances = self.compute_distances(hidden_states)
+        indices = torch.argmin(distances, axis=1).unsqueeze(1)
+        indices = indices.reshape(hidden_states.shape[0], -1)
+        return indices
 
 
 class ResBlock(nn.Module):
@@ -217,7 +215,9 @@ class PaellaVQModel(ModelMixin, ConfigMixin):
         return x
 
     def get_code(self, pixel_values):
-        return self.encode(pixel_values)[1]
+        x = self.in_block(pixel_values)
+        x = self.down_blocks(x)
+        return self.vquantizer.get_code(x)
 
     def forward(self, x, quantize=False):
         qe = self.encode(x)[0]
