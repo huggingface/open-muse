@@ -73,8 +73,8 @@ class VectorQuantizer(nn.Module):
 
     def compute_distances(self, hidden_states):
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
-        hidden_states_flattended = hidden_states.reshape((-1, self.embedding_dim))
-        return torch.cdist(hidden_states_flattended, self.embedding.weight)
+        hidden_states_flattended = hidden_states.reshape((-1, self.codebook_dim))
+        return torch.cdist(hidden_states_flattended, self.codebook.weight)
 
     def get_codebook_entry(self, indices):
         # indices are expected to be of shape (batch, num_tokens)
