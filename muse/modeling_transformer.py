@@ -1117,7 +1117,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             is_final_block = i == len(block_out_channels) - 1
             input_channel = reversed_block_out_channels[i]
             output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
-            prev_output_channels = output_channels if i != 0 else 0
+            prev_output_channels = input_channel if i != 0 else 0
             self.up_blocks.append(
                 UpsampleBlock(
                     input_channels=input_channel,
