@@ -18,6 +18,6 @@ __version__ = "0.0.1"
 from .modeling_maskgit_vqgan import MaskGitVQGAN
 from .modeling_movq import MOVQ
 from .modeling_taming_vqgan import VQGANModel
-from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
+from .modeling_transformer import MaskGitTransformer, MaskGiTUViT, MaskGiTMaxViT
 from .pipeline_muse import PipelineMuse
 from .sampling import get_mask_chedule

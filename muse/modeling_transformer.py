@@ -1381,6 +1381,7 @@ def MBConv(
     shrinkage_rate = 0.25,
     dropout = 0.,
 ):
+    print(f"dimin: {dim_in} dim_out: {dim_out}")
     hidden_dim = int(expansion_rate * dim_out)
     stride = 2 if downsample else 1
 
@@ -1404,7 +1405,7 @@ def MBConv(
 class MaxVitAttention(Attention):
     def __init__(self, hidden_size, num_heads, window_size=7, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
         super().__init__(hidden_size, num_heads, encoder_hidden_size=encoder_hidden_size, attention_dropout=attention_dropout, use_bias=use_bias)
-        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.heads)
+        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.num_heads)
 
         # TODO: Maybe make this more comprehensible. This is basically positional embeddings for our grid
         pos = torch.arange(window_size)
@@ -1442,7 +1443,7 @@ class MaxVitAttention(Attention):
         batch, height, width, window_height, window_width, _ = hidden_states.shape
         # flatten
         x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
-        out = super().forward(x, encoder_attention_mask=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask)
+        out = super().forward(x, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask)
         out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
 
         # combine heads out
@@ -1452,6 +1453,8 @@ class MaxVitBlock(nn.Module):
     def __init__(self, stage_dim_in, layer_dim, norm_cls=LayerNorm, window_size=7, mbconv_expansion_rate=4, mbconv_shrinkage_rate=0.25, is_first=False, dropout=0.0,\
                 num_heads=3):
         super().__init__()
+        print('maxvit block')
+        print(stage_dim_in, layer_dim)
         self.mb_conv = MBConv(
             stage_dim_in,
             layer_dim,
@@ -1572,7 +1575,8 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
         )
 
         self.layers = nn.ModuleList([])
-
+        print(f"dim_conv_stem: {dim_conv_stem}")
+        print(block_out_channels)
         # iterate through stages
 
         for i in range(len(block_out_channels)):
@@ -1580,7 +1584,7 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
             for stage_ind in range(layer_depth):
                 is_first = stage_ind == 0
                 output_channels = block_out_channels[i]
-                stage_dim_in = hidden_conv_stem if is_first else output_channels
+                stage_dim_in = dim_conv_stem if is_first else output_channels
 
                 block = MaxVitBlock(stage_dim_in, output_channels, norm_cls=norm_cls, window_size=window_size, mbconv_expansion_rate=mbconv_shrinkage_rate,\
                                     mbconv_shrinkage_rate=mbconv_shrinkage_rate, is_first=is_first, dropout=attention_dropout, num_heads=num_heads)
