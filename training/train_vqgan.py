@@ -445,7 +445,7 @@ def main():
             pixel_values, _ = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
-            generator_step = ((i // config.training.gradient_accumulation_steps) % 2) == 0
+            generator_step = ((i // config.training.gradient_accumulation_steps) % 2) == 0 and i > config.training.discriminator_warmup
             # TODO:
             # Add entropy to maximize codebook usage
             # Train Step

@@ -92,4 +92,4 @@ training:
     timm_discr_offset: 0
     vae_loss: "l2"
     num_validation_log: 4
-
+    discriminator_warmup: 10000
