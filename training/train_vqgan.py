@@ -446,7 +446,8 @@ def main():
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
             generator_step = ((i // config.training.gradient_accumulation_steps) % 2) == 0
-
+            # TODO:
+            # Add entropy to maximize codebook usage
             # Train Step
             # The behavior of accelerator.accumulate is to 
             # 1. Check if gradients are synced(reached gradient-accumulation_steps)

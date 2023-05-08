@@ -1,0 +1,102 @@
+wandb:
+  entity: null
+  run_id: i5c472xp
+experiment:
+  project: muse
+  name: imagenet-text2image
+  output_dir: imagenet-text2image
+  max_train_examples: 1281167
+  max_eval_examples: 12800
+  save_every: 1000
+  eval_every: 1000
+  generate_every: 1000
+  log_every: 50
+  log_grad_norm_every: 500
+  resume_from_checkpoint: false
+  resume_lr_scheduler: true
+  logging_dir: imagenet-text2image\logs
+model:
+  vq_model:
+    pretrained: openMUSE/maskgit-vqgan-imagenet-f16-256
+    type: maskgit_vqgan
+  architecture: maxvit
+  text_encoder:
+    type: t5
+    pretrained: google/t5-v1_1-large
+  transformer:
+    vocab_size: 1040
+    max_position_embeddings: 256
+    hidden_size: 1024
+    num_hidden_layers: 24
+    num_attention_heads: 16
+    intermediate_size: 4096
+    add_cross_attention: true
+    encoder_hidden_size: 1024
+    project_encoder_hidden_states: false
+    codebook_size: 1024
+    num_vq_tokens: 256
+    initializer_range: 0.02
+    norm_type: rmsnorm
+    layer_norm_eps: 1.0e-06
+    use_normformer: false
+    use_encoder_layernorm: true
+    use_mlm_layer: true
+    use_mlm_layernorm: true
+    use_bias: false
+    hidden_dropout: 0.0
+    attention_dropout: 0.0
+  gradient_checkpointing: true
+  enable_xformers_memory_efficient_attention: true
+dataset:
+  type: classification
+  params:
+    train_shards_path_or_url: pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-train-{000000..000320}.tar
+      -
+    eval_shards_path_or_url: pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar
+      -
+    imagenet_class_mapping_path: /fsx/suraj/data/imagenet-class-mapping.json
+    dataset.params.validation_prompts_file: null
+    batch_size: ${training.batch_size}
+    shuffle_buffer_size: 1000
+    num_workers: 2
+    resolution: 256
+    pin_memory: true
+    persistent_workers: true
+  preprocessing:
+    max_seq_length: 16
+    resolution: 256
+    center_crop: true
+    random_flip: false
+optimizer:
+  name: adamw
+  params:
+    learning_rate: 0.0001
+    scale_lr: false
+    beta1: 0.9
+    beta2: 0.999
+    weight_decay: 0.01
+    epsilon: 1.0e-08
+lr_scheduler:
+  scheduler: constant_with_warmup
+  params:
+    learning_rate: ${optimizer.params.learning_rate}
+    warmup_steps: 2000
+training:
+  gradient_accumulation_steps: 1
+  batch_size: 64
+  mixed_precision: 'no'
+  enable_tf32: true
+  use_ema: false
+  seed: 9345104
+  max_train_steps: 200000
+  overfit_one_batch: false
+  cond_dropout_prob: 0.1
+  min_masking_rate: 0.0
+  label_smoothing: 0.0
+  max_grad_norm: null
+  guidance_scale: 2.0
+  generation_timesteps: 4
+  use_soft_code_target: false
+  use_stochastic_code: false
+  soft_code_temp: 1.0
+config: configs/imagenet_text2image_maxvit.yaml
