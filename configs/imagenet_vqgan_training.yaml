@@ -26,9 +26,9 @@ model:
 dataset:
     type: "classification"
     params:
-        train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-train-{000000..000320}.tar -"
-        eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/imagenet-wds/imagenet-val-{000000..000012}.tar -"
-        imagenet_class_mapping_path: "/fsx/suraj/data/imagenet-class-mapping.json"
+        train_shards_path_or_url: "pipe:aws s3 cp s3://s-laion/muse-imagenet/imagenet-train-{000000..000320}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://s-laion/muse-imagenet/imagenet-val-{000000..000012}.tar -"
+        imagenet_class_mapping_path: "/fsx/Isamu/data/imagenet-class-mapping.json"
         dataset.params.validation_prompts_file: null
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
