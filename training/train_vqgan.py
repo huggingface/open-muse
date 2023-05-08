@@ -142,6 +142,35 @@ def _map_layer_to_idx(backbone, layers, offset=0):
             )
     return idx
 
+# Inspired by https://arxiv.org/abs/2111.01007v1 Projected Gan where instead of giving the discriminator/generator the input image, we give hierarchical features
+# from a timm model
+class MultiLayerTimmModel(torch.nn.Module):
+    def __init__(self, model, input_shape=(3, 224, 224)):
+        super().__init__()
+        self.model = model
+        self.input_shape = input_shape
+        self.image_sizes = []
+        self.max_feats = self.get_layer_widths(input_shape)
+        self.max_feature_sizes = (self.max_feats, self.max_feats)
+    def get_layer_widths(self, shape=(3, 224, 224)):
+        output = []
+        batch_size = 1
+        input = torch.autograd.Variable(torch.rand(batch_size, *shape))
+        output_feats = self.model(input)
+        for output_feat in output_feats:
+            output.append(output_feat.shape[-1])
+        max_feats = max(output)
+        return max_feats
+    def forward(self, images):
+        features = self.model(images)
+        output_features = []
+        for feature in features:
+            if feature.shape[-1] == self.max_feats:
+                output_features.append(feature)
+            else:
+                output_features.append(F.interpolate(feature, size=self.max_feature_sizes))
+        return torch.cat(output_features, dim=1)
+
 def get_perceptual_loss(pixel_values, fmap, timm_discriminator):
     img_timm_discriminator_input = pixel_values
     fmap_timm_discriminator_input = fmap
