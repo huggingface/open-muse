@@ -142,7 +142,7 @@ def _map_layer_to_idx(backbone, layers, offset=0):
             )
     return idx
 
-# Inspired by https://arxiv.org/abs/2111.01007v1 Projected Gan where instead of giving the discriminator/generator the input image, we give hierarchical features
+# From https://arxiv.org/abs/2111.01007v1 Projected Gan where instead of giving the discriminator/generator the input image, we give hierarchical features
 # from a timm model
 class MultiLayerTimmModel(torch.nn.Module):
     def __init__(self, model, input_shape=(3, 224, 224)):
