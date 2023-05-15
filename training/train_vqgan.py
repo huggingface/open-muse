@@ -581,12 +581,9 @@ def main():
                     if avg_gen_loss is not None:
                         logs["step_gen_loss"] = avg_gen_loss.item()
                     accelerator.log(logs, step=global_step + 1)
-                    print(global_step)
-                    print(global_step+1)
-
                     logger.info(
                         f"Step: {global_step + 1} "
-                        f"Generator Loss: {avg_gen_loss and avg_gen_loss.item():0.4f} "
+                        f"Generator Loss: {'NA' if avg_gen_loss is None else avg_gen_loss.item():0.4f} "
                         f"Discriminator Loss: {avg_discr_loss.item():0.4f} "
                         f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
