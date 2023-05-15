@@ -522,6 +522,7 @@ def main():
                     loss += adaptive_weight*gen_loss
                     # Gather thexd losses across all processes for logging (if we use distributed training).
                     avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+                    print(avg_gen_loss)
                     accelerator.backward(loss)
 
                     if config.training.max_grad_norm is not None and accelerator.sync_gradients:
@@ -548,6 +549,7 @@ def main():
                     gp = gradient_penalty(pixel_values, real)
                     loss += gp
                     avg_discr_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+                    print(avg_discr_loss)
                     accelerator.backward(loss)
 
                     if config.training.max_grad_norm is not None and accelerator.sync_gradients:
