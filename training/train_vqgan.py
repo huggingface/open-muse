@@ -482,6 +482,7 @@ def main():
             # The behavior of accelerator.accumulate is to 
             # 1. Check if gradients are synced(reached gradient-accumulation_steps)
             # 2. If so sync gradients by stopping the not syncing process
+            fmap, _, commit_loss = model.encode(pixel_values, return_loss=True)
             if generator_step:
                 with accelerator.accumulate(model):
                     if optimizer_type == "fused_adamw":
@@ -490,7 +491,6 @@ def main():
                         optimizer.zero_grad(set_to_none=True)
                     # encode images to the latent space and get the commit loss from vq tokenization
 
-                    fmap, _, commit_loss = model.encode(pixel_values, return_loss=True)
                     fmap = model.decode(fmap)
                     # Return regular loss
                     # reconstruction loss. Pixel level differences between input vs output
