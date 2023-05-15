@@ -26,8 +26,8 @@ model:
 dataset:
     type: "classification"
     params:
-        train_shards_path_or_url: "/p/scratch/ccstdl/muse/muse-imagenet/imagenet-train-{000000..000320}.tar -"
-        eval_shards_path_or_url: "/p/scratch/ccstdl/muse/muse-imagenet/imagenet-val-{000000..000012}.tar -"
+        train_shards_path_or_url: "pipe:/p/scratch/ccstdl/muse/muse-imagenet/imagenet-train-{000000..000320}.tar"
+        eval_shards_path_or_url: "pipe:/p/scratch/ccstdl/muse/muse-imagenet/imagenet-val-{000000..000012}.tar"
         imagenet_class_mapping_path: "/p/scratch/ccstdl/muse/imagenet-class-mapping.json"
         dataset.params.validation_prompts_file: null
         batch_size: ${training.batch_size}
