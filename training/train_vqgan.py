@@ -498,6 +498,7 @@ def main():
             fmap = model.decode(fmap)
 
             if generator_step:
+                print("generator step")
                 with accelerator.accumulate(model):
                     # reconstruction loss. Pixel level differences between input vs output
                     if config.training.vae_loss == "l2":
@@ -536,6 +537,7 @@ def main():
                     ):
                         log_grad_norm(model, accelerator, global_step + 1)
             else:
+                print("discriminator step")
                 # Return discriminator loss
                 with accelerator.accumulate(discriminator):
                     fmap.detach_()
