@@ -581,6 +581,8 @@ def main():
                     if avg_gen_loss is not None:
                         logs["step_gen_loss"] = avg_gen_loss.item()
                     accelerator.log(logs, step=global_step + 1)
+                    print(global_step)
+                    print(global_step+1)
 
                     logger.info(
                         f"Step: {global_step + 1} "
