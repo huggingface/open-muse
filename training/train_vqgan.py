@@ -581,9 +581,7 @@ def main():
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
                     }
-                    print({
-
-                    })
+                    print(logs)
                     accelerator.log(logs, step=global_step + 1)
 
                     logger.info(
