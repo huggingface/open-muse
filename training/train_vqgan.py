@@ -46,6 +46,7 @@ except ImportError:
     is_apex_available = False
 import timm
 from einops import repeat, rearrange
+from tqdm import tqdm
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -470,7 +471,7 @@ def main():
     avg_gen_loss, avg_discr_loss = 0, 0
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
-        for i, batch in enumerate(train_dataloader):
+        for i, batch in tqdm(enumerate(train_dataloader)):
             pixel_values, _ = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
