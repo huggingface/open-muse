@@ -150,7 +150,7 @@ class ResnetBlock(nn.Module):
 
     def forward(self, hidden_states, quantized_states=None):
         residual = hidden_states
-        if quantized_states:
+        if quantized_states is not None:
             hidden_states = self.norm1(hidden_states, quantized_states)
         else:
             hidden_states = self.norm1(hidden_states)
@@ -158,7 +158,7 @@ class ResnetBlock(nn.Module):
         hidden_states = F.silu(hidden_states)
         hidden_states = self.conv1(hidden_states)
 
-        if quantized_states:
+        if quantized_states is not None:
             hidden_states = self.norm2(hidden_states, quantized_states)
         else:
             hidden_states = self.norm2(hidden_states)
@@ -190,7 +190,7 @@ class AttnBlock(nn.Module):
 
     def forward(self, hidden_states, quantized_states=None):
         residual = hidden_states
-        if quantized_states:
+        if quantized_states is not None:
             hidden_states = self.norm(hidden_states, quantized_states)
         else:
             hidden_states = self.norm(hidden_states)
@@ -446,7 +446,7 @@ class Decoder(nn.Module):
             hidden_states = block(hidden_states, quantized_states)
 
         # end
-        if quantized_states:
+        if quantized_states is not None:
             hidden_states = self.norm_out(hidden_states, quantized_states)
         else:
             hidden_states = self.norm_out(hidden_states)
