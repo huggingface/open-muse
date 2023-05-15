@@ -492,12 +492,13 @@ def main():
                     discr_optimizer.zero_grad()
                 else:
                     discr_optimizer.zero_grad(set_to_none=True)
+            # encode images to the latent space and get the commit loss from vq tokenization
+            # Return commit loss
             fmap, _, commit_loss = model.encode(pixel_values, return_loss=True)
+            fmap = model.decode(fmap)
+
             if generator_step:
                 with accelerator.accumulate(model):
-                    # encode images to the latent space and get the commit loss from vq tokenization
-                    fmap = model.decode(fmap)
-                    # Return regular loss
                     # reconstruction loss. Pixel level differences between input vs output
                     if config.training.vae_loss == "l2":
                         loss = F.mse_loss(pixel_values, fmap)
