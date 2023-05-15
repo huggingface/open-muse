@@ -468,7 +468,7 @@ def main():
     end = time.time()
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
-    avg_gen_loss, avg_discr_loss = 0, 0
+    avg_gen_loss, avg_discr_loss = None, None
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for i, batch in tqdm(enumerate(train_dataloader)):
@@ -498,7 +498,6 @@ def main():
             fmap = model.decode(fmap)
 
             if generator_step:
-                print("generator step")
                 with accelerator.accumulate(model):
                     # reconstruction loss. Pixel level differences between input vs output
                     if config.training.vae_loss == "l2":
@@ -521,8 +520,7 @@ def main():
                     loss += perceptual_loss
                     loss += adaptive_weight*gen_loss
                     # Gather thexd losses across all processes for logging (if we use distributed training).
-                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
-                    print(avg_gen_loss)
+                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).float().mean()
                     accelerator.backward(loss)
 
                     if config.training.max_grad_norm is not None and accelerator.sync_gradients:
@@ -538,7 +536,6 @@ def main():
                     ):
                         log_grad_norm(model, accelerator, global_step + 1)
             else:
-                print("discriminator step")
                 # Return discriminator loss
                 with accelerator.accumulate(discriminator):
                     fmap.detach_()
@@ -549,7 +546,6 @@ def main():
                     gp = gradient_penalty(pixel_values, real)
                     loss += gp
                     avg_discr_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
-                    print(avg_discr_loss)
                     accelerator.backward(loss)
 
                     if config.training.max_grad_norm is not None and accelerator.sync_gradients:
@@ -576,21 +572,19 @@ def main():
                         config.training.gradient_accumulation_steps * config.training.batch_size / batch_time_m.val
                     )
                     logs = {
-                        # "step_gen_loss": avg_gen_loss.item(),
-                        "step_gen_loss": avg_gen_loss,
-                        # "step_discr_loss": avg_discr_loss.item(),
-                        "step_discr_loss": avg_discr_loss,
+                        "step_discr_loss": avg_discr_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
                     }
-                    print(logs)
+                    if avg_gen_loss is not None:
+                        logs["step_gen_loss"] = avg_gen_loss.item()
                     accelerator.log(logs, step=global_step + 1)
 
                     logger.info(
                         f"Step: {global_step + 1} "
-                        f"Generator Loss: {avg_gen_loss.item():0.4f} "
+                        f"Generator Loss: {avg_gen_loss and avg_gen_loss.item():0.4f} "
                         f"Discriminator Loss: {avg_discr_loss.item():0.4f} "
                         f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
