@@ -520,7 +520,7 @@ def main():
                     loss += perceptual_loss
                     loss += adaptive_weight*gen_loss
                     # Gather thexd losses across all processes for logging (if we use distributed training).
-                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).float().mean()
+                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                     accelerator.backward(loss)
 
                     if config.training.max_grad_norm is not None and accelerator.sync_gradients:
@@ -566,20 +566,24 @@ def main():
                 # wait for both generator and discriminator to settle
                 batch_time_m.update(time.time() - end)
                 end = time.time()
-
                 # Log metrics
                 if (global_step + 1) % config.experiment.log_every == 0:
                     samples_per_second_per_gpu = (
                         config.training.gradient_accumulation_steps * config.training.batch_size / batch_time_m.val
                     )
                     logs = {
-                        "step_gen_loss": avg_gen_loss.item(),
-                        "step_discr_loss": avg_discr_loss.item(),
+                        # "step_gen_loss": avg_gen_loss.item(),
+                        "step_gen_loss": avg_gen_loss,
+                        # "step_discr_loss": avg_discr_loss.item(),
+                        "step_discr_loss": avg_discr_loss,
                         "lr": lr_scheduler.get_last_lr()[0],
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
                     }
+                    print({
+
+                    })
                     accelerator.log(logs, step=global_step + 1)
 
                     logger.info(
