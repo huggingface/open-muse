@@ -326,11 +326,11 @@ class MidBlock(nn.Module):
             zq_ch=zq_ch
         )
 
-    def forward(self, hidden_states):
-        hidden_states = self.block_1(hidden_states)
+    def forward(self, hidden_states, quantized_states=None):
+        hidden_states = self.block_1(hidden_states, quantized_states)
         if not self.no_attn:
-            hidden_states = self.attn_1(hidden_states)
-        hidden_states = self.block_2(hidden_states)
+            hidden_states = self.attn_1(hidden_states, quantized_states)
+        hidden_states = self.block_2(hidden_states, quantized_states)
         return hidden_states
 
 
