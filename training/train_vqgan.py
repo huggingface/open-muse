@@ -520,7 +520,7 @@ def main():
                     loss += perceptual_loss
                     loss += adaptive_weight*gen_loss
                     # Gather thexd losses across all processes for logging (if we use distributed training).
-                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+                    avg_gen_loss = accelerator.gather(loss.repeat(config.training.batch_size)).float().mean()
                     accelerator.backward(loss)
 
                     if config.training.max_grad_norm is not None and accelerator.sync_gradients:
