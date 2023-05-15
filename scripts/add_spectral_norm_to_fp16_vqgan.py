@@ -25,7 +25,7 @@ def add_spectral_norm_to_vae(args):
         else:
             output_dict[key] = original_state_dict[key]
     vae_with_spectral.load_state_dict(output_dict, strict=False)
-    print(args.movq_vae_output_path)
+    print(f"Saving to {args.movq_vae_output_path}")
     vae_with_spectral.save_pretrained(args.movq_vae_output_path)
 
     # print(vae_with_spectral.decoder)
