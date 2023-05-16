@@ -12,8 +12,8 @@ set -x -e
 
 echo "START TIME: $(date)"
 
-MUSE_REPO=/fsx/Isamu/open-muse
-OUTPUT_DIR=/fsx/Isamu
+MUSE_REPO=/p/home/jusers/isozaki1/juwels/open-muse
+OUTPUT_DIR=/p/home/jusers/isozaki1/juwels
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
@@ -21,7 +21,7 @@ touch $LOG_PATH
 pushd $MUSE_REPO
 
 CMD=" \
-    training/train_vqgan.py config=configs/imagenet_vqgan_training.yaml \
+    training/train_vqgan.py config=configs/imagenet_vqgan_training_jewels_f16_vqgan.yaml \
     wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
