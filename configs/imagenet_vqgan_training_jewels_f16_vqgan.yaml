@@ -71,7 +71,7 @@ lr_scheduler:
 training:
     gradient_accumulation_steps: 2
     batch_size: 8
-    mixed_precision: "bf16"
+    mixed_precision: "no"
     enable_tf32: True
     use_ema: False
     seed: 9345104
