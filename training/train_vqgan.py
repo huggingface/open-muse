@@ -494,8 +494,7 @@ def main():
                     discr_optimizer.zero_grad(set_to_none=True)
             # encode images to the latent space and get the commit loss from vq tokenization
             # Return commit loss
-            fmap, _, commit_loss = model.encode(pixel_values, return_loss=True)
-            fmap = model.decode(fmap)
+            fmap, _, _, commit_loss = model(pixel_values, return_loss=True)
 
             if generator_step:
                 with accelerator.accumulate(model):
