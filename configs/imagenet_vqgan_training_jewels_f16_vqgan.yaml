@@ -7,9 +7,9 @@ experiment:
     output_dir: "imagenet-vqgan-training"
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
-    save_every: 1000
+    save_every: 1
     eval_every: 1000
-    generate_every: 1000
+    generate_every: 1
     log_every: 30
     log_grad_norm_every: 500
     resume_from_checkpoint: False
