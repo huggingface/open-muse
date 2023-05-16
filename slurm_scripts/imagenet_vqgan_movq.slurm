@@ -2,7 +2,7 @@
 #SBATCH --job-name=vqgan_testing
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
-#SBATCH --cpus-per-task=96
+#SBATCH --cpus-per-task=48
 #SBATCH --gres=gpu:4
 #SBATCH --exclusive
 #SBATCH -A cstdl
@@ -21,6 +21,7 @@ LOG_PATH=$OUTPUT_DIR/main_log.txt
 mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
+source /p/home/jusers/isozaki1/juwels/miniconda3/etc/profile.d/conda.sh
 conda activate muse
 CMD=" \
     training/train_vqgan.py config=configs/imagenet_vqgan_training_jewels_f16_vqgan.yaml \
