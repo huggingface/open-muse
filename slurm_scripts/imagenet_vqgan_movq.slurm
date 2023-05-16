@@ -8,7 +8,7 @@
 #SBATCH -A cstdl
 #SBATCH --partition booster
 #SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=12:00:00
+#SBATCH --time=6:00:00
 
 set -x -e
 
@@ -28,7 +28,6 @@ CMD=" \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \
-    training.batch_size=16 \
     "
 
 GPUS_PER_NODE=4
