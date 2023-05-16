@@ -21,7 +21,7 @@ LOG_PATH=$OUTPUT_DIR/main_log.txt
 mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
-
+conda activate muse
 CMD=" \
     training/train_vqgan.py config=configs/imagenet_vqgan_training_jewels_f16_vqgan.yaml \
     wandb.entity=isamu \
