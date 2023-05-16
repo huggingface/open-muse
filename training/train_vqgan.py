@@ -584,19 +584,18 @@ def main():
                     logger.info(
                         f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
                         f"Batch (t): {batch_time_m.val:0.4f} "
-                        f"LR: {lr_scheduler.get_last_lr()[0]:0.6f} "
+                        f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                         f"Step: {global_step + 1} "
                         f"Discriminator Loss: {avg_discr_loss.item():0.4f} "
+                        "No Generator Loss yet " if avg_gen_loss is None else f"Generator Loss: {avg_gen_loss.item():0.4f} "
                     )
-                    if avg_gen_loss is not None:
-                        logger.info(f"Generator Loss: {avg_gen_loss.item():0.4f} ")
 
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
                     data_time_m.reset()
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
-                    save_checkpoint(model, config, accelerator, global_step + 1)
+                    save_checkpoint(model, discriminator, config, accelerator, global_step + 1)
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
@@ -613,7 +612,7 @@ def main():
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
-    save_checkpoint(model, config, accelerator, global_step)
+    save_checkpoint(model, discriminator, config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
