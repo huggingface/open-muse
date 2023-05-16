@@ -3,10 +3,12 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=96
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:4
 #SBATCH --exclusive
-#SBATCH --partition=g40
-#SBATCH --output=/fsx/Isamu/logs/maskgit-imagenet/%x-%j.out
+#SBATCH -A cstdl
+#SBATCH --partition booster
+#SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
+#SBATCH --time=24:00:00
 
 set -x -e
 
@@ -26,10 +28,10 @@ CMD=" \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \
-    training.batch_size=160 \
+    training.batch_size=16 \
     "
 
-GPUS_PER_NODE=8
+GPUS_PER_NODE=4
 NNODES=$SLURM_NNODES
 
 # so processes know who to talk to
