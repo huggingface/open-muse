@@ -507,10 +507,8 @@ def main():
                     perceptual_loss = get_perceptual_loss(pixel_values, fmap, timm_discriminator)
                     # generator loss
                     gen_loss = -discriminator(fmap).mean()
-                    last_dec_layer = model.decoder.conv_out.weight
-                    norm_grad_wrt_perceptual_loss = grad_layer_wrt_loss(
-                        perceptual_loss, last_dec_layer
-                    ).norm(p=2)
+                    last_dec_layer = accelerator.unwrap_model(model).decoder.conv_out.weight
+                    norm_grad_wrt_perceptual_loss = grad_layer_wrt_loss(perceptual_loss, last_dec_layer).norm(p=2)
                     norm_grad_wrt_gen_loss = grad_layer_wrt_loss(gen_loss, last_dec_layer).norm(p=2)
 
                     adaptive_weight = norm_grad_wrt_perceptual_loss/norm_grad_wrt_gen_loss.clamp(min=1e-8)
