@@ -640,7 +640,7 @@ def generate_images(model, original_images, accelerator, global_step):
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     enc_token_ids = torch.clamp(enc_token_ids, max=accelerator.unwrap_model(model).config.num_embeddings - 1)
-    images = model.decode_code(enc_token_ids)
+    images = accelerator.unwrap_model(model).decode_code(enc_token_ids)
     model.train()
 
     # Convert to PIL images
