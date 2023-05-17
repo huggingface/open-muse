@@ -2,13 +2,13 @@
 #SBATCH --job-name=vqgan_testing
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
-#SBATCH --cpus-per-task=48
-#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=96
+#SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH -A cstdl
-#SBATCH --partition develbooster
+#SBATCH --partition booster
 #SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=2:00:00
+#SBATCH --time=8:00:00
 
 set -x -e
 
