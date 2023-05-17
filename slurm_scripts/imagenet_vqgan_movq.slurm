@@ -8,7 +8,7 @@
 #SBATCH -A cstdl
 #SBATCH --partition develbooster
 #SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=6:00:00
+#SBATCH --time=4:00:00
 
 set -x -e
 
