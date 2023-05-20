@@ -6,9 +6,9 @@
 #SBATCH --gres=gpu:4
 #SBATCH --exclusive
 #SBATCH -A cstdl
-#SBATCH --partition booster
+#SBATCH --partition develbooster
 #SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=6:00:00
+#SBATCH --time=2:00:00
 
 set -x -e
 
