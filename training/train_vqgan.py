@@ -48,7 +48,23 @@ import timm
 from einops import repeat, rearrange
 from tqdm import tqdm
 
+try:
+    import httplib  # python < 3.0
+except:
+    import http.client as httplib
 
+
+def have_internet() -> bool:
+    conn = httplib.HTTPSConnection("8.8.8.8", timeout=5)
+    try:
+        conn.request("HEAD", "/")
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+print('---------------------------------------------------------------------------------------------')
+print(f"Have internet {have_internet()}")
 logger = get_logger(__name__, log_level="INFO")
 
 
