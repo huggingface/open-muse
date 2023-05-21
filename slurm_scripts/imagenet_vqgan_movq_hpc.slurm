@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=96
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
-#SBATCH -A cstdl
+#SBATCH -A laion
 #SBATCH --partition g40
 #SBATCH --output=/fsx/Isamu/%x-%j.out
 #SBATCH --time=12:00:00
