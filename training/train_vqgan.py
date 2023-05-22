@@ -54,17 +54,6 @@ except:
     import http.client as httplib
 
 
-def have_internet() -> bool:
-    conn = httplib.HTTPSConnection("8.8.8.8", timeout=5)
-    try:
-        conn.request("HEAD", "/")
-        return True
-    except Exception:
-        return False
-    finally:
-        conn.close()
-print('---------------------------------------------------------------------------------------------')
-print(f"Have internet {have_internet()}")
 logger = get_logger(__name__, log_level="INFO")
 
 
@@ -292,6 +281,7 @@ def main():
             id=run_id,
             resume=resume_wandb_run,
             entity=config.wandb.get("entity", None),
+            mode=config.wandb.get("mode", None),
             config_exclude_keys=[],
         )
         wandb_config = {k: v for k, v in flatten_omega_conf(config, resolve=True)}
