@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from typing import List, Optional, Union
 
 import numpy as np
@@ -27,14 +28,14 @@ from transformers import (
 from .modeling_maskgit_vqgan import MaskGitVQGAN
 from .modeling_movq import MOVQ
 from .modeling_taming_vqgan import VQGANModel
-from .modeling_transformer import MaskGitTransformer
+from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
 
 
 class PipelineMuse:
     def __init__(
         self,
         vae: Union[VQGANModel, MOVQ, MaskGitVQGAN],
-        transformer: MaskGitTransformer,
+        transformer: Union[MaskGitTransformer, MaskGiTUViT],
         is_class_conditioned: bool = False,
         text_encoder: Optional[Union[T5EncoderModel, CLIPTextModel]] = None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
@@ -65,7 +66,7 @@ class PipelineMuse:
         temperature: float = 1.0,
         topk_filter_thres: float = 0.9,
         num_images_per_prompt: int = 1,
-        use_maskgit_generate: bool = False,
+        use_maskgit_generate: bool = True,
         generator: Optional[torch.Generator] = None,
     ):
         if text is None and class_ids is None:
@@ -87,7 +88,11 @@ class PipelineMuse:
                 text = [text]
 
             input_ids = self.tokenizer(
-                text, return_tensors="pt", padding="max_length", truncation=True, max_length=16
+                text,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=self.tokenizer.model_max_length,
             ).input_ids  # TODO: remove hardcode
             input_ids = input_ids.to(self.device)
             encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
@@ -160,16 +165,23 @@ class PipelineMuse:
             tokenizer_args = None
 
             if not is_class_conditioned:
-                text_encoder_args = {"pretrained_model_name_or_path": text_encoder_path, "subfolder": "text_encoder"}
-                tokenizer_args = {"pretrained_model_name_or_path": text_encoder_path, "subfolder": "tokenizer"}
+                text_encoder_args = {"pretrained_model_name_or_path": model_name_or_path, "subfolder": "text_encoder"}
+                tokenizer_args = {"pretrained_model_name_or_path": model_name_or_path, "subfolder": "text_encoder"}
 
-            vae_args = {"pretrained_model_name_or_path": vae_path, "subfolder": "vae"}
-            transformer_args = {"pretrained_model_name_or_path": transformer_path, "subfolder": "transformer"}
+            vae_args = {"pretrained_model_name_or_path": model_name_or_path, "subfolder": "vae"}
+            transformer_args = {"pretrained_model_name_or_path": model_name_or_path, "subfolder": "transformer"}
 
         if not is_class_conditioned:
             text_encoder = T5EncoderModel.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
-        transformer = MaskGitTransformer.from_pretrained(**transformer_args)
+
+        transformer_config = MaskGitTransformer.load_config(**transformer_args)
+        if transformer_config["_class_name"] == "MaskGitTransformer":
+            transformer = MaskGitTransformer.from_pretrained(**transformer_args)
+        elif transformer_config["_class_name"] == "MaskGiTUViT":
+            transformer = MaskGiTUViT.from_pretrained(**transformer_args)
+        else:
+            raise ValueError(f"Unknown Transformer class: {transformer_config['_class_name']}")
 
         # Hacky way to load different VQ models
         vae_config = MaskGitVQGAN.load_config(**vae_args)
@@ -189,3 +201,18 @@ class PipelineMuse:
             tokenizer=tokenizer,
             is_class_conditioned=is_class_conditioned,
         )
+
+    def save_pretrained(
+        self,
+        save_directory: Union[str, os.PathLike],
+    ) -> None:
+        """
+        Save the pipeline's model and tokenizer to the specified directory.
+        """
+
+        if not self.is_class_conditioned:
+            self.text_encoder.save_pretrained(os.path.join(save_directory, "text_encoder"))
+            self.tokenizer.save_pretrained(os.path.join(save_directory, "text_encoder"))
+
+        self.vae.save_pretrained(os.path.join(save_directory, "vae"))
+        self.transformer.save_pretrained(os.path.join(save_directory, "transformer"))
