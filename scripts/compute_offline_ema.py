@@ -36,7 +36,7 @@ def offline_ema(args):
     for step in range(0, end_step):
         if (step + 1) % checkpoint_interval == 0:
             print(f"Loading checkpoint {step + 1}...")
-            model.from_pretrained(Path(checkpoint_dir_path) / f"checkpoint-{step + 1}" / "unwrapped_model")
+            model = model_cls.from_pretrained(Path(checkpoint_dir_path) / f"checkpoint-{step + 1}" / "unwrapped_model")
             model.to(device)
 
         ema_model.step(model.parameters())
