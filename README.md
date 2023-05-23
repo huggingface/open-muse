@@ -22,7 +22,7 @@ First create a virtual environment and install the repo using:
 
 ```bash
 git clone https://github.com/huggingface/open-muse.git
-cd muse
+cd open-muse
 pip install -e ".[extra]"
 ```
 
