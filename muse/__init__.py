@@ -15,6 +15,7 @@
 
 __version__ = "0.0.1"
 
+from .modeling_ema import EMAModel
 from .modeling_maskgit_vqgan import MaskGitVQGAN
 from .modeling_movq import MOVQ
 from .modeling_paella_vq import PaellaVQModel
