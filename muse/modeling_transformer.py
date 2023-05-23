@@ -1244,6 +1244,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if isinstance(module, (DownsampleBlock, UpsampleBlock)):
             module.gradient_checkpointing = value
 
+    def generate(self, *args, **kwargs):
+        pass
+
     def generate2(
         self,
         class_ids: torch.LongTensor = None,
