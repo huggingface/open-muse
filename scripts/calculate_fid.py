@@ -1,8 +1,9 @@
-from argparse import ArgumentParser
 import os
+from argparse import ArgumentParser
+
 import pandas as pd
 from PIL import Image
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
 try:
@@ -13,20 +14,21 @@ except:
 
 from muse import PipelineMuse
 
+
 class Flickr8kDataset(Dataset):
     def __init__(self, root_dir, captions_file):
         self.root_dir = root_dir
         self.captions_file = captions_file
-        
-        df = pd.read_csv(captions_file, sep = '\t', names=["image_name", "caption"])
-        df['image_name'] = df['image_name'].apply(lambda name: name.split("#")[0])
-        
-        self.images = df['image_name'].unique().tolist()
-        self.captions = [df[df['image_name'] == name]["caption"].tolist()[0] for name in self.images]
-    
+
+        df = pd.read_csv(captions_file, sep="\t", names=["image_name", "caption"])
+        df["image_name"] = df["image_name"].apply(lambda name: name.split("#")[0])
+
+        self.images = df["image_name"].unique().tolist()
+        self.captions = [df[df["image_name"] == name]["caption"].tolist()[0] for name in self.images]
+
     def __len__(self):
         return len(self.images)
-    
+
     def __getitem__(self, idx):
         return self.images[idx], self.captions[idx]
 
@@ -36,26 +38,28 @@ def generate_and_save_images(args):
     Generate images from captions and save them to disk.
     """
     os.makedirs(args.save_path, exist_ok=True)
-    
+
     print("Loading pipe")
     pipeline = PipelineMuse.from_pretrained(args.model_name_or_path).to(args.device)
     pipeline.transformer.enable_xformers_memory_efficient_attention()
-    
+
     print("Loading data")
     dataset = Flickr8kDataset(args.dataset_root, args.dataset_captions_file)
     dataloader = DataLoader(dataset, batch_size=args.batch_size)
-    
+
     print("Generating images")
     all_images = []
     all_image_names = []
     for batch in tqdm(dataloader):
         image_names = batch[0]
         text = batch[1]
-        images = pipeline(text, timesteps=args.timesteps, guidance_scale=args.guidance_scale, temperature=args.temperature)
-        
+        images = pipeline(
+            text, timesteps=args.timesteps, guidance_scale=args.guidance_scale, temperature=args.temperature
+        )
+
         all_images += images
         all_image_names += list(image_names)
-    
+
     for image, image_name in zip(all_images, all_image_names):
         image.save(os.path.join(args.save_path, image_name))
 
@@ -67,6 +71,7 @@ def main(args):
     print("computing FiD")
     score_clean = fid.compute_fid(real_images, generated_images, mode="clean", num_workers=0)
     print(f"clean-fid score is {score_clean:.3f}")
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
