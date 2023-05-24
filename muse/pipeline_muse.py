@@ -60,6 +60,7 @@ class PipelineMuse:
     def __call__(
         self,
         text: Optional[Union[str, List[str]]] = None,
+        negative_text: Optional[Union[str, List[str]]] = None,
         class_ids: Optional[Union[int, List[int]]] = None,
         timesteps: int = 8,
         guidance_scale: float = 8.0,
@@ -98,11 +99,37 @@ class PipelineMuse:
             input_ids = input_ids.to(self.device)
             encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
 
+            if negative_text is not None:
+                if isinstance(negative_text, str):
+                    negative_text = [negative_text]
+
+                negative_input_ids = self.tokenizer(
+                    negative_text,
+                    return_tensors="pt",
+                    padding="max_length",
+                    truncation=True,
+                    max_length=self.tokenizer.model_max_length,
+                ).input_ids
+                negative_input_ids = negative_input_ids.to(self.device)
+                negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
+            else:
+                negative_encoder_hidden_states = None
+
             # duplicate text embeddings for each generation per prompt, using mps friendly method
             bs_embed, seq_len, _ = encoder_hidden_states.shape
             encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
             encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
-            model_inputs = {"encoder_hidden_states": encoder_hidden_states}
+            if negative_encoder_hidden_states is not None:
+                bs_embed, seq_len, _ = negative_encoder_hidden_states.shape
+                negative_encoder_hidden_states = negative_encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+                negative_encoder_hidden_states = negative_encoder_hidden_states.view(
+                    bs_embed * num_images_per_prompt, seq_len, -1
+                )
+
+            model_inputs = {
+                "encoder_hidden_states": encoder_hidden_states,
+                "negative_embeds": negative_encoder_hidden_states,
+            }
 
         generate = self.transformer.generate
         if use_maskgit_generate:

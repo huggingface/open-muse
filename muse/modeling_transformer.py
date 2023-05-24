@@ -916,6 +916,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
@@ -948,7 +949,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                if negative_embeds is None:
+                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                else:
+                    uncond_encoder_states = negative_embeds
+
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
                 cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
@@ -1251,6 +1256,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
@@ -1283,7 +1289,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                if negative_embeds is None:
+                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                else:
+                    uncond_encoder_states = negative_embeds
+
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
                 cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
