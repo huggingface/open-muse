@@ -68,6 +68,7 @@ class PipelineMuse:
         num_images_per_prompt: int = 1,
         use_maskgit_generate: bool = True,
         generator: Optional[torch.Generator] = None,
+        use_fp16: bool = False,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -107,14 +108,15 @@ class PipelineMuse:
         if use_maskgit_generate:
             generate = self.transformer.generate2
 
-        generated_tokens = generate(
-            **model_inputs,
-            timesteps=timesteps,
-            guidance_scale=guidance_scale,
-            temperature=temperature,
-            topk_filter_thres=topk_filter_thres,
-            generator=generator,
-        )
+        with torch.autocast("cuda", enabled=use_fp16):
+            generated_tokens = generate(
+                **model_inputs,
+                timesteps=timesteps,
+                guidance_scale=guidance_scale,
+                temperature=temperature,
+                topk_filter_thres=topk_filter_thres,
+                generator=generator,
+            )
 
         images = self.vae.decode_code(generated_tokens)
 
