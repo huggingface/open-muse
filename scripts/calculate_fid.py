@@ -2,7 +2,7 @@ import os
 from argparse import ArgumentParser
 
 import pandas as pd
-from PIL import Image
+import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -46,22 +46,23 @@ def generate_and_save_images(args):
     print("Loading data")
     dataset = Flickr8kDataset(args.dataset_root, args.dataset_captions_file)
     dataloader = DataLoader(dataset, batch_size=args.batch_size)
+    generator = torch.Generator(args.device).manual_seed(args.seed)
 
     print("Generating images")
-    all_images = []
-    all_image_names = []
     for batch in tqdm(dataloader):
         image_names = batch[0]
         text = batch[1]
+
         images = pipeline(
-            text, timesteps=args.timesteps, guidance_scale=args.guidance_scale, temperature=args.temperature
+            text,
+            timesteps=args.timesteps,
+            guidance_scale=args.guidance_scale,
+            temperature=args.temperature,
+            generator=generator,
         )
 
-        all_images += images
-        all_image_names += list(image_names)
-
-    for image, image_name in zip(all_images, all_image_names):
-        image.save(os.path.join(args.save_path, image_name))
+        for image_name, image in zip(image_names, images):
+            image.save(os.path.join(args.save_path, f"{image_name}"))
 
 
 def main(args):
@@ -84,6 +85,7 @@ if __name__ == "__main__":
     parser.add_argument("--guidance_scale", type=float, default=8.0)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--seed", type=int, default=2028)
 
     args = parser.parse_args()
     main(args)
