@@ -130,7 +130,9 @@ class GlobalResponseNorm(nn.Module):
 
 
 class ResBlock(nn.Module):
-    def __init__(self, channels, skip_channels=None, kernel_size=3, dropout=0.0, use_bias=False):
+    def __init__(
+        self, channels, skip_channels=None, kernel_size=3, dropout=0.0, norm_type="layernorm", use_bias=False
+    ):
         super().__init__()
         self.depthwise = nn.Conv2d(
             channels + skip_channels,
@@ -140,7 +142,7 @@ class ResBlock(nn.Module):
             groups=channels,
             bias=use_bias,
         )
-        self.norm = Norm2D(channels, eps=1e-6, use_bias=use_bias)
+        self.norm = Norm2D(channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias)
         self.channelwise = nn.Sequential(
             nn.Linear(channels, channels * 4, bias=use_bias),
             nn.GELU(),
@@ -167,6 +169,7 @@ class DownsampleBlock(nn.Module):
         num_res_blocks=4,
         kernel_size=3,
         dropout=0.0,
+        norm_type="layernorm",
         add_downsample=True,
         use_bias=False,
     ):
@@ -174,7 +177,7 @@ class DownsampleBlock(nn.Module):
         self.add_downsample = add_downsample
         if add_downsample:
             self.downsample = nn.Sequential(
-                Norm2D(input_channels, eps=1e-6, use_bias=use_bias),
+                Norm2D(input_channels, eps=1e-6, use_bias=use_bias, norm_type=norm_type),
                 nn.Conv2d(input_channels, output_channels, kernel_size=2, stride=2, bias=use_bias),
             )
             self.input_channels = output_channels
@@ -188,6 +191,7 @@ class DownsampleBlock(nn.Module):
                     skip_channels=skip_channels,
                     kernel_size=kernel_size,
                     dropout=dropout,
+                    norm_type=norm_type,
                     use_bias=use_bias,
                 )
                 for _ in range(num_res_blocks)
@@ -227,6 +231,7 @@ class UpsampleBlock(nn.Module):
         num_res_blocks=4,
         kernel_size=3,
         dropout=0.0,
+        norm_type="layernorm",
         add_upsample=True,
         use_bias=False,
     ):
@@ -242,6 +247,7 @@ class UpsampleBlock(nn.Module):
                     skip_channels=skip_channels if i == 0 else 0,
                     kernel_size=kernel_size,
                     dropout=dropout,
+                    norm_type=norm_type,
                     use_bias=use_bias,
                 )
                 for i in range(num_res_blocks)
@@ -1087,6 +1093,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     num_res_blocks=num_res_blocks,
                     kernel_size=3,
                     dropout=hidden_dropout,
+                    norm_type=norm_type,
                     add_downsample=not is_first_block,
                     use_bias=use_bias,
                 )
@@ -1131,6 +1138,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     num_res_blocks=num_res_blocks,
                     kernel_size=3,
                     dropout=hidden_dropout,
+                    norm_type=norm_type,
                     add_upsample=not is_final_block,
                     use_bias=use_bias,
                 )
