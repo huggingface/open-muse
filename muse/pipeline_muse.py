@@ -201,7 +201,12 @@ class PipelineMuse:
             transformer_args = {"pretrained_model_name_or_path": model_name_or_path, "subfolder": "transformer"}
 
         if not is_class_conditioned:
-            text_encoder = T5EncoderModel.from_pretrained(**text_encoder_args)
+            # Very hacky way to load different text encoders
+            # TODO: Add config for pipeline to specify text encoder
+            is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"]
+            text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
+            
+            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         transformer_config = MaskGitTransformer.load_config(**transformer_args)
