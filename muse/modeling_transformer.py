@@ -256,7 +256,7 @@ class UpsampleBlock(nn.Module):
 
         if add_upsample:
             self.upsample = nn.Sequential(
-                Norm2D(self.input_channels, eps=1e-6, use_bias=use_bias),
+                Norm2D(self.input_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias),
                 nn.ConvTranspose2d(self.input_channels, self.output_channels, kernel_size=2, stride=2, bias=use_bias),
             )
 
