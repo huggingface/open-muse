@@ -18,7 +18,7 @@ experiment:
 model:
     vq_model:
         type: "paella_vq"
-        pretrained: "openMUSE/paellavq-f4-8192-laion"
+        pretrained: "openMUSE/paellavq-f8-8192-laion"
     
     text_encoder:
         type: "clip"
