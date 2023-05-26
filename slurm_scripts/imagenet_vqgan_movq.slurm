@@ -15,7 +15,7 @@ set -x -e
 echo "START TIME: $(date)"
 
 MUSE_REPO=/p/home/jusers/isozaki1/juwels/open-muse
-OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/2_node_6_min
+OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/4_node_6_min
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
