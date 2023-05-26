@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=vqgan_testing
-#SBATCH --nodes=1
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
-#SBATCH --cpus-per-task=48
+#SBATCH --cpus-per-task=96
 #SBATCH --gres=gpu:4
 #SBATCH --exclusive
 #SBATCH -A cstdl
@@ -15,7 +15,7 @@ set -x -e
 echo "START TIME: $(date)"
 
 MUSE_REPO=/p/home/jusers/isozaki1/juwels/open-muse
-OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/1_node_6_min
+OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/2_node_6_min
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
