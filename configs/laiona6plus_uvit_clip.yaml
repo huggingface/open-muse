@@ -62,7 +62,7 @@ dataset:
     params:
         train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-data/{00000..01208}.tar -"
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/conceptual-captions/CC3M/valid/{01209..01210}.tar -"
-        validation_prompts_file: "validation_prompts/cc_validation_prompts.txt"
+        validation_prompts_file: "validation_prompts/dalle_mini_prompts.txt"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
         num_workers: 4
