@@ -32,7 +32,6 @@ def generate_and_log(args):
         transformer_path=args.transformer,
         is_class_conditioned=args.is_class_conditioned,
     ).to(device=args.device)
-    pipe.transformer.enable_xformers_memory_efficient_attention()
 
     imagenet_class_ids = list(range(1000))
     with open(args.imagenet_class_mapping_path) as f:

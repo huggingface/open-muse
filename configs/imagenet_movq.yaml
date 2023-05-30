@@ -42,7 +42,6 @@ model:
         attention_dropout: 0.0
 
     gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: True
 
 
 dataset:

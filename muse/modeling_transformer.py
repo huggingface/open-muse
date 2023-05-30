@@ -29,14 +29,6 @@ from tqdm import tqdm
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 from .sampling import cosine_schedule, gumbel_sample, mask_by_random_topk, top_k
 
-try:
-    import xformers.ops as xops
-
-    is_xformers_available = True
-except ImportError:
-    is_xformers_available = False
-
-
 # classifier free guidance functions
 
 
@@ -116,7 +108,7 @@ class Norm2D(nn.Module):
 
 
 class GlobalResponseNorm(nn.Module):
-    "Taken from https://github.com/facebookresearch/ConvNeXt-V2/blob/3608f67cc1dae164790c5d0aead7bf2d73d9719b/models/utils.py#L105"
+    # Taken from https://github.com/facebookresearch/ConvNeXt-V2/blob/3608f67cc1dae164790c5d0aead7bf2d73d9719b/models/utils.py#L105
 
     def __init__(self, dim):
         super().__init__()
@@ -309,21 +301,7 @@ class Attention(nn.Module):
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
-        self.use_memory_efficient_attention_xformers = False
-        self.xformers_attention_op = None
-
-    def set_use_memory_efficient_attention_xformers(
-        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
-    ):
-        if use_memory_efficient_attention_xformers and not is_xformers_available:
-            raise ImportError("Please install xformers to use memory efficient attention")
-        self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
-        self.xformers_attention_op = attention_op
-
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
-        if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
-            raise ValueError("Memory efficient attention does not yet support encoder attention mask")
-
         context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
         batch, q_seq_len, _ = hidden_states.shape
         kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
@@ -332,43 +310,21 @@ class Attention(nn.Module):
         key = self.key(context)
         value = self.value(context)
 
-        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)  # (B, nh, T, hs)
+        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)  # (B, nh, T, hs)
+        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim).permute(0, 2, 1, 3)  # (B, nh, T, hs)
 
-        if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op)
-            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
-        else:
-            attention_mask = None
-            if encoder_attention_mask is not None:
-                src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
-                attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
-            attn_output = self.attention(query, key, value, attention_mask)
+        attention_mask = None
+        if encoder_attention_mask is not None:
+            src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
+            attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
+
+        attn_output = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)  # (B, nh, T, hs)
+        attn_output = attn_output.permute(0, 2, 1, 3).view(
+            batch, q_seq_len, self.num_heads * self.head_dim
+        )  # (B, T, q_dim)
 
         attn_output = self.out(attn_output)
-        return attn_output
-
-    def attention(self, query, key, value, attention_mask=None):
-        batch, seq_len = query.shape[:2]
-        kv_seq_len = key.shape[1]
-        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
-
-        attn_weights = torch.baddbmm(
-            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
-            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
-            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
-            alpha=1 / self.scale_attn,
-        )
-        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
-        # Apply the attention mask
-        if attention_mask is not None:
-            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        # re-assemble all head outputs side by side
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         return attn_output
 
 

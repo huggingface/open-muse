@@ -41,7 +41,6 @@ def generate_and_save_images(args):
 
     print("Loading pipe")
     pipeline = PipelineMuse.from_pretrained(args.model_name_or_path).to(args.device)
-    pipeline.transformer.enable_xformers_memory_efficient_attention()
 
     print("Loading data")
     dataset = Flickr8kDataset(args.dataset_root, args.dataset_captions_file)

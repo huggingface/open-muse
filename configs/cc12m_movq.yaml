@@ -51,8 +51,6 @@ model:
         patch_size: 2
 
     gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: True
-
 
 dataset:
     type: "text2image"
