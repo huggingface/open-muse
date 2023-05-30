@@ -1,0 +1,116 @@
+wandb:
+  entity: null
+
+experiment:
+    project: "muse"
+    name: "cc12m"
+    output_dir: "cc12m"
+    max_train_examples: 8974320 # toal sucessfully downloaded images for laiona6plus
+    max_eval_examples: 8118
+    save_every: 1000
+    eval_every: 1000
+    generate_every: 1000
+    log_every: 50
+    log_grad_norm_every: 500
+    resume_from_checkpoint: False
+    resume_lr_scheduler: True
+
+model:
+    vq_model:
+        type: "paella_vq"
+        pretrained: "openMUSE/paellavq-f8-8192-laion"
+    
+    text_encoder:
+        type: "clip"
+        pretrained: "openMUSE/CLIP-ViT-L-14-DataComp.XL-s13B-b90K-penultimate"
+    
+    architecture: "uvit"
+
+    transformer:
+        vocab_size: 8256 # (8192 + 1 for <mask> = 8193 but 8256 is the next multiple of 8)
+        hidden_size: 1024
+        intermediate_size: 4096
+        num_hidden_layers: 22
+        num_attention_heads: 16
+        max_position_embeddings: 256
+        in_channels: 384
+        block_out_channels:
+            - 512
+            - 1024
+        num_res_blocks: 3
+        patch_size: 1
+        encoder_hidden_size: 768
+        add_cross_attention: True
+        project_encoder_hidden_states: False
+        codebook_size: 8192
+        num_vq_tokens: 1024
+        initializer_range: 0.02
+        norm_type: "rmsnorm"
+        layer_norm_eps: 1e-6
+        use_normformer: False
+        use_encoder_layernorm: True
+        use_bias: False
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
+        use_codebook_size_for_output: True
+
+    gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: True
+
+
+dataset:
+    type: "text2image"
+    params:
+        train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-data/{00000..01208}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-data/{01209..01210}.tar -"
+        validation_prompts_file: "validation_prompts/dalle_mini_prompts.txt"
+        batch_size: ${training.batch_size}
+        shuffle_buffer_size: 1000
+        num_workers: 4
+        resolution: 256
+        pin_memory: True
+        persistent_workers: True
+    preprocessing:
+        max_seq_length: 77
+        resolution: 256
+        center_crop: False
+        random_flip: False
+
+
+optimizer:
+    name: fused_adamw
+    params: # default adamw params
+        learning_rate: 5e-5
+        scale_lr: False # scale learning rate by total batch size
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.01
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "constant_with_warmup"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 2000
+
+
+training:
+    gradient_accumulation_steps: 2
+    batch_size: 64
+    mixed_precision: "no"
+    enable_tf32: True
+    use_ema: False
+    seed: 9345104
+    max_train_steps: 677300
+    overfit_one_batch: False
+    cond_dropout_prob: 0.1
+    min_masking_rate: 0.0
+    label_smoothing: 0.0
+    max_grad_norm: null
+    guidance_scale: 4.0
+    generation_timesteps: 12
+    # related to vae code sampling
+    use_soft_code_target: False
+    use_stochastic_code: False
+    soft_code_temp: 1.0
