@@ -54,7 +54,6 @@ model:
         use_codebook_size_for_output: True
 
     gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: True
 
 
 dataset:

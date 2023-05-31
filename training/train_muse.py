@@ -250,10 +250,6 @@ def main():
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
-    # Enable flash attention if asked
-    if config.model.enable_xformers_memory_efficient_attention:
-        model.enable_xformers_memory_efficient_attention()
-
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
     if optimizer_config.scale_lr:

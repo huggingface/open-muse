@@ -10,13 +10,6 @@ import torch.nn.functional as F
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
 
-try:
-    import xformers.ops as xops
-
-    is_xformers_available = True
-except ImportError:
-    is_xformers_available = False
-
 
 class SpatialNorm(nn.Module):
     def __init__(
@@ -170,17 +163,6 @@ class AttnBlock(nn.Module):
         self.v = nn.Linear(in_channels, in_channels)
         self.proj_out = nn.Linear(in_channels, in_channels)
 
-        self.use_memory_efficient_attention_xformers = False
-        self.xformers_attention_op = None
-
-    def set_use_memory_efficient_attention_xformers(
-        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
-    ):
-        if use_memory_efficient_attention_xformers and not is_xformers_available:
-            raise ImportError("Please install xformers to use memory efficient attention")
-        self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
-        self.xformers_attention_op = attention_op
-
     def forward(self, hidden_states, zq=None):
         residual = hidden_states
         batch, channel, height, width = hidden_states.shape
@@ -190,33 +172,12 @@ class AttnBlock(nn.Module):
             hidden_states = self.norm(hidden_states)
 
         hidden_states = hidden_states.view(batch, channel, height * width).transpose(1, 2)
-        scale = 1.0 / torch.sqrt(torch.tensor(channel, dtype=hidden_states.dtype, device=hidden_states.device))
 
         query = self.q(hidden_states)
         key = self.k(hidden_states)
         value = self.v(hidden_states)
 
-        if self.use_memory_efficient_attention_xformers:
-            # Memory efficient attention
-            hidden_states = xops.memory_efficient_attention(
-                query, key, value, attn_bias=None, op=self.xformers_attention_op
-            )
-        else:
-            attention_scores = torch.baddbmm(
-                torch.empty(
-                    query.shape[0],
-                    query.shape[1],
-                    key.shape[1],
-                    dtype=query.dtype,
-                    device=query.device,
-                ),
-                query,
-                key.transpose(-1, -2),
-                beta=0,
-                alpha=scale,
-            )
-            attention_probs = torch.softmax(attention_scores.float(), dim=-1).type(attention_scores.dtype)
-            hidden_states = torch.bmm(attention_probs, value)
+        hidden_states = F.scaled_dot_product_attention(query, key, value)
 
         hidden_states = self.proj_out(hidden_states)
         hidden_states = hidden_states.transpose(-1, -2).view(batch, channel, height, width)

@@ -36,7 +36,6 @@ def create_model_and_benchmark(args):
     time_vanilla_fp16 = benchmark_torch_function(f)
 
     print("Running benchmark for efficient attention in FP16 ...")
-    model.enable_xformers_memory_efficient_attention()
     f = lambda: model.generate2(encoder_hidden_states=encoder_hidden_states, timesteps=args.time_steps)
     time_efficient_fp16 = benchmark_torch_function(f)
 
