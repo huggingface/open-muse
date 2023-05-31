@@ -320,7 +320,7 @@ class Attention(nn.Module):
             attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
 
         attn_output = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)  # (B, nh, T, hs)
-        attn_output = attn_output.permute(0, 2, 1, 3).view(
+        attn_output = attn_output.permute(0, 2, 1, 3).reshape(
             batch, q_seq_len, self.num_heads * self.head_dim
         )  # (B, T, q_dim)
 
