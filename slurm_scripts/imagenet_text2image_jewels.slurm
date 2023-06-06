@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=vqgan_testing
+#SBATCH --job-name=t2i_testing
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=48
