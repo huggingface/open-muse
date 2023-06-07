@@ -34,7 +34,7 @@ CMD=" \
     training.batch_size=160 \
     "
 
-GPUS_PER_NODE=8
+GPUS_PER_NODE=4
 NNODES=$SLURM_NNODES
 
 # so processes know who to talk to
