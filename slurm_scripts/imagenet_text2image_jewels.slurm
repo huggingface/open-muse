@@ -27,7 +27,7 @@ pushd $MUSE_REPO
 
 CMD=" \
     training/train_muse.py config=configs/imagenet_text2image_jewels.yaml \
-    wandb.entity=psuraj \
+    wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \

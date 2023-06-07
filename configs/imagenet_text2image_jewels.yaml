@@ -18,7 +18,7 @@ experiment:
 model:
     vq_model:
         pretrained: "openMUSE/maskgit-vqgan-imagenet-f16-256"
-    
+        type: "maskgit_vqgan"
     text_encoder:
         type: "t5"
         pretrained: "google/t5-v1_1-large"
