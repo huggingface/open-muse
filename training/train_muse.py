@@ -229,16 +229,16 @@ def main():
     logger.info("Loading models and optimizer")
 
     if config.model.text_encoder.type == "clip":
-        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained, local_files_only=config.model.offline)
+        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained, local_files_only=config.model.offline)
     elif config.model.text_encoder.type == "t5":
-        text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained, local_files_only=config.model.offline)
+        tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained, local_files_only=config.model.offline)
     else:
         raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
 
     vq_class = get_vq_model_class(config.model.vq_model.type)
-    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained, local_files_only=config.model.offline)
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     model = model_cls(**config.model.transformer)
