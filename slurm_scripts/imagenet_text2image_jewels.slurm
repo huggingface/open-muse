@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=t2i_testing
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=48
 #SBATCH --gres=gpu:4
@@ -8,7 +8,7 @@
 #SBATCH -A cstdl
 #SBATCH --partition booster
 #SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=0:10:00
+#SBATCH --time=0:06:00
 
 set -x -e
 

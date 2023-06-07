@@ -47,7 +47,7 @@ except ImportError:
 import timm
 from einops import repeat, rearrange
 from tqdm import tqdm
-
+import cProfile, pstats
 try:
     import httplib  # python < 3.0
 except:

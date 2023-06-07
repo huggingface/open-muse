@@ -46,6 +46,7 @@ from muse import (
     get_mask_chedule,
 )
 from muse.lr_schedulers import get_scheduler
+import cProfile, pstats
 
 try:
     import apex
@@ -458,10 +459,13 @@ def main():
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
+        profiler = cProfile.Profile()
+        profiler.enable()
         for batch in train_dataloader:
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
             pixel_values, input_ids = batch
@@ -524,6 +528,9 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
+                profiler.disable()
+                stats = pstats.Stats(profiler)
+                stats.sort_stats('tottime').print_stats(10)
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
