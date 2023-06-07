@@ -1,5 +1,6 @@
 wandb:
   entity: null
+  mode: "offline"
 
 experiment:
     project: "muse"
