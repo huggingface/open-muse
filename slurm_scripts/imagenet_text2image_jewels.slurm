@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=t2i_testing
-#SBATCH --nodes=4
+#SBATCH --nodes=2
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=48
 #SBATCH --gres=gpu:4
@@ -35,7 +35,6 @@ CMD=" \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \
     experiment.num_nodes=$SLURM_NNODES
-    experiment.num_gpus_per_node=$GPUS_PER_NODE
 
     "
 
