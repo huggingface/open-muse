@@ -45,11 +45,12 @@ MASTER_PORT=6000
 export LAUNCHER="python -u -m torch.distributed.run \
     --nproc_per_node $GPUS_PER_NODE \
     --nnodes $NNODES \
+    --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
     --rdzv_backend c10d \
     --max_restarts 0 \
     --tee 3 \
     "
-#     --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
+
 echo $CMD
 
 # hide duplicated errors using this hack - will be properly fixed in pt-1.12
@@ -64,16 +65,16 @@ export NCCL_ASYNC_ERROR_HANDLING=1
 # export CUDA_LAUNCH_BLOCKING=1
 
 # AWS specific
-# export NCCL_PROTO=simple
-# export RDMAV_FORK_SAFE=1
-# export FI_EFA_FORK_SAFE=1
-# export FI_EFA_USE_DEVICE_RDMA=1
-# export FI_PROVIDER=efa
-# export FI_LOG_LEVEL=1
-# export NCCL_IB_DISABLE=1
+export NCCL_PROTO=simple
+export RDMAV_FORK_SAFE=1
+export FI_EFA_FORK_SAFE=1
+export FI_EFA_USE_DEVICE_RDMA=1
+export FI_PROVIDER=efa
+export FI_LOG_LEVEL=1
+export NCCL_IB_DISABLE=1
 # # export NCCL_SOCKET_IFNAME=ens
-# export PYTHONWARNINGS="ignore"
-# export CXX=g++
+export PYTHONWARNINGS="ignore"
+export CXX=g++
 
 
 # srun error handling:

@@ -31,7 +31,7 @@ CMD=" \
     training.seed=9345104 \
     "
 
-GPUS_PER_NODE=4
+GPUS_PER_NODE=1
 NNODES=$SLURM_NNODES
 
 # so processes know who to talk to
