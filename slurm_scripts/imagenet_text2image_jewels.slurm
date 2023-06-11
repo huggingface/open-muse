@@ -25,7 +25,7 @@ mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
 
-GPUS_PER_NODE=2
+GPUS_PER_NODE=4
 NNODES=$SLURM_NNODES
 
 CMD=" \
@@ -42,14 +42,14 @@ CMD=" \
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
 MASTER_PORT=6000
 
-export LAUNCHER="python -u -m torch.distributed.run \
-    --nproc_per_node $GPUS_PER_NODE \
-    --nnodes $NNODES \
-    --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
-    --rdzv_backend c10d \
-    --max_restarts 0 \
-    --tee 3 \
-    "
+# export LAUNCHER="python -u -m torch.distributed.run \
+#     --nproc_per_node $GPUS_PER_NODE \
+#     --nnodes $NNODES \
+#     --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
+#     --rdzv_backend c10d \
+#     --max_restarts 0 \
+#     --tee 3 \
+#     "
 
 echo $CMD
 
@@ -84,6 +84,7 @@ SRUN_ARGS=" \
     "
 
 # py-spy top -s -i -n -- $LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD
-clear; srun $SRUN_ARGS --jobid $SLURM_JOB_ID bash -c "$LAUNCHER --node_rank \$SLURM_PROCID --role \$SLURMD_NODENAME: $CMD" 2>&1 | tee $LOG_PATH
+# clear; srun $SRUN_ARGS --jobid $SLURM_JOB_ID bash -c "$LAUNCHER --node_rank \$SLURM_PROCID --role \$SLURMD_NODENAME: $CMD" 2>&1 | tee $LOG_PATH
+clear; srun $SRUN_ARGS --jobid $SLURM_JOB_ID bash -c "accelerate launch $CMD" 2>&1 | tee $LOG_PATH
 
 echo "END TIME: $(date)"
