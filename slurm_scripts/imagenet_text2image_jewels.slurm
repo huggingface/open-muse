@@ -2,7 +2,7 @@
 #SBATCH --job-name=t2i_testing
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=48
 #SBATCH --gres=gpu:4
 #SBATCH --exclusive
 #SBATCH -A cstdl
@@ -25,7 +25,7 @@ mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
 
-GPUS_PER_NODE=1
+GPUS_PER_NODE=2
 NNODES=$SLURM_NNODES
 
 CMD=" \
