@@ -199,7 +199,7 @@ def main():
             config.wandb.run_id = run_id
 
         wandb_init_kwargs = dict(
-            name=config.experiment.name,
+            name=config.experiment.name+f" {config.experiment.num_nodes} nodes {config.experiment.num_gpus_per_node} gpus",
             id=run_id,
             resume=resume_wandb_run,
             entity=config.wandb.get("entity", None),

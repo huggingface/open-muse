@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=t2i_testing
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:4
@@ -25,16 +25,19 @@ mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
 
+GPUS_PER_NODE=4
+NNODES=$SLURM_NNODES
+
 CMD=" \
     training/train_muse.py config=configs/imagenet_text2image_jewels.yaml \
     wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \
-    "
+    experiment.num_nodes=$SLURM_NNODES
+    experiment.num_gpus_per_node=$GPUS_PER_NODE
 
-GPUS_PER_NODE=4
-NNODES=$SLURM_NNODES
+    "
 
 # so processes know who to talk to
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
