@@ -73,6 +73,8 @@ export FI_PROVIDER=efa
 export FI_LOG_LEVEL=1
 export NCCL_IB_DISABLE=1
 # export NCCL_SOCKET_IFNAME=ens
+export PYTHONWARNINGS="ignore"
+export CXX=g++
 
 
 # srun error handling:
