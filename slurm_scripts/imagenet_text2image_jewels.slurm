@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=t2i_testing
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:4
