@@ -456,6 +456,8 @@ def main():
         return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob
 
     batch_time_m = AverageMeter()
+    model_time_m = AverageMeter()
+    backprop_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
 
@@ -468,7 +470,6 @@ def main():
             pixel_values, input_ids = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
-            data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
             input_ids, encoder_hidden_states, labels, soft_targets, mask_prob = prepare_inputs_and_labels(
@@ -482,6 +483,10 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
+                if accelerator.sync_gradients:
+                    data_time_m.update(time.time() - end)
+                    model_time = time.time()
+
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
@@ -497,7 +502,9 @@ def main():
                         label_smoothing=config.training.label_smoothing,
                         cond_dropout_prob=config.training.cond_dropout_prob,
                     )
-
+                if accelerator.sync_gradients:
+                    model_time_m.update(time.time()-model_time)
+                    backprop_time=time.time()
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
@@ -509,6 +516,8 @@ def main():
 
                 optimizer.step()
                 lr_scheduler.step()
+                if accelerator.sync_gradients:
+                    backprop_time_m.update(time.time()-backprop_time)
 
                 # log gradient norm before zeroing it
                 if (
@@ -540,6 +549,8 @@ def main():
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
+                        "model_time": model_time_m.val,
+                        "backprop_time": backprop_time_m.val,
                     }
                     accelerator.log(logs, step=global_step + 1)
 
