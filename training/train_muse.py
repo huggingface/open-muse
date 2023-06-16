@@ -483,10 +483,10 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
+                print(accelerator.sync_gradients)
                 if accelerator.sync_gradients:
                     data_time_m.update(time.time() - end)
                     model_time = time.time()
-
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
