@@ -11,7 +11,7 @@ experiment:
     save_every: 1000
     eval_every: 1000
     generate_every: 1000
-    log_every: 5
+    log_every: 1
     log_grad_norm_every: 500
     resume_from_checkpoint: False
     resume_lr_scheduler: True
