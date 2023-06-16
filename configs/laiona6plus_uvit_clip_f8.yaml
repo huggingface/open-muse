@@ -7,8 +7,8 @@ experiment:
     output_dir: "cc12m"
     max_train_examples: 8974320 # toal sucessfully downloaded images for laiona6plus
     max_eval_examples: 8118
-    save_every: 1000
-    eval_every: 1000
+    save_every: 20000
+    eval_every: 20000
     generate_every: 1000
     log_every: 50
     log_grad_norm_every: 500
@@ -63,7 +63,7 @@ dataset:
     params:
         train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-data/{00000..01208}.tar -"
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/laion-aesthetic6plus-data/{01209..01210}.tar -"
-        validation_prompts_file: "validation_prompts/dalle_mini_prompts.txt"
+        validation_prompts_file: "validation_prompts/cc_validation_prompts.txt"
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
         num_workers: 4
@@ -96,8 +96,8 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 2
-    batch_size: 64
+    gradient_accumulation_steps: 4
+    batch_size: 8
     mixed_precision: "no"
     enable_tf32: True
     use_ema: False

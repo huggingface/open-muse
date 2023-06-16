@@ -353,16 +353,16 @@ def main():
 	random_flip = False
 	train_transform = transforms.Compose(
 			[
-				transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-				(transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution)),
-				transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
+				transforms.Resize((resolution,resolution), interpolation=transforms.InterpolationMode.BILINEAR),
+				# (transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution)),
+				# transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
 				transforms.ToTensor(),
 			]
 		)
 	eval_transform = transforms.Compose(
 			[
-				transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-				transforms.CenterCrop(resolution),
+				transforms.Resize((resolution,resolution), interpolation=transforms.InterpolationMode.BILINEAR),
+				#transforms.CenterCrop(resolution),
 				transforms.ToTensor(),
 			]
 	)
@@ -477,7 +477,7 @@ def main():
 		input_ids,
 		return_tensors = "pt",
 		padding = 'max_length',
-		max_length = 32,
+		max_length = 77,
 		truncation = True
 			)
 		input_ids = encoded.input_ids.cuda()
@@ -618,8 +618,8 @@ def main():
 				# TODO: Add generation
 
 			# Stop training if max steps is reached
-			if global_step >= config.training.max_train_steps:
-				break
+			# if global_step >= config.training.max_train_steps:
+			# 	break
 		# End for
 
 	accelerator.wait_for_everyone()
