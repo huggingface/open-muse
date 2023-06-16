@@ -96,7 +96,7 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 4
+    gradient_accumulation_steps: 16
     batch_size: 8
     mixed_precision: "no"
     enable_tf32: True
