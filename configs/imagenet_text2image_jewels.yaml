@@ -11,7 +11,7 @@ experiment:
     save_every: 1000
     eval_every: 1000
     generate_every: 1000
-    log_every: 50
+    log_every: 5
     log_grad_norm_every: 500
     resume_from_checkpoint: False
     resume_lr_scheduler: True
@@ -93,7 +93,7 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 1
+    gradient_accumulation_steps: 32
     batch_size: 16
     mixed_precision: "no"
     enable_tf32: True
