@@ -470,7 +470,7 @@ def main():
             pixel_values, input_ids = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
-
+            data_time_m.update(time.time() - end)
             # encode images to image tokens, mask them and create input and labels
             input_ids, encoder_hidden_states, labels, soft_targets, mask_prob = prepare_inputs_and_labels(
                 pixel_values, input_ids, config.training.min_masking_rate
@@ -483,9 +483,7 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                print(accelerator.sync_gradients)
                 if accelerator.sync_gradients:
-                    data_time_m.update(time.time() - end)
                     model_time = time.time()
                 if config.training.use_soft_code_target:
                     logits = model(
