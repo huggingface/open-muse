@@ -255,7 +255,7 @@ def main():
     if config.training.get("use_ema", False):
         ema = EMAModel(
             model.parameters(),
-            decay=config.training.ema_decaym,
+            decay=config.training.ema_decay,
             update_after_step=config.training.ema_update_after_step,
             update_every=config.training.ema_update_every,
             model_cls=model_cls,
