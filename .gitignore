@@ -2,6 +2,8 @@
 generated
 real
 output.jpg
+imagenet-vqgan-training
+wandb
 __pycache__/
 *.py[cod]
 *$py.class
