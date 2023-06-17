@@ -349,20 +349,20 @@ def main():
 	#     pin_memory=dataset_config.pin_memory,
 	#     persistent_workers=dataset_config.persistent_workers,
 	resolution = 256
-	center_crop = False
+	center_crop = True
 	random_flip = False
 	train_transform = transforms.Compose(
 			[
-				transforms.Resize((resolution,resolution), interpolation=transforms.InterpolationMode.BILINEAR),
-				# (transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution)),
-				# transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
+				transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
+				(transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution)),
+				transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
 				transforms.ToTensor(),
 			]
 		)
 	eval_transform = transforms.Compose(
 			[
 				transforms.Resize((resolution,resolution), interpolation=transforms.InterpolationMode.BILINEAR),
-				#transforms.CenterCrop(resolution),
+				transforms.CenterCrop(resolution),
 				transforms.ToTensor(),
 			]
 	)
@@ -376,7 +376,7 @@ def main():
 	train_dataloader = torch.utils.data.DataLoader(
 		train_ds,
 		batch_size=config.training.batch_size,
-		shuffle=True)
+		shuffle=False, pin_memory=True, num_workers=4, persistent_workers=True)
 	
 
 	eval_dataloader = torch.utils.data.DataLoader(
@@ -625,8 +625,8 @@ def main():
 	accelerator.wait_for_everyone()
 
 	# Evaluate and save checkpoint at the end of training
-	if accelerator.is_main_process:
-		validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+	# if accelerator.is_main_process:
+	# 	validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
 	save_checkpoint(model, config, accelerator, global_step)
 
 	# Save the final trained checkpoint
