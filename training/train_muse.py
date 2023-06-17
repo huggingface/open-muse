@@ -39,6 +39,7 @@ from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokeniz
 import muse
 from muse import (
     MOVQ,
+    EMAModel,
     MaskGitTransformer,
     MaskGiTUViT,
     MaskGitVQGAN,
@@ -250,6 +251,30 @@ def main():
     text_encoder.requires_grad_(False)
     vq_model.requires_grad_(False)
 
+    # Create EMA
+    if config.training.get("use_ema", False):
+        ema = EMAModel(
+            model.parameters(),
+            decay=config.training.ema_decaym,
+            update_after_step=config.training.ema_update_after_step,
+            update_every=config.training.ema_update_every,
+            model_cls=model_cls,
+            model_config=model.config,
+        )
+
+        # Create custom saving and loading hooks so that `accelerator.save_state(...)` serializes in a nice format.
+        def load_model_hook(models, input_dir):
+            load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=model_cls)
+            ema.load_state_dict(load_model.state_dict())
+            ema.to(accelerator.device)
+            del ema
+
+        def save_model_hook(models, weights, output_dir):
+            ema.save_pretrained(os.path.join(output_dir, "ema_model"))
+
+        accelerator.register_load_state_pre_hook(load_model_hook)
+        accelerator.register_save_state_pre_hook(save_model_hook)
+
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
@@ -373,6 +398,8 @@ def main():
 
     text_encoder.to(device=accelerator.device, dtype=weight_dtype)
     vq_model.to(device=accelerator.device)
+    if config.training.get("use_ema", False):
+        ema.to(accelerator.device)
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -526,6 +553,9 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
+                if config.training.get("use_ema", False):
+                    ema.step(model.parameters())
+
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
@@ -556,17 +586,35 @@ def main():
                     batch_time_m.reset()
                     data_time_m.reset()
 
-                # Evaluate model on main process
-                if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
-
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
                     save_checkpoint(model, config, accelerator, global_step + 1)
 
+                # Evaluate model on main process
+                if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
+                    # Store the model parameters temporarily and load the EMA parameters to perform inference.
+                    if config.training.get("use_ema", False):
+                        ema.store(model.parameters())
+                        ema.copy_to(model.parameters())
+
+                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
+
+                    if config.training.get("use_ema", False):
+                        # Switch back to the original model parameters for training.
+                        ema.restore(model.parameters())
+
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
+                    # Store the model parameters temporarily and load the EMA parameters to perform inference.
+                    if config.training.get("use_ema", False):
+                        ema.store(model.parameters())
+                        ema.copy_to(model.parameters())
+
                     generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step + 1)
+
+                    if config.training.get("use_ema", False):
+                        # Switch back to the original model parameters for training.
+                        ema.restore(model.parameters())
 
                 global_step += 1
                 # TODO: Add generation
@@ -586,6 +634,8 @@ def main():
     # Save the final trained checkpoint
     if accelerator.is_main_process:
         model = accelerator.unwrap_model(model)
+        if config.training.get("use_ema", False):
+            ema.copy_to(model.parameters())
         model.save_pretrained(config.experiment.output_dir)
 
     accelerator.end_training()
