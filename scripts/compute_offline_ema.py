@@ -18,7 +18,7 @@ def offline_ema(args):
     dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
     dirs = [Path(checkpoint_dir_path) / dir_ for dir_ in dirs]
 
-    transformer_config = MaskGitTransformer.load_config(dirs[0] / "unwrapped_model")
+    transformer_config = MaskGitTransformer.load_config(Path(checkpoint_dir_path) / dirs[0] / "unwrapped_model")
     if transformer_config["_class_name"] == "MaskGitTransformer":
         model_cls = MaskGitTransformer
     elif transformer_config["_class_name"] == "MaskGiTUViT":
@@ -28,7 +28,7 @@ def offline_ema(args):
     if torch.cuda.is_available():
         device = "cuda"
 
-    model = model_cls.from_pretrained(dirs[0] / "unwrapped_model").to(device)
+    model = model_cls.from_pretrained(Path(checkpoint_dir_path) / dirs[0] / "unwrapped_model").to(device)
     ema_model = EMAModel(parameters=model.parameters(), decay=ema_decay, update_every=checkpoint_interval)
     ema_model.to(device)
 
