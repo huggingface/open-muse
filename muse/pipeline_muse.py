@@ -27,6 +27,7 @@ from transformers import (
 
 from .modeling_maskgit_vqgan import MaskGitVQGAN
 from .modeling_movq import MOVQ
+from .modeling_paella_vq import PaellaVQModel
 from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
 
@@ -203,9 +204,9 @@ class PipelineMuse:
         if not is_class_conditioned:
             # Very hacky way to load different text encoders
             # TODO: Add config for pipeline to specify text encoder
-            is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"]
+            is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"].lower()
             text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
-            
+
             text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
@@ -225,6 +226,8 @@ class PipelineMuse:
             vae = MaskGitVQGAN.from_pretrained(**vae_args)
         elif vae_config["_class_name"] == "MOVQ":
             vae = MOVQ.from_pretrained(**vae_args)
+        elif vae_config["_class_name"] == "PaellaVQModel":
+            vae = PaellaVQModel.from_pretrained(**vae_args)
         else:
             raise ValueError(f"Unknown VAE class: {vae_config['_class_name']}")
 
