@@ -267,7 +267,7 @@ def main():
             load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=model_cls)
             ema.load_state_dict(load_model.state_dict())
             ema.to(accelerator.device)
-            del ema
+            del load_model
 
         def save_model_hook(models, weights, output_dir):
             ema.save_pretrained(os.path.join(output_dir, "ema_model"))
