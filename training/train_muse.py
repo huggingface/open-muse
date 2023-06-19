@@ -540,7 +540,7 @@ def main():
                 pr.disable()
                 sortby = SortKey.CUMULATIVE
                 ps = pstats.Stats(pr).sort_stats(sortby)
-                ps.print_stats()
+                ps.print_stats(100)
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
