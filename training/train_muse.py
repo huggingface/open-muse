@@ -46,6 +46,9 @@ from muse import (
     get_mask_chedule,
 )
 from muse.lr_schedulers import get_scheduler
+import cProfile, pstats, io
+from pstats import SortKey
+pr = cProfile.Profile()
 
 try:
     import apex
@@ -460,6 +463,7 @@ def main():
     backprop_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+    pr.enable()
 
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
@@ -532,6 +536,11 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
+                # ... do something ...
+                pr.disable()
+                sortby = SortKey.CUMULATIVE
+                ps = pstats.Stats(pr).sort_stats(sortby)
+                ps.print_stats()
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
