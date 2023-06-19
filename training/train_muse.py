@@ -541,6 +541,7 @@ def main():
                 sortby = SortKey.CUMULATIVE
                 ps = pstats.Stats(pr).sort_stats(sortby)
                 ps.print_stats(100)
+                pr.enable()
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
