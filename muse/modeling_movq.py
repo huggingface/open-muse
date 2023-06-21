@@ -2,12 +2,20 @@
 # pytorch_diffusion + derived encoder decoder
 
 import math
+from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
+
+try:
+    import xformers.ops as xops
+
+    is_xformers_available = True
+except ImportError:
+    is_xformers_available = False
 
 
 class SpatialNorm(nn.Module):
@@ -156,41 +164,64 @@ class AttnBlock(nn.Module):
             self.norm = Normalize(in_channels, zq_ch, add_conv=add_conv)
         else:
             self.norm = torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
-        self.q = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
-        self.k = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
-        self.v = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
-        self.proj_out = torch.nn.Conv2d(in_channels, in_channels, kernel_size=1, stride=1, padding=0)
+
+        self.q = nn.Linear(in_channels, in_channels)
+        self.k = nn.Linear(in_channels, in_channels)
+        self.v = nn.Linear(in_channels, in_channels)
+        self.proj_out = nn.Linear(in_channels, in_channels)
+
+        self.use_memory_efficient_attention_xformers = False
+        self.xformers_attention_op = None
+
+    def set_use_memory_efficient_attention_xformers(
+        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
+    ):
+        if use_memory_efficient_attention_xformers and not is_xformers_available:
+            raise ImportError("Please install xformers to use memory efficient attention")
+        self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
+        self.xformers_attention_op = attention_op
 
     def forward(self, hidden_states, zq=None):
         residual = hidden_states
+        batch, channel, height, width = hidden_states.shape
         if zq is not None:
             hidden_states = self.norm(hidden_states, zq)
         else:
             hidden_states = self.norm(hidden_states)
 
+        hidden_states = hidden_states.view(batch, channel, height * width).transpose(1, 2)
+        scale = 1.0 / torch.sqrt(torch.tensor(channel, dtype=hidden_states.dtype, device=hidden_states.device))
+
         query = self.q(hidden_states)
         key = self.k(hidden_states)
         value = self.v(hidden_states)
 
-        # compute attentions
-        batch, channels, height, width = query.shape
-        query = query.reshape((batch, channels, height * width))
-        query = query.permute(0, 2, 1)  # (b, hw, c)
-        key = key.reshape((batch, channels, height * width))
-
-        attn_weights = torch.bmm(query, key)  # b,hw,hw
-        attn_weights = attn_weights * (int(channels) ** -0.5)
-        attn_weights = nn.functional.softmax(attn_weights, dim=2)
-
-        # attend to values
-        value = value.reshape((batch, channels, height * width))
-        attn_weights = attn_weights.permute(0, 2, 1)
-        hidden_states = torch.bmm(value, attn_weights)
-        hidden_states = hidden_states.reshape((batch, channels, height, width))
+        if self.use_memory_efficient_attention_xformers:
+            # Memory efficient attention
+            hidden_states = xops.memory_efficient_attention(
+                query, key, value, attn_bias=None, op=self.xformers_attention_op
+            )
+        else:
+            attention_scores = torch.baddbmm(
+                torch.empty(
+                    query.shape[0],
+                    query.shape[1],
+                    key.shape[1],
+                    dtype=query.dtype,
+                    device=query.device,
+                ),
+                query,
+                key.transpose(-1, -2),
+                beta=0,
+                alpha=scale,
+            )
+            attention_probs = torch.softmax(attention_scores.float(), dim=-1).type(attention_scores.dtype)
+            hidden_states = torch.bmm(attention_probs, value)
 
         hidden_states = self.proj_out(hidden_states)
-        hidden_states = hidden_states + residual
-        return hidden_states
+        hidden_states = hidden_states.transpose(-1, -2).view(batch, channel, height, width)
+
+        return hidden_states + residual
 
 
 class UpsamplingBlock(nn.Module):
@@ -434,7 +465,7 @@ class VectorQuantizer(nn.Module):
         r"""
         Args:
             num_embeddings: number of vectors in the quantized space.
-            embedding_dim: dimensionality of the tensors in the quantized space.
+            embedding_dim: dimensionaity of the tensors in the quantized space.
                 Inputs to the modules must be in this format as well.
             commitment_cost: scalar which controls the weighting of the loss terms
                 (see equation 4 in the paper https://arxiv.org/abs/1711.00937 - this variable is Beta).
@@ -487,17 +518,7 @@ class VectorQuantizer(nn.Module):
     def compute_distances(self, hidden_states):
         # distances from z to embeddings e_j (z - e)^2 = z^2 + e^2 - 2 e * z
         hidden_states_flattended = hidden_states.reshape((-1, self.embedding_dim))
-        emb_weights = self.embedding.weight.t()
-
-        inputs_norm_sq = hidden_states_flattended.pow(2.0).sum(dim=1, keepdim=True)
-        codebook_t_norm_sq = emb_weights.pow(2.0).sum(dim=0, keepdim=True)
-        distances = torch.addmm(
-            inputs_norm_sq + codebook_t_norm_sq,
-            hidden_states_flattended,
-            emb_weights,
-            alpha=-2.0,
-        )
-        return distances
+        return torch.cdist(hidden_states_flattended, self.embedding.weight)
 
     def get_codebook_entry(self, indices):
         # indices are expected to be of shape (batch, num_tokens)
@@ -521,6 +542,14 @@ class VectorQuantizer(nn.Module):
         batch, num_tokens = code.shape
         soft_code = soft_code.reshape(batch, num_tokens, -1)  # (batch, height * width, num_embeddings)
         return soft_code, code
+
+    def get_code(self, hidden_states):
+        # reshape z -> (batch, height, width, channel)
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
+        distances = self.compute_distances(hidden_states)
+        indices = torch.argmin(distances, axis=1).unsqueeze(1)
+        indices = indices.reshape(hidden_states.shape[0], -1)
+        return indices
 
 
 class MOVQ(ModelMixin, ConfigMixin):
@@ -572,6 +601,12 @@ class MOVQ(ModelMixin, ConfigMixin):
         quantized_states = self.quantize.get_codebook_entry(codebook_indices)
         reconstructed_pixel_values = self.decode(quantized_states)
         return reconstructed_pixel_values
+
+    def get_code(self, pixel_values):
+        hidden_states = self.encoder(pixel_values)
+        hidden_states = self.quant_conv(hidden_states)
+        codebook_indices = self.quantize.get_code(hidden_states)
+        return codebook_indices
 
     def forward(self, pixel_values, return_loss=False):
         hidden_states = self.encoder(pixel_values)

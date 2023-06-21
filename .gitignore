@@ -1,5 +1,6 @@
 # Byte-compiled / optimized / DLL files
-output*.jpg
+generated
+real
 output.jpg
 segmented.jpg
 
