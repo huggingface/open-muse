@@ -844,6 +844,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def generate(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
@@ -863,9 +864,9 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         # shift the class ids by the codebook size
         if class_ids is not None:
             class_ids += self.config.codebook_size
-
         # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
         scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
 
         starting_temperature = temperature
@@ -915,11 +916,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             scores = 1 - probs_without_temperature.gather(2, pred_ids[..., None])
             scores = rearrange(scores, "... 1 -> ...")  # TODO: use torch
-
         return input_ids
 
     def generate2(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         negative_embeds: torch.FloatTensor = None,
@@ -946,7 +947,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
 
         for step in range(timesteps):
             # prepend class token to input_ids
@@ -1257,11 +1259,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if isinstance(module, (DownsampleBlock, UpsampleBlock)):
             module.gradient_checkpointing = value
 
-    def generate(self, *args, **kwargs):
-        pass
-
     def generate2(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         negative_embeds: torch.FloatTensor = None,
@@ -1287,8 +1287,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if class_ids is not None:
             class_ids += self.config.codebook_size
 
-        # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is None:
+            # initialize with all image tokens masked
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
 
         for step in range(timesteps):
             # prepend class token to input_ids

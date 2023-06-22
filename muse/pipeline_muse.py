@@ -30,6 +30,7 @@ from .modeling_movq import MOVQ
 from .modeling_paella_vq import PaellaVQModel
 from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
+from torchvision import transforms
 
 
 class PipelineMuse:
@@ -230,7 +231,12 @@ class PipelineMuse:
             vae = PaellaVQModel.from_pretrained(**vae_args)
         else:
             raise ValueError(f"Unknown VAE class: {vae_config['_class_name']}")
-
+        if is_class_conditioned:
+            return cls(
+                vae=vae,
+                transformer=transformer,
+                is_class_conditioned=is_class_conditioned,
+            )
         return cls(
             vae=vae,
             transformer=transformer,
@@ -238,7 +244,6 @@ class PipelineMuse:
             tokenizer=tokenizer,
             is_class_conditioned=is_class_conditioned,
         )
-
     def save_pretrained(
         self,
         save_directory: Union[str, os.PathLike],
@@ -253,3 +258,109 @@ class PipelineMuse:
 
         self.vae.save_pretrained(os.path.join(save_directory, "vae"))
         self.transformer.save_pretrained(os.path.join(save_directory, "transformer"))
+
+class PipelineMuseInpainting(PipelineMuse):
+    @torch.no_grad()
+    def __call__(
+        self,
+        image: Image,
+        mask: torch.BoolTensor,
+        text: Optional[Union[str, List[str]]] = None,
+        negative_text: Optional[Union[str, List[str]]] = None,
+        class_ids: torch.LongTensor = None,
+        timesteps: int = 8,
+        guidance_scale: float = 8.0,
+        temperature: float = 1.0,
+        topk_filter_thres: float = 0.9,
+        num_images_per_prompt: int = 1,
+        use_maskgit_generate: bool = True,
+        generator: Optional[torch.Generator] = None,
+        use_fp16: bool = False,
+        image_size: int = 256
+    ):
+        assert use_maskgit_generate
+        if text is None and class_ids is None:
+            raise ValueError("Either text or class_ids must be provided.")
+
+        if text is not None and class_ids is not None:
+            raise ValueError("Only one of text or class_ids may be provided.")
+
+        encode_transform = transforms.Compose([
+                transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(image_size),
+                transforms.ToTensor(),
+        ])
+        pixel_values = encode_transform(image).unsqueeze(0).to(self.device)
+        _, image_tokens = self.vae.encode(pixel_values)
+        mask_token_id = self.transformer.config.mask_token_id
+        image_tokens[mask[None]] = mask_token_id
+        image_tokens = image_tokens.repeat(num_images_per_prompt, 1)
+        if class_ids is not None:
+            if isinstance(class_ids, int):
+                class_ids = [class_ids]
+
+            class_ids = torch.tensor(class_ids, device=self.device, dtype=torch.long)
+            # duplicate class ids for each generation per prompt
+            class_ids = class_ids.repeat_interleave(num_images_per_prompt, dim=0)
+            model_inputs = {"class_ids": class_ids}
+        else:
+            if isinstance(text, str):
+                text = [text]
+
+            input_ids = self.tokenizer(
+                text,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=self.tokenizer.model_max_length,
+            ).input_ids  # TODO: remove hardcode
+            input_ids = input_ids.to(self.device)
+            encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+
+            if negative_text is not None:
+                if isinstance(negative_text, str):
+                    negative_text = [negative_text]
+
+                negative_input_ids = self.tokenizer(
+                    negative_text,
+                    return_tensors="pt",
+                    padding="max_length",
+                    truncation=True,
+                    max_length=self.tokenizer.model_max_length,
+                ).input_ids
+                negative_input_ids = negative_input_ids.to(self.device)
+                negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
+            else:
+                negative_encoder_hidden_states = None
+
+            # duplicate text embeddings for each generation per prompt, using mps friendly method
+            bs_embed, seq_len, _ = encoder_hidden_states.shape
+            encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+            encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            if negative_encoder_hidden_states is not None:
+                bs_embed, seq_len, _ = negative_encoder_hidden_states.shape
+                negative_encoder_hidden_states = negative_encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+                negative_encoder_hidden_states = negative_encoder_hidden_states.view(
+                    bs_embed * num_images_per_prompt, seq_len, -1
+                )
+
+            model_inputs = {
+                "encoder_hidden_states": encoder_hidden_states,
+                "negative_embeds": negative_encoder_hidden_states,
+            }
+        generate = self.transformer.generate2
+        with torch.autocast("cuda", enabled=use_fp16):
+            generated_tokens = generate(
+                input_ids = image_tokens,
+                **model_inputs,
+                timesteps=timesteps,
+                guidance_scale=guidance_scale,
+                temperature=temperature,
+                topk_filter_thres=topk_filter_thres,
+                generator=generator,
+            )
+        images = self.vae.decode_code(generated_tokens)
+
+        # Convert to PIL images
+        images = [self.to_pil_image(image) for image in images]
+        return images

@@ -22,5 +22,5 @@ from .modeling_paella_vq import PaellaVQModel
 from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
 from .modeling_ema import EMAModel
-from .pipeline_muse import PipelineMuse
+from .pipeline_muse import PipelineMuse, PipelineMuseInpainting
 from .sampling import get_mask_chedule
