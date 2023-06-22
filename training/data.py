@@ -20,7 +20,7 @@ import json
 import math
 import random
 import re
-from typing import List, Union
+from typing import List, Optional, Union
 
 import webdataset as wds
 from braceexpand import braceexpand
@@ -126,6 +126,7 @@ class ClassificationDataset:
         shuffle_buffer_size: int = 1000,
         pin_memory: bool = False,
         persistent_workers: bool = False,
+        **kwargs,
     ):
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
@@ -249,6 +250,9 @@ class Text2ImageDataset:
         shuffle_buffer_size: int = 1000,
         pin_memory: bool = False,
         persistent_workers: bool = False,
+        is_pre_encoded: bool = False,
+        vae_checkpoint: Optional[str] = None,
+        text_encoder_checkpoint: Optional[str] = None,
     ):
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
@@ -269,16 +273,28 @@ class Text2ImageDataset:
             # flatten list using itertools
             eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
 
+        if not is_pre_encoded:
+            processing_pipeline = [
+                wds.decode("pil", handler=wds.ignore_and_continue),
+                wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
+                wds.map(filter_keys(set(["image", "input_ids"]))),
+                wds.map_dict(image=transform.train_transform, input_ids=tokenize),
+                wds.to_tuple("image", "input_ids"),
+            ]
+        else:
+            processing_pipeline = [
+                wds.decode(wds.handle_extension("pth", wds.autodecode.torch_loads)),
+                wds.rename(input_ids=f"{vae_checkpoint}.pth", encoder_hidden_states=f"{text_encoder_checkpoint}.pth"),
+                wds.map(filter_keys(set(["input_ids", "encoder_hidden_states"]))),
+                wds.to_tuple("input_ids", "encoder_hidden_states"),
+            ]
+
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
             tarfile_to_samples_nothrow,
             wds.shuffle(shuffle_buffer_size),
-            wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
-            wds.map(filter_keys(set(["image", "input_ids"]))),
-            wds.map_dict(image=transform.train_transform, input_ids=tokenize),
-            wds.to_tuple("image", "input_ids"),
+            *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
 
@@ -306,11 +322,7 @@ class Text2ImageDataset:
             wds.SimpleShardList(eval_shards_path_or_url),
             wds.split_by_worker,
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
-            wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
-            wds.map(filter_keys(set(["image", "input_ids"]))),
-            wds.map_dict(image=transform.train_transform, input_ids=tokenize),
-            wds.to_tuple("image", "input_ids"),
+            *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
         self._eval_dataset = wds.DataPipeline(*pipeline)
