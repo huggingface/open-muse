@@ -282,6 +282,9 @@ class Text2ImageDataset:
                 wds.to_tuple("image", "input_ids"),
             ]
         else:
+            # lowercase and replace / with .
+            vae_checkpoint = vae_checkpoint.lower().replace("/", ".")
+            text_encoder_checkpoint = text_encoder_checkpoint.lower().replace("/", ".")
             processing_pipeline = [
                 wds.decode(wds.handle_extension("pth", wds.autodecode.torch_loads)),
                 wds.rename(input_ids=f"{vae_checkpoint}.pth", encoder_hidden_states=f"{text_encoder_checkpoint}.pth"),
