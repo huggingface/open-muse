@@ -462,7 +462,7 @@ def main():
     @torch.no_grad()
     def prepare_inputs_and_labels(
         pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
-        text_input_ids: torch.LongTensor,
+        text_input_ids_or_embeds: Union[torch.LongTensor, torch.LongTensor],
         min_masking_rate: float = 0.0,
         is_train: bool = True,
     ):
@@ -477,7 +477,10 @@ def main():
                 image_tokens = vq_model.get_code(pixel_values)
                 soft_targets = None
 
-        encoder_hidden_states = text_encoder(text_input_ids)[0]
+        if not is_pre_encode:
+            encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
+        else:
+            encoder_hidden_states = text_input_ids_or_embeds
 
         batch_size, seq_len = image_tokens.shape
         # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
