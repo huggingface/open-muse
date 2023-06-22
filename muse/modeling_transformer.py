@@ -1287,7 +1287,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if class_ids is not None:
             class_ids += self.config.codebook_size
 
-        if input_ids is not None:
+        if input_ids is None:
             # initialize with all image tokens masked
             input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
 

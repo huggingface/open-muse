@@ -294,6 +294,7 @@ class PipelineMuseInpainting(PipelineMuse):
         _, image_tokens = self.vae.encode(pixel_values)
         mask_token_id = self.transformer.config.mask_token_id
         image_tokens[mask[None]] = mask_token_id
+        image_tokens = image_tokens.repeat(num_images_per_prompt, 1)
         if class_ids is not None:
             if isinstance(class_ids, int):
                 class_ids = [class_ids]
@@ -347,7 +348,6 @@ class PipelineMuseInpainting(PipelineMuse):
                 "encoder_hidden_states": encoder_hidden_states,
                 "negative_embeds": negative_encoder_hidden_states,
             }
-
         generate = self.transformer.generate2
         with torch.autocast("cuda", enabled=use_fp16):
             generated_tokens = generate(
