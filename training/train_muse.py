@@ -468,6 +468,7 @@ def main():
     ):
         if is_pre_encode:
             image_tokens = pixel_values_or_image_ids
+            soft_targets = None
         else:
             if config.training.use_soft_code_target and is_train:
                 soft_targets, image_tokens = vq_model.get_soft_code(
