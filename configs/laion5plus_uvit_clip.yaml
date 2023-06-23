@@ -61,7 +61,7 @@ model:
 dataset:
     type: "text2image"
     params:
-        train_shards_path_or_url: "pipe:aws s3 cp s3://hf-datasets-laion-5b-us-west-2/glacier/laion-data/laion-aesthetics-v2-5-plus-data/{00000..60581}.tar -"
+        train_shards_path_or_url: "pipe:aws s3 cp s3://hf-datasets-laion-5b-us-west-2/glacier/laion-data/laion-aesthetics-v2-5-plus-data/{00000..60578}.tar -"
         eval_shards_path_or_url: "pipe:aws s3 cp s3://hf-datasets-laion-5b-us-west-2/glacier/laion-data/laion-aesthetics-v2-5-plus-data/{60579..60581}.tar -"
         validation_prompts_file: "validation_prompts/dalle_mini_prompts.txt"
         batch_size: ${training.batch_size}
