@@ -106,9 +106,9 @@ def get_clip_scores(args, captions, real_image_names, generated_image_names):
     processor = AutoProcessor.from_pretrained(clip_model_name)
     dataset = DatasetWithGeneratedImages(real_images=real_image_names, generated_images=generated_image_names, captions=captions, processor=processor)
     dataloader = DataLoader(dataset, batch_size=args.batch_size)
-    clip_scores = []
+    clip_score = 0
     if args.calculate_image_alignment:
-        clip_image_scores = []
+        clip_image_score = 0
     with torch.no_grad():
         for batch in tqdm(dataloader):
             if args.device == 'cpu':
@@ -121,15 +121,15 @@ def get_clip_scores(args, captions, real_image_names, generated_image_names):
 
             text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
             generated_embeds = generated_embeds / generated_embeds.norm(p=2, dim=-1, keepdim=True)
-            clip_text_alignment = torch.clip(torch.matmul(text_embeds, generated_embeds.t()) * w, 0)
+            clip_text_alignment = torch.clip(torch.sum(text_embeds*generated_embeds, dim=1) * w, 0)
             clip_text_alignment = clip_text_alignment.cpu().detach().numpy()
-            clip_image_alignment = clip_image_alignment.cpu().detach().numpy()
-            clip_scores.append(clip_text_alignment)
+            clip_score += np.sum(clip_text_alignment)
             if args.calculate_image_alignment:
                 real_embeds = clip_model.get_image_features(**real_inputs)
                 real_embeds = real_embeds / real_embeds.norm(p=2, dim=-1, keepdim=True)
-                clip_image_alignment = torch.matmul(real_embeds, generated_embeds.t())
-                clip_image_scores.append(clip_image_alignment)
+                clip_image_alignment = torch.clip(torch.sum(real_embeds*generated_embeds, dim=1) * w, 0)
+                clip_image_alignment = clip_image_alignment.cpu().detach().numpy()
+                clip_image_score += np.sum(clip_image_alignment)
     clip_score = np.mean(np.concatenate(clip_scores, axis=0))
     if args.calculate_image_alignment:
         clip_image_score = np.mean(np.concatenate(clip_image_score, axis=0))
