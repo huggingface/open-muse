@@ -130,9 +130,9 @@ def get_clip_scores(args, captions, real_image_names, generated_image_names):
                 clip_image_alignment = torch.clip(torch.sum(real_embeds*generated_embeds, dim=1) * w, 0)
                 clip_image_alignment = clip_image_alignment.cpu().detach().numpy()
                 clip_image_score += np.sum(clip_image_alignment)
-    clip_score = np.mean(np.concatenate(clip_scores, axis=0))
+    clip_score = clip_score / len(dataset)
     if args.calculate_image_alignment:
-        clip_image_score = np.mean(np.concatenate(clip_image_score, axis=0))
+        clip_image_score = clip_image_score / len(dataset)
         return CLIPScoreOutput(clip_score=clip_score, clip_image_score=clip_image_score)
     return CLIPScoreOutput(clip_score=clip_score)
 
