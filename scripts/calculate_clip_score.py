@@ -62,28 +62,29 @@ def generate_and_save_images(args):
         weight_dtype = torch.bfloat16
     os.makedirs(args.save_path, exist_ok=True)
 
-    print("Loading pipe")
-    pipeline = PipelineMuse.from_pretrained(args.model_name_or_path).to(args.device, dtype=weight_dtype)
-    if args.enable_memory_efficient_attention:
-        pipeline.transformer.enable_xformers_memory_efficient_attention()
 
     print("Loading data")
     dataset = Flickr8kDataset(args.dataset_root, args.dataset_captions_file)
     dataloader = DataLoader(dataset, batch_size=args.batch_size)
-    generator = torch.Generator(args.device, dtype=weight_dtype).manual_seed(args.seed)
+    if not args.already_generated:
+        print("Loading pipe")
+        pipeline = PipelineMuse.from_pretrained(args.model_name_or_path).to(args.device, dtype=weight_dtype)
+        if args.enable_memory_efficient_attention:
+            pipeline.transformer.enable_xformers_memory_efficient_attention()
+        generator = torch.Generator(args.device, dtype=weight_dtype).manual_seed(args.seed)
     generated_image_paths = []
     print("Generating images")
     for batch in tqdm(dataloader):
         image_names = batch[0]
         text = batch[1]
-
-        images = pipeline(
-            text,
-            timesteps=args.timesteps,
-            guidance_scale=args.guidance_scale,
-            temperature=args.temperature,
-            generator=generator,
-        )
+        if not args.already_generated:
+            images = pipeline(
+                text,
+                timesteps=args.timesteps,
+                guidance_scale=args.guidance_scale,
+                temperature=args.temperature,
+                generator=generator,
+            )
 
         for image_name, image, image_caption in zip(image_names, images, text):
             generated_image_path = os.path.join(args.save_path, f"{image_name}")
@@ -162,6 +163,7 @@ if __name__ == "__main__":
     parser.add_argument("--enable_memory_efficient_attention", action='store_true')
     parser.add_argument("--calculate_image_alignment", action='store_true')
     parser.add_argument("--save_path", type=str, required=True)
+    parser.add_argument("--already_generated", action='store_true', help="Whether images are already generated")
     parser.add_argument("--timesteps", type=int, default=12)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--guidance_scale", type=float, default=8.0)
