@@ -85,11 +85,15 @@ def generate_and_save_images(args):
                 temperature=args.temperature,
                 generator=generator,
             )
-
-        for image_name, image, image_caption in zip(image_names, images, text):
-            generated_image_path = os.path.join(args.save_path, f"{image_name}")
-            image.save(generated_image_path)
-            generated_image_paths.append(generated_image_path)
+        if not args.already_generated:
+            for image_name, image in zip(image_names, images):
+                generated_image_path = os.path.join(args.save_path, f"{image_name}")
+                image.save(generated_image_path)
+                generated_image_paths.append(generated_image_path)
+        else:
+            for image_name in image_names:
+                generated_image_path = os.path.join(args.save_path, f"{image_name}")
+                generated_image_paths.append(generated_image_path)
     return dataset.captions, dataset.images, generated_image_paths
 def get_clip_scores(args, captions, real_image_names, generated_image_names):
     # This code is based on https://arxiv.org/abs/2104.08718 and it's implementation
