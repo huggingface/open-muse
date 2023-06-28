@@ -18,6 +18,7 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 from PIL import Image
+from torchvision import transforms
 from transformers import (
     AutoTokenizer,
     CLIPTextModel,
@@ -30,7 +31,6 @@ from .modeling_movq import MOVQ
 from .modeling_paella_vq import PaellaVQModel
 from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
-from torchvision import transforms
 
 
 class PipelineMuse:
@@ -72,6 +72,7 @@ class PipelineMuse:
         use_maskgit_generate: bool = True,
         generator: Optional[torch.Generator] = None,
         use_fp16: bool = False,
+        return_intermediate: bool = False,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -138,19 +139,31 @@ class PipelineMuse:
             generate = self.transformer.generate2
 
         with torch.autocast("cuda", enabled=use_fp16):
-            generated_tokens = generate(
+            outputs = generate(
                 **model_inputs,
                 timesteps=timesteps,
                 guidance_scale=guidance_scale,
                 temperature=temperature,
                 topk_filter_thres=topk_filter_thres,
                 generator=generator,
+                return_intermediate=return_intermediate,
             )
 
+            if return_intermediate:
+                generated_tokens, intermediate = outputs
+            else:
+                generated_tokens = outputs
+
         images = self.vae.decode_code(generated_tokens)
+        if return_intermediate:
+            intermediate_images = [self.vae.decode_code(tokens) for tokens in intermediate]
 
         # Convert to PIL images
         images = [self.to_pil_image(image) for image in images]
+        if return_intermediate:
+            intermediate_images = [[self.to_pil_image(image) for image in images] for images in intermediate_images]
+            return images, intermediate_images
+
         return images
 
     def to_pil_image(self, image: torch.Tensor):
@@ -244,6 +257,7 @@ class PipelineMuse:
             tokenizer=tokenizer,
             is_class_conditioned=is_class_conditioned,
         )
+
     def save_pretrained(
         self,
         save_directory: Union[str, os.PathLike],
@@ -258,6 +272,7 @@ class PipelineMuse:
 
         self.vae.save_pretrained(os.path.join(save_directory, "vae"))
         self.transformer.save_pretrained(os.path.join(save_directory, "transformer"))
+
 
 class PipelineMuseInpainting(PipelineMuse):
     @torch.no_grad()
@@ -276,7 +291,7 @@ class PipelineMuseInpainting(PipelineMuse):
         use_maskgit_generate: bool = True,
         generator: Optional[torch.Generator] = None,
         use_fp16: bool = False,
-        image_size: int = 256
+        image_size: int = 256,
     ):
         assert use_maskgit_generate
         if text is None and class_ids is None:
@@ -285,11 +300,13 @@ class PipelineMuseInpainting(PipelineMuse):
         if text is not None and class_ids is not None:
             raise ValueError("Only one of text or class_ids may be provided.")
 
-        encode_transform = transforms.Compose([
+        encode_transform = transforms.Compose(
+            [
                 transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
                 transforms.CenterCrop(image_size),
                 transforms.ToTensor(),
-        ])
+            ]
+        )
         pixel_values = encode_transform(image).unsqueeze(0).to(self.device)
         _, image_tokens = self.vae.encode(pixel_values)
         mask_token_id = self.transformer.config.mask_token_id
@@ -351,7 +368,7 @@ class PipelineMuseInpainting(PipelineMuse):
         generate = self.transformer.generate2
         with torch.autocast("cuda", enabled=use_fp16):
             generated_tokens = generate(
-                input_ids = image_tokens,
+                input_ids=image_tokens,
                 **model_inputs,
                 timesteps=timesteps,
                 guidance_scale=guidance_scale,

@@ -1259,6 +1259,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if isinstance(module, (DownsampleBlock, UpsampleBlock)):
             module.gradient_checkpointing = value
 
+    def generate(self):
+        pass
+
     def generate2(
         self,
         input_ids: torch.LongTensor = None,
@@ -1270,6 +1273,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         guidance_scale=0,
         noise_schedule=cosine_schedule,
         generator: torch.Generator = None,
+        return_intermediate=False,
         **kwargs,
     ):
         """
@@ -1290,6 +1294,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if input_ids is None:
             # initialize with all image tokens masked
             input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+
+        if return_intermediate:
+            intermediate = []
 
         for step in range(timesteps):
             # prepend class token to input_ids
@@ -1324,6 +1331,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 [torch.multinomial(l.softmax(dim=-1), 1, generator=generator).squeeze(1) for l in logits]
             )
 
+            if return_intermediate:
+                intermediate.append(sampled_ids)
+
             # Just updates the masked tokens.
             unknown_map = input_ids == mask_token_id
             sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
@@ -1352,4 +1362,6 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             # Masks tokens with lower confidence.
             input_ids = torch.where(masking, mask_token_id, sampled_ids)
 
+        if return_intermediate:
+            return sampled_ids, intermediate
         return sampled_ids
