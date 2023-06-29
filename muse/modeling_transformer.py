@@ -1301,6 +1301,13 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if guidance_schedule == "linear":
             guidance_scales = torch.linspace(0, guidance_scale, timesteps)
+        elif guidance_schedule == "cosine":
+            guidance_scales = []
+            for step in range(timesteps):
+                ratio = 1.0 * (step + 1) / timesteps
+                scale = cosine_schedule(torch.tensor(1 - ratio)) * guidance_scale
+                guidance_scales.append(scale.floor())
+            guidance_scales = torch.tensor(guidance_scales)
         else:
             guidance_scales = torch.ones(timesteps) * guidance_scale
 
