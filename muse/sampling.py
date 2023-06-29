@@ -1,6 +1,7 @@
 # Adapted from https://github.com/lucidrains/muse-maskgit-pytorch
 
 import math
+from functools import partial
 
 import torch
 
@@ -44,10 +45,19 @@ def linear_schedule(t):
     return mask_ratio
 
 
+def pow(t, method):
+    exponent = float(method.replace("pow", ""))
+    mask_ratio = 1.0 - t**exponent
+    mask_ratio = mask_ratio.clamp(min=1e-6, max=1.0)
+    return mask_ratio
+
+
 def get_mask_chedule(method):
     if method == "cosine":
         return cosine_schedule
     elif method == "linear":
         return linear_schedule
+    elif "pow" in method:
+        return partial(pow, method=method)
     else:
         raise ValueError("Unknown schedule method: {}".format(method))
