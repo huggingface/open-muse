@@ -1271,6 +1271,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
+        guidance_schedule=None,
         noise_schedule=cosine_schedule,
         generator: torch.Generator = None,
         return_intermediate=False,
@@ -1297,6 +1298,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if return_intermediate:
             intermediate = []
+        
+        if guidance_schedule == "linear":
+            guidance_scales = torch.linspace(0, guidance_scale, timesteps)
+        else:
+            guidance_scales = torch.ones(timesteps) * guidance_scale
 
         for step in range(timesteps):
             # prepend class token to input_ids
@@ -1315,7 +1321,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
-                logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
+                logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
             else:
                 logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
                 logits = logits[..., : self.config.codebook_size]
