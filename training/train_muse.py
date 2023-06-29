@@ -20,7 +20,7 @@ import os
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Union
 
 import numpy as np
 import torch
@@ -172,9 +172,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -231,25 +231,31 @@ def main():
     #########################
     logger.info("Loading models and optimizer")
 
-    if config.model.text_encoder.type == "clip":
-        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-    elif config.model.text_encoder.type == "t5":
-        text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
-    else:
-        raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+    is_pre_encode = config.training.get("pre_encode", False)
+    if not is_pre_encode:
+        if config.model.text_encoder.type == "clip":
+            text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        elif config.model.text_encoder.type == "t5":
+            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        else:
+            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
 
-    vq_class = get_vq_model_class(config.model.vq_model.type)
-    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+        vq_class = get_vq_model_class(config.model.vq_model.type)
+        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+
+        # Freeze the text model and VQGAN
+        text_encoder.requires_grad_(False)
+        vq_model.requires_grad_(False)
+    else:
+        text_encoder = None
+        tokenizer = None
+        vq_model = None
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
-
-    # Freeze the text model and VQGAN
-    text_encoder.requires_grad_(False)
-    vq_model.requires_grad_(False)
 
     # Create EMA
     if config.training.get("use_ema", False):
@@ -372,6 +378,9 @@ def main():
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
         pin_memory=dataset_config.pin_memory,
         persistent_workers=dataset_config.persistent_workers,
+        is_pre_encoded=is_pre_encode,
+        vae_checkpoint=config.model.vq_model.pretrained,
+        text_encoder_checkpoint=config.model.text_encoder.pretrained,
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
@@ -396,8 +405,9 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    text_encoder.to(device=accelerator.device, dtype=weight_dtype)
-    vq_model.to(device=accelerator.device)
+    if not is_pre_encode:
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        vq_model.to(device=accelerator.device)
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
 
@@ -451,20 +461,27 @@ def main():
 
     @torch.no_grad()
     def prepare_inputs_and_labels(
-        pixel_values: torch.FloatTensor,
-        input_ids: torch.LongTensor,
+        pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
+        text_input_ids_or_embeds: Union[torch.LongTensor, torch.LongTensor],
         min_masking_rate: float = 0.0,
         is_train: bool = True,
     ):
-        if config.training.use_soft_code_target and is_train:
-            soft_targets, image_tokens = vq_model.get_soft_code(
-                pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
-            )
-        else:
-            image_tokens = vq_model.get_code(pixel_values)
+        if is_pre_encode:
+            image_tokens = pixel_values_or_image_ids
             soft_targets = None
+        else:
+            if config.training.use_soft_code_target and is_train:
+                soft_targets, image_tokens = vq_model.get_soft_code(
+                    pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+                )
+            else:
+                image_tokens = vq_model.get_code(pixel_values)
+                soft_targets = None
 
-        encoder_hidden_states = text_encoder(input_ids)[0]
+        if not is_pre_encode:
+            encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
+        else:
+            encoder_hidden_states = text_input_ids_or_embeds
 
         batch_size, seq_len = image_tokens.shape
         # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
@@ -677,6 +694,27 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     else:
         validation_prompts = imagenet_class_names
 
+    if config.training.get("pre_encode", False):
+        if config.model.text_encoder.type == "clip":
+            text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        elif config.model.text_encoder.type == "t5":
+            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        else:
+            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+
+        vq_class = get_vq_model_class(config.model.vq_model.type)
+        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+
+        if accelerator.mixed_precision == "fp16":
+            weight_dtype = torch.float16
+        elif accelerator.mixed_precision == "bf16":
+            weight_dtype = torch.bfloat16
+
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        vq_model.to(accelerator.device)
+
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
@@ -685,6 +723,9 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
     encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
+
+    if config.training.get("pre_encode", False):
+        del text_encoder
 
     mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
@@ -700,6 +741,9 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
     images = vq_model.decode_code(gen_token_ids)
     model.train()
+
+    if config.training.get("pre_encode", False):
+        del vq_model
 
     # Convert to PIL images
     images = 2.0 * images - 1.0
