@@ -172,9 +172,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -694,6 +694,27 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     else:
         validation_prompts = imagenet_class_names
 
+    if config.training.get("pre_encode", False):
+        if config.model.text_encoder.type == "clip":
+            text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        elif config.model.text_encoder.type == "t5":
+            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        else:
+            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+
+        vq_class = get_vq_model_class(config.model.vq_model.type)
+        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+
+        if accelerator.mixed_precision == "fp16":
+            weight_dtype = torch.float16
+        elif accelerator.mixed_precision == "bf16":
+            weight_dtype = torch.bfloat16
+
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        vq_model.to(accelerator.device)
+
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
@@ -702,6 +723,9 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
     encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
+
+    if config.training.get("pre_encode", False):
+        del text_encoder
 
     mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
@@ -717,6 +741,9 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
     images = vq_model.decode_code(gen_token_ids)
     model.train()
+
+    if config.training.get("pre_encode", False):
+        del vq_model
 
     # Convert to PIL images
     images = 2.0 * images - 1.0
