@@ -97,8 +97,8 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 1
-    batch_size: 128
+    gradient_accumulation_steps: 2
+    batch_size: 96
     mixed_precision: "fp16"
     enable_tf32: True
     use_ema: False
@@ -116,3 +116,4 @@ training:
     use_stochastic_code: False
     soft_code_temp: 1.0
     mask_schedule: "cosine"
+    pre_encode: True
