@@ -7,9 +7,9 @@ experiment:
     output_dir: "cc12m"
     max_train_examples: 8974320 # toal sucessfully downloaded images for laiona6plus
     max_eval_examples: 8118
-    save_every: 1000
-    eval_every: 1000
-    generate_every: 1000
+    save_every: 100
+    eval_every: 100
+    generate_every: 100
     log_every: 50
     log_grad_norm_every: 500
     resume_from_checkpoint: False
@@ -101,7 +101,7 @@ training:
     enable_tf32: True
     use_ema: False
     seed: 9345104
-    max_train_steps: 500
+    max_train_steps: 100
     overfit_one_batch: False
     cond_dropout_prob: 0.1
     min_masking_rate: 0.0
