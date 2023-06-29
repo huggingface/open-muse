@@ -1,6 +1,7 @@
+from argparse import ArgumentParser
+
 import matplotlib.pyplot as plt
 import pandas as pd
-from argparse import ArgumentParser
 
 df = pd.read_csv("artifacts/all.csv")
 
@@ -20,11 +21,7 @@ model_names = [
 
 
 def chart(device, component, compiled, plot_on, legend, y_axis_key, y_label, timesteps):
-    filter = (
-        (df["Device"] == device)
-        & (df["Component"] == component)
-        & (df["Compilation Type"] == compiled)
-    )
+    filter = (df["Device"] == device) & (df["Component"] == component) & (df["Compilation Type"] == compiled)
 
     if timesteps is not None:
         filter = filter & (df["Timesteps"] == timesteps)

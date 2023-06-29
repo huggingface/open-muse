@@ -172,9 +172,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
-            config.training.batch_size
-        )
+        accelerator.state.deepspeed_plugin.deepspeed_config[
+            "train_micro_batch_size_per_gpu"
+        ] = config.training.batch_size
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #

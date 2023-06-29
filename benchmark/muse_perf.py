@@ -1,15 +1,16 @@
-import torch
-from torch.utils.benchmark import Timer, Compare
-from muse.modeling_taming_vqgan import VQGANModel
-from muse.modeling_transformer import MaskGiTUViT
-from muse import PipelineMuse, PaellaVQModel
+import csv
 import multiprocessing
 import traceback
 from argparse import ArgumentParser
-import csv
-from diffusers import UNet2DConditionModel, AutoencoderKL, StableDiffusionPipeline
 
-from transformers import CLIPTextModel, AutoTokenizer, CLIPTokenizer
+import torch
+from diffusers import AutoencoderKL, StableDiffusionPipeline, UNet2DConditionModel
+from torch.utils.benchmark import Compare, Timer
+from transformers import AutoTokenizer, CLIPTextModel, CLIPTokenizer
+
+from muse import PaellaVQModel, PipelineMuse
+from muse.modeling_taming_vqgan import VQGANModel
+from muse.modeling_transformer import MaskGiTUViT
 
 torch.manual_seed(0)
 torch.set_grad_enabled(False)
@@ -149,7 +150,7 @@ def main():
                                 component,
                                 timesteps,
                                 mem_bytes,
-                                iqr
+                                iqr,
                             ]
                         )
 
@@ -162,17 +163,11 @@ def main():
 
 
 def muse_benchmark_transformer_backbone(in_queue, out_queue, timeout):
-    wrap_subprocess_fn(
-        in_queue, out_queue, timeout, _muse_benchmark_transformer_backbone
-    )
+    wrap_subprocess_fn(in_queue, out_queue, timeout, _muse_benchmark_transformer_backbone)
 
 
-def _muse_benchmark_transformer_backbone(
-    device, dtype, compiled, batch_size, model, label, description, timesteps
-):
-    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(
-        device
-    )
+def _muse_benchmark_transformer_backbone(device, dtype, compiled, batch_size, model, label, description, timesteps):
+    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(device)
 
     tokenizer = AutoTokenizer.from_pretrained(model, subfolder="text_encoder")
 
@@ -198,9 +193,7 @@ def _muse_benchmark_transformer_backbone(
     if compiled is not None:
         transformer = torch.compile(transformer, mode=compiled)
 
-    image_tokens = torch.full(
-        (batch_size, 256), fill_value=5, dtype=torch.long, device=device
-    )
+    image_tokens = torch.full((batch_size, 256), fill_value=5, dtype=torch.long, device=device)
 
     def benchmark_fn():
         transformer(image_tokens, encoder_hidden_states=encoder_hidden_states)
@@ -226,9 +219,7 @@ def sd_benchmark_unet_backbone(in_queue, out_queue, timeout):
     wrap_subprocess_fn(in_queue, out_queue, timeout, _sd_benchmark_unet_backbone)
 
 
-def _sd_benchmark_unet_backbone(
-    device, dtype, compiled, batch_size, model, label, description, timesteps
-):
+def _sd_benchmark_unet_backbone(device, dtype, compiled, batch_size, model, label, description, timesteps):
     unet = UNet2DConditionModel.from_pretrained(model, subfolder="unet")
 
     unet = unet.to(device=device, dtype=dtype)
@@ -236,9 +227,7 @@ def _sd_benchmark_unet_backbone(
     if compiled is not None:
         unet = torch.compile(unet, mode=compiled)
 
-    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(
-        device
-    )
+    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(device)
 
     tokenizer = CLIPTokenizer.from_pretrained(model, subfolder="tokenizer")
 
@@ -285,9 +274,7 @@ def muse_benchmark_vae(in_queue, out_queue, timeout):
     wrap_subprocess_fn(in_queue, out_queue, timeout, _muse_benchmark_vae)
 
 
-def _muse_benchmark_vae(
-    device, dtype, compiled, batch_size, model, label, description, timesteps
-):
+def _muse_benchmark_vae(device, dtype, compiled, batch_size, model, label, description, timesteps):
     vae_cls = model_config[model]["vae"]["cls"]
     vae = vae_cls.from_pretrained(model, subfolder="vae")
 
@@ -296,9 +283,7 @@ def _muse_benchmark_vae(
     if compiled is not None:
         vae = torch.compile(vae, mode=compiled)
 
-    image_tokens = torch.full(
-        (batch_size, 256), fill_value=5, dtype=torch.long, device=device
-    )
+    image_tokens = torch.full((batch_size, 256), fill_value=5, dtype=torch.long, device=device)
 
     def benchmark_fn():
         vae.decode_code(image_tokens)
@@ -324,9 +309,7 @@ def sd_benchmark_vae(in_queue, out_queue, timeout):
     wrap_subprocess_fn(in_queue, out_queue, timeout, _sd_benchmark_vae)
 
 
-def _sd_benchmark_vae(
-    device, dtype, compiled, batch_size, model, label, description, timesteps
-):
+def _sd_benchmark_vae(device, dtype, compiled, batch_size, model, label, description, timesteps):
     vae = AutoencoderKL.from_pretrained(model, subfolder="vae")
 
     vae = vae.to(device=device, dtype=dtype)
@@ -360,14 +343,10 @@ def muse_benchmark_full(in_queue, out_queue, timeout):
     wrap_subprocess_fn(in_queue, out_queue, timeout, _muse_benchmark_full)
 
 
-def _muse_benchmark_full(
-    device, dtype, compiled, batch_size, model, label, description, timesteps
-):
+def _muse_benchmark_full(device, dtype, compiled, batch_size, model, label, description, timesteps):
     tokenizer = AutoTokenizer.from_pretrained(model, subfolder="text_encoder")
 
-    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(
-        device=device, dtype=dtype
-    )
+    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(device=device, dtype=dtype)
 
     vae_cls = model_config[model]["vae"]["cls"]
     vae = vae_cls.from_pretrained(model, subfolder="vae")
@@ -415,14 +394,10 @@ def sd_benchmark_full(in_queue, out_queue, timeout):
     wrap_subprocess_fn(in_queue, out_queue, timeout, _sd_benchmark_full)
 
 
-def _sd_benchmark_full(
-    device, dtype, compiled, batch_size, model, label, description, timesteps
-):
+def _sd_benchmark_full(device, dtype, compiled, batch_size, model, label, description, timesteps):
     tokenizer = CLIPTokenizer.from_pretrained(model, subfolder="tokenizer")
 
-    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(
-        device=device, dtype=dtype
-    )
+    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(device=device, dtype=dtype)
 
     vae = AutoencoderKL.from_pretrained(model, subfolder="vae")
 

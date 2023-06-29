@@ -1298,7 +1298,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if return_intermediate:
             intermediate = []
-        
+
         if guidance_schedule == "linear":
             guidance_scales = torch.linspace(0, guidance_scale, timesteps)
         else:

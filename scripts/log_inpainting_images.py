@@ -1,14 +1,17 @@
+import copy
 import json
+import os
 from argparse import ArgumentParser
 from itertools import islice
 
+import numpy as np
 import torch
 import wandb
-import numpy as np
-from muse import PipelineMuseInpainting
 from PIL import Image
-import copy
-import os
+
+from muse import PipelineMuseInpainting
+
+
 def chunk(it, size):
     it = iter(it)
     return iter(lambda: tuple(islice(it, size)), ())
@@ -31,14 +34,17 @@ def generate_and_log(args):
         inputs = {"text": args.text}
 
     mask = np.zeros((args.image_size // vae_scaling_factor, args.image_size // vae_scaling_factor))
-    mask[args.mask_start_x:args.mask_end_x, args.mask_start_y:args.mask_end_y] = 1
+    mask[args.mask_start_x : args.mask_end_x, args.mask_start_y : args.mask_end_y] = 1
     mask = mask.reshape(-1)
     mask = torch.tensor(mask).to(args.device, dtype=torch.bool)
 
     image = Image.open(args.input_image).resize((args.image_size, args.image_size))
 
     masked_image = copy.deepcopy(np.array(image))
-    masked_image[args.mask_start_x*vae_scaling_factor:args.mask_end_x*vae_scaling_factor, args.mask_start_y*vae_scaling_factor:args.mask_end_y*vae_scaling_factor] = 0
+    masked_image[
+        args.mask_start_x * vae_scaling_factor : args.mask_end_x * vae_scaling_factor,
+        args.mask_start_y * vae_scaling_factor : args.mask_end_y * vae_scaling_factor,
+    ] = 0
     masked_image = Image.fromarray(masked_image)
     masked_image.save(os.path.join(args.output_dir, "segmented.jpg"))
     images = pipe(
@@ -50,7 +56,7 @@ def generate_and_log(args):
         temperature=args.temperature,
         use_maskgit_generate=not args.not_maskgit_generate,
         num_images_per_prompt=args.num_generations,
-        image_size=args.image_size
+        image_size=args.image_size,
     )
 
     if args.is_class_conditioned:
@@ -61,6 +67,7 @@ def generate_and_log(args):
     else:
         for i, image in enumerate(images):
             image.save(os.path.join(args.output_dir, f"output_{i}.jpg"))
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
