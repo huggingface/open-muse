@@ -15,4 +15,4 @@ conda activate base
 
 cd /fsx/william/open-muse
 
-time srun python scripts/pre_encode.py --slurm --dataset coyo --start_shard 640 --end_shard 4234
+time srun python scripts/pre_encode.py --slurm --dataset coyo --start_shard 4235 --end_shard 74751
