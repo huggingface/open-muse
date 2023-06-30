@@ -765,6 +765,8 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
             guidance_scale=config.training.guidance_scale,
             timesteps=config.training.generation_timesteps,
             noise_schedule=mask_schedule,
+            noise_type=config.training.get("noise_type", "mask"),
+            predict_all_tokens=config.training.get("predict_all_tokens", False),
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
