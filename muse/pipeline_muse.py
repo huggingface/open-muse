@@ -73,6 +73,8 @@ class PipelineMuse:
         use_maskgit_generate: bool = True,
         generator: Optional[torch.Generator] = None,
         use_fp16: bool = False,
+        noise_type="mask",  # can be "mask" or "random_replace"
+        predict_all_tokens=False,
         return_intermediate: bool = False,
     ):
         if text is None and class_ids is None:
@@ -148,6 +150,8 @@ class PipelineMuse:
                 temperature=temperature,
                 topk_filter_thres=topk_filter_thres,
                 generator=generator,
+                noise_type=noise_type,
+                predict_all_tokens=predict_all_tokens,
                 return_intermediate=return_intermediate,
             )
 

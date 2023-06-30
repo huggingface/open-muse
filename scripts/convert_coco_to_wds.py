@@ -7,12 +7,13 @@
 # we write into ../data/coco-2017-train/ because shard writer doesn't support piped
 # uploads
 #
-# after writing to disk, run 
+# after writing to disk, run
 # $ aws s3 cp ../data/coco-2017-train/ s3://muse-datasets/coco/2017/train/ --recursive
 
 # Needed for `PIL.Image` to work in wds :/
 
 import json
+
 import webdataset as wds
 from cv2 import imread
 
