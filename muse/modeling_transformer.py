@@ -1190,6 +1190,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         cond_dropout_prob=0.0,
+        loss_weight=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
@@ -1248,9 +1249,17 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         logits = self.mlm_layer(hidden_states)
 
         if labels is not None:
+            reduction = "none" if loss_weight is not None else "mean"
             loss = F.cross_entropy(
-                logits.view(-1, self.output_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
+                logits.view(-1, self.output_size),
+                labels.view(-1),
+                ignore_index=-100,
+                label_smoothing=label_smoothing,
+                reduction=reduction,
             )
+            if loss_weight is not None:
+                loss_weight = loss_weight.view(-1)
+                loss = ((loss * loss_weight).sum(dim=-1) / loss_weight.sum(dim=-1)).mean()
             return logits, loss
         return logits
 
@@ -1273,6 +1282,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         guidance_scale=0,
         guidance_schedule=None,
         noise_schedule=cosine_schedule,
+        noise_type="mask",  # can be "mask" or "random_replace"
+        predict_all_tokens=False,
         generator: torch.Generator = None,
         return_intermediate=False,
         **kwargs,
@@ -1294,7 +1305,12 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if input_ids is None:
             # initialize with all image tokens masked
-            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+            if noise_type == "mask":
+                input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+            elif noise_type == "random_replace":
+                input_ids = torch.randint_like(input_ids, low=0, high=self.config.codebook_size, device=self.device)
+            else:
+                raise ValueError(f"noise_type {noise_type} not recognized")
 
         if return_intermediate:
             intermediate = []
@@ -1338,42 +1354,72 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 input_ids = input_ids[:, 1:]
                 logits = logits[:, 1:]
 
-            # Samples the ids using categorical sampling: [batch_size, seq_length].
-            # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
-            sampled_ids = torch.stack(
-                [torch.multinomial(l.softmax(dim=-1), 1, generator=generator).squeeze(1) for l in logits]
-            )
+            if noise_type == "mask":
+                # Samples the ids using categorical sampling: [batch_size, seq_length].
+                probs = logits.softmax(dim=-1)
+                sampled = probs.reshape(-1, logits.size(-1))
+                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
 
-            if return_intermediate:
-                intermediate.append(sampled_ids)
+                if return_intermediate:
+                    intermediate.append(sampled_ids)
 
-            # Just updates the masked tokens.
-            unknown_map = input_ids == mask_token_id
-            sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
-            # Defines the mask ratio for the next round. The number to mask out is
-            # determined by mask_ratio * unknown_number_in_the_beginning.
-            ratio = 1.0 * (step + 1) / timesteps
-            mask_ratio = noise_schedule(torch.tensor(ratio))
-            # Computes the probabilities of each selected tokens.
-            probs = logits.softmax(dim=-1)
-            selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
-            selected_probs = selected_probs.squeeze(-1)
+                # Just updates the masked tokens.
+                unknown_map = input_ids == mask_token_id
+                sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
+                # Defines the mask ratio for the next round. The number to mask out is
+                # determined by mask_ratio * unknown_number_in_the_beginning.
+                ratio = 1.0 * (step + 1) / timesteps
+                mask_ratio = noise_schedule(torch.tensor(ratio))
 
-            # Ignores the tokens given in the input by overwriting their confidence.
-            selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
-            # Gets mask lens for each sample in the batch according to the mask ratio.
-            mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
-            # Keeps at least one of prediction in this round and also masks out at least
-            # one and for the next iteration
-            mask_len = torch.max(
-                torch.tensor([1], device=logits.device), torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len)
-            )
+                # Gets mask lens for each sample in the batch according to the mask ratio.
+                mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
+                # Keeps at least one of prediction in this round and also masks out at least
+                # one and for the next iteration
+                mask_len = torch.max(
+                    torch.tensor([1], device=logits.device),
+                    torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len),
+                )
 
-            # Adds noise for randomness
-            temperature = temperature * (1.0 - ratio)
-            masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
-            # Masks tokens with lower confidence.
-            input_ids = torch.where(masking, mask_token_id, sampled_ids)
+                # Adds noise for randomness
+                if not predict_all_tokens:
+                    selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
+                    selected_probs = selected_probs.squeeze(-1)
+                    # Ignores the tokens given in the input by overwriting their confidence.
+                    selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
+                    temperature = temperature * (1.0 - ratio)
+                    masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
+                    # Masks tokens with lower confidence.
+                    input_ids = torch.where(masking, mask_token_id, sampled_ids)
+                else:
+                    batch_size, seq_len = input_ids.shape
+                    batch_randperm = torch.rand(batch_size, seq_len, device=input_ids.device).argsort(dim=-1)
+                    mask = batch_randperm < mask_len
+                    # mask images and create input and labels
+                    input_ids = torch.where(mask, mask_token_id, sampled_ids)
+            else:
+                # Defines the mask ratio for the next round. The number to mask out is
+                # determined by mask_ratio * unknown_number_in_the_beginning.
+                ratio = 1.0 * (step + 1) / timesteps
+                mask_ratio = noise_schedule(torch.tensor(ratio))
+                temperature = temperature * (1.0 - ratio)
+
+                # Samples the ids using categorical sampling: [batch_size, seq_length].
+                probs = logits.div(temperature).softmax(dim=-1)
+                sampled = probs.reshape(-1, logits.size(-1))
+                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
+
+                if return_intermediate:
+                    intermediate.append(sampled_ids)
+
+                # Adds noise for randomness
+                num_token_masked = (seq_len * mask_ratio).round().clamp(min=1)
+                batch_randperm = torch.rand(batch_size, seq_len, device=sampled_ids.device).argsort(dim=-1)
+                mask = batch_randperm < num_token_masked.unsqueeze(-1)
+                # sample random tokens from the vocabulary
+                random_tokens = torch.randint_like(
+                    input_ids, low=0, high=self.config.codebook_size, device=input_ids.device
+                )
+                input_ids = torch.where(mask, random_tokens, sampled_ids)
 
         if return_intermediate:
             return sampled_ids, intermediate

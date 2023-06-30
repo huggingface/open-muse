@@ -131,6 +131,49 @@ def soft_target_cross_entropy(logits, targets, soft_targets):
     return loss
 
 
+def get_loss_weight(t, mask, min_val=0.3):
+    return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
+
+
+def mask_or_random_replace_tokens(image_tokens, mask_id, config):
+    batch_size, seq_len = image_tokens.shape
+    # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
+    # Sample a random timestep for each image
+    timesteps = torch.rand(batch_size, device=image_tokens.device)
+    # Sample a random mask probability for each image using timestep and cosine schedule
+    mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
+    mask_prob = mask_schedule(timesteps)
+    mask_prob = mask_prob.clip(config.training.min_masking_rate)
+    # creat a random mask for each image
+    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+    mask = batch_randperm < num_token_masked.unsqueeze(-1)
+
+    # mask images and create input and labels
+    if config.training.get("noise_type", "mask"):
+        input_ids = torch.where(mask, mask_id, image_tokens)
+    elif config.training.get("noise_type", "random_replace"):
+        # sample random tokens from the vocabulary
+        random_tokens = torch.randint_like(
+            image_tokens, low=0, high=config.model.codebook_size, device=image_tokens.device
+        )
+        input_ids = torch.where(mask, random_tokens, image_tokens)
+    else:
+        raise ValueError(f"noise_type {config.training.noise_type} not supported")
+
+    if (
+        config.training.get("predict_all_tokens", False)
+        or config.training.get("noise_type", "mask") == "random_replace"
+    ):
+        labels = image_tokens
+        loss_weight = get_loss_weight(mask_prob, mask.long())
+    else:
+        labels = torch.where(mask, image_tokens, -100)
+        loss_weight = None
+
+    return input_ids, labels, loss_weight, mask_prob
+
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
@@ -483,23 +526,9 @@ def main():
         else:
             encoder_hidden_states = text_input_ids_or_embeds
 
-        batch_size, seq_len = image_tokens.shape
-        # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
-        # Sample a random timestep for each image
-        timesteps = torch.rand(batch_size, device=image_tokens.device)
-        # Sample a random mask probability for each image using timestep and cosine schedule
-        mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
-        mask_prob = mask_schedule(timesteps)
-        mask_prob = mask_prob.clip(min_masking_rate)
-        # creat a random mask for each image
-        num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-        mask = batch_randperm < num_token_masked.unsqueeze(-1)
-        # mask images and create input and labels
-        input_ids = torch.where(mask, mask_id, image_tokens)
-        labels = torch.where(mask, image_tokens, -100)
-
-        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob
+        # create MLM mask and labels
+        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(image_tokens, mask_id, config)
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -516,7 +545,7 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob = prepare_inputs_and_labels(
+            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight = prepare_inputs_and_labels(
                 pixel_values, input_ids, config.training.min_masking_rate
             )
 
@@ -541,6 +570,7 @@ def main():
                         labels=labels,
                         label_smoothing=config.training.label_smoothing,
                         cond_dropout_prob=config.training.cond_dropout_prob,
+                        loss_weight=loss_weight,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
