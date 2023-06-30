@@ -698,8 +698,8 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _ = prepare_inputs_and_labels(pixel_values, input_ids)
-        _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels)
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(pixel_values, input_ids)
+        _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight)
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
