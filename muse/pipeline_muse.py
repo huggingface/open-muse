@@ -31,6 +31,7 @@ from .modeling_movq import MOVQ
 from .modeling_paella_vq import PaellaVQModel
 from .modeling_taming_vqgan import VQGANModel
 from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
+from .sampling import get_mask_chedule
 
 
 class PipelineMuse:
@@ -65,6 +66,7 @@ class PipelineMuse:
         negative_text: Optional[Union[str, List[str]]] = None,
         class_ids: Optional[Union[int, List[int]]] = None,
         timesteps: int = 8,
+        noise_schedule: str = "cosine",
         guidance_scale: float = 8.0,
         guidance_schedule=None,
         temperature: float = 1.0,
@@ -151,6 +153,7 @@ class PipelineMuse:
                 topk_filter_thres=topk_filter_thres,
                 generator=generator,
                 noise_type=noise_type,
+                noise_schedule=get_mask_chedule(noise_schedule),
                 predict_all_tokens=predict_all_tokens,
                 return_intermediate=return_intermediate,
             )
