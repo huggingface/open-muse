@@ -135,13 +135,12 @@ def get_loss_weight(t, mask, min_val=0.3):
     return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
 
 
-def mask_or_random_replace_tokens(image_tokens, mask_id, config):
+def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule):
     batch_size, seq_len = image_tokens.shape
     # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
     # Sample a random timestep for each image
     timesteps = torch.rand(batch_size, device=image_tokens.device)
     # Sample a random mask probability for each image using timestep and cosine schedule
-    mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
     mask_prob = mask_schedule(timesteps)
     mask_prob = mask_prob.clip(config.training.min_masking_rate)
     # creat a random mask for each image
@@ -380,6 +379,14 @@ def main():
         eps=optimizer_config.epsilon,
     )
 
+    # Cretae mask scheduler
+    if config.get("mask_schedule", None) is not None:
+        schedule = config.mask_schedule.schedule
+        args = config.mask_schedule.get("params", {})
+        mask_schedule = get_mask_chedule(schedule, **args)
+    else:
+        mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
+
     ##################################
     # DATLOADER and LR-SCHEDULER     #
     #################################
@@ -527,7 +534,9 @@ def main():
             encoder_hidden_states = text_input_ids_or_embeds
 
         # create MLM mask and labels
-        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(image_tokens, mask_id, config)
+        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
+            image_tokens, mask_id, config, mask_schedule=mask_schedule
+        )
         return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight
 
     batch_time_m = AverageMeter()
@@ -657,7 +666,16 @@ def main():
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
 
-                    generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step + 1)
+                    generate_images(
+                        model,
+                        vq_model,
+                        text_encoder,
+                        tokenizer,
+                        accelerator,
+                        config,
+                        global_step + 1,
+                        mask_schedule=mask_schedule,
+                    )
 
                     if config.training.get("use_ema", False):
                         # Switch back to the original model parameters for training.
@@ -698,8 +716,12 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(pixel_values, input_ids)
-        _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight)
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(
+            pixel_values, input_ids
+        )
+        _, loss = model(
+            input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight
+        )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
@@ -710,7 +732,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 
 
 @torch.no_grad()
-def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step):
+def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule):
     logger.info("Generating images...")
     model.eval()
     # fmt: off
@@ -757,7 +779,6 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     if config.training.get("pre_encode", False):
         del text_encoder
 
-    mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate2(
