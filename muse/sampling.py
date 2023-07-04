@@ -52,12 +52,26 @@ def pow(t, method):
     return mask_ratio
 
 
-def get_mask_chedule(method):
+def sigmoid_schedule(t, start=-3, end=3, tau=1.0, clip_min=1e-6):
+    for item in [t, start, end, tau]:
+        item = torch.tensor(item) if not torch.is_tensor(item) else item
+
+    # A gamma function based on sigmoid function.
+    v_start = torch.sigmoid(torch.tensor(start / tau))
+    v_end = torch.sigmoid(torch.tensor(end / tau))
+    output = torch.sigmoid((t * (end - start) + start) / tau)
+    output = (v_end - output) / (v_end - v_start)
+    return torch.clip(output, clip_min, 1.0)
+
+
+def get_mask_chedule(method, **schedule_kwargs):
     if method == "cosine":
         return cosine_schedule
     elif method == "linear":
         return linear_schedule
     elif "pow" in method:
         return partial(pow, method=method)
+    elif method == "sigmoid":
+        return partial(sigmoid_schedule, **schedule_kwargs)
     else:
         raise ValueError("Unknown schedule method: {}".format(method))
