@@ -558,7 +558,7 @@ class TransformerLayer(nn.Module):
             hidden_states = residual + attention_output
 
         residual = hidden_states
-        hidden_states = self.ffn(hidden_states)
+        hidden_states = self.ffn(hidden_states, time_embeds=time_embeds)
         hidden_states = residual + hidden_states
         return hidden_states
 
