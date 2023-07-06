@@ -170,7 +170,7 @@ def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule):
         labels = torch.where(mask, image_tokens, -100)
         loss_weight = None
 
-    return input_ids, labels, loss_weight, mask_prob
+    return input_ids, labels, loss_weight, mask_prob, timesteps
 
 
 class AverageMeter(object):
@@ -214,9 +214,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -534,10 +534,10 @@ def main():
             encoder_hidden_states = text_input_ids_or_embeds
 
         # create MLM mask and labels
-        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
+        input_ids, labels, loss_weight, mask_prob, timesteps = mask_or_random_replace_tokens(
             image_tokens, mask_id, config, mask_schedule=mask_schedule
         )
-        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, timesteps
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -554,9 +554,12 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight = prepare_inputs_and_labels(
-                pixel_values, input_ids, config.training.min_masking_rate
+            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, timesteps = (
+                prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate)
             )
+
+            if not config.model.transformer.get("add_time_embed", False):
+                timesteps = None
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -577,6 +580,7 @@ def main():
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
+                        timesteps=timesteps,
                         label_smoothing=config.training.label_smoothing,
                         cond_dropout_prob=config.training.cond_dropout_prob,
                         loss_weight=loss_weight,
@@ -716,11 +720,15 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight, timesteps = prepare_inputs_and_labels(
             pixel_values, input_ids
         )
         _, loss = model(
-            input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight
+            input_ids=input_ids,
+            encoder_hidden_states=encoder_hidden_states,
+            labels=labels,
+            loss_weight=loss_weight,
+            timesteps=timesteps,
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)

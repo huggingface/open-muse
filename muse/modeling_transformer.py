@@ -15,6 +15,7 @@
 
 # This file is heavily inspired by the original implementation from https://github.com/lucidrains/muse-maskgit-pytorch
 
+import math
 from functools import partial
 from typing import Callable, Optional
 
@@ -87,6 +88,41 @@ except Exception:
                 input = input.to(self.weight.dtype)
 
             return self.weight * input
+
+
+def timestep_embedding(t, dim, max_period=10000):
+    """
+    Create sinusoidal timestep embeddings.
+    :param t: a 1-D Tensor of N indices, one per batch element.
+                        These may be fractional.
+    :param dim: the dimension of the output.
+    :param max_period: controls the minimum frequency of the embeddings.
+    :return: an (N, D) Tensor of positional embeddings.
+    """
+    # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
+    half = dim // 2
+    freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
+        device=t.device
+    )
+    args = t[:, None].float() * freqs[None]
+    embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
+    if dim % 2:
+        embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
+    return embedding
+
+
+class TimestepBlock(nn.Module):
+    def __init__(self, c, c_timestep):
+        super().__init__()
+        self.mapper = nn.Linear(c_timestep, c * 2)
+
+    def forward(self, x, t):
+        a, b = self.mapper(t).chunk(2, dim=1)
+        if x.dim() > 3:
+            a, b = a[:, :, None, None], b[:, :, None, None]
+        else:
+            a, b = a[:, None], b[:, None]
+        return x * (1 + a) + b
 
 
 # layer norm without bias
@@ -171,6 +207,8 @@ class DownsampleBlock(nn.Module):
         dropout=0.0,
         norm_type="layernorm",
         add_downsample=True,
+        add_time_embed=False,
+        time_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -198,9 +236,12 @@ class DownsampleBlock(nn.Module):
             ]
         )
 
+        if add_time_embed:
+            self.time_embed = TimestepBlock(self.input_channels, time_embed_dim)
+
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None):
+    def forward(self, x, x_skip=None, time_embeds=None):
         if self.add_downsample:
             x = self.downsample(x)
 
@@ -219,6 +260,10 @@ class DownsampleBlock(nn.Module):
                 x = res_block(x, x_skip)
 
             output_states += (x,)
+
+        if time_embeds is not None:
+            x = self.time_embed(x, time_embeds)
+
         return x, output_states
 
 
@@ -233,6 +278,8 @@ class UpsampleBlock(nn.Module):
         dropout=0.0,
         norm_type="layernorm",
         add_upsample=True,
+        add_time_embed=False,
+        time_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -254,6 +301,9 @@ class UpsampleBlock(nn.Module):
             ]
         )
 
+        if add_time_embed:
+            self.time_embed = TimestepBlock(self.input_channels, time_embed_dim)
+
         if add_upsample:
             self.upsample = nn.Sequential(
                 Norm2D(self.input_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias),
@@ -262,7 +312,7 @@ class UpsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None):
+    def forward(self, x, x_skip=None, time_embeds=None):
         for i, res_block in enumerate(self.res_blocks):
             x_res = x_skip[0] if i == 0 and x_skip is not None else None
 
@@ -277,6 +327,9 @@ class UpsampleBlock(nn.Module):
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_res)
             else:
                 x = res_block(x, x_res)
+
+        if time_embeds is not None:
+            x = self.time_embed(x, time_embeds)
 
         if self.add_upsample:
             x = self.upsample(x)
@@ -382,6 +435,8 @@ class FeedForward(nn.Module):
         norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_normformer=True,
+        add_time_embed=False,
+        time_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -395,8 +450,14 @@ class FeedForward(nn.Module):
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
 
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+        if add_time_embed:
+            self.time_embed = TimestepBlock(hidden_size, time_embed_dim)
+
+    def forward(self, hidden_states: torch.FloatTensor, time_embeds=None) -> torch.FloatTensor:
         hidden_states = self.pre_mlp_layer_norm(hidden_states)
+
+        if time_embeds is not None:
+            hidden_states = self.time_embed(hidden_states, time_embeds)
 
         hidden_gelu = F.gelu(self.wi_0(hidden_states))
         hidden_linear = self.wi_1(hidden_states)
@@ -422,6 +483,8 @@ class TransformerLayer(nn.Module):
         norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_normformer=True,
+        add_time_embed=False,
+        time_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -438,6 +501,7 @@ class TransformerLayer(nn.Module):
         )
         if use_normformer:
             self.post_attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+
         self.ffn = FeedForward(
             self.hidden_size,
             self.intermediate_size,
@@ -445,6 +509,8 @@ class TransformerLayer(nn.Module):
             norm_type,
             layer_norm_eps,
             use_normformer,
+            add_time_embed,
+            time_embed_dim,
             use_bias,
         )
 
@@ -456,10 +522,19 @@ class TransformerLayer(nn.Module):
             if use_normformer:
                 self.post_crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        if add_time_embed:
+            self.attn_time_embed = TimestepBlock(self.hidden_size, time_embed_dim)
+            if add_cross_attention:
+                self.crossattn_time_embed = TimestepBlock(self.hidden_size, time_embed_dim)
+
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, time_embeds=None):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
+
+        if time_embeds is not None:
+            hidden_states = self.attn_time_embed(hidden_states, time_embeds)
+
         attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
@@ -469,6 +544,10 @@ class TransformerLayer(nn.Module):
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
+
+            if time_embeds is not None:
+                hidden_states = self.crossattn_time_embed(hidden_states, time_embeds)
+
             attention_output = self.crossattention(
                 hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
@@ -1046,6 +1125,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
+        add_time_embed=False,
+        frequency_embedding_size=256,
         **kwargs,
     ):
         super().__init__()
@@ -1067,6 +1148,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
             self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
             encoder_hidden_size = hidden_size
+
+        # Time embedding
+        if add_time_embed:
+            self.time_embed = nn.Sequential(
+                nn.Linear(frequency_embedding_size, hidden_size, bias=use_bias),
+                nn.SiLU(),
+                nn.Linear(hidden_size, hidden_size, bias=use_bias),
+            )
 
         # Embeddings
         self.embed = ConvEmbed(
@@ -1097,6 +1186,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     dropout=hidden_dropout,
                     norm_type=norm_type,
                     add_downsample=not is_first_block,
+                    add_time_embed=add_time_embed,
+                    time_embed_dim=hidden_size,
                     use_bias=use_bias,
                 )
             )
@@ -1115,6 +1206,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     norm_type=norm_type,
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
+                    add_time_embed=add_time_embed,
+                    time_embed_dim=hidden_size,
                     use_bias=use_bias,
                 )
                 for _ in range(self.num_hidden_layers)
@@ -1142,6 +1235,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     dropout=hidden_dropout,
                     norm_type=norm_type,
                     add_upsample=not is_final_block,
+                    add_time_embed=add_time_embed,
+                    time_embed_dim=hidden_size,
                     use_bias=use_bias,
                 )
             )
@@ -1190,12 +1285,21 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         cond_dropout_prob=0.0,
+        timesteps=None,
         loss_weight=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
 
         hidden_states = self.embed(input_ids)
+
+        # Time embedding
+        if self.config.add_time_embed:
+            time_embeds = timestep_embedding(timesteps, self.config.frequency_embedding_size)
+            time_embeds = time_embeds.to(hidden_states.dtype)
+            embeds = self.time_embed(time_embeds)
+        else:
+            embeds = None
 
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
@@ -1209,7 +1313,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         down_block_res_samples = ()
         for down_block in self.down_blocks:
-            hidden_states, res_samples = down_block(hidden_states)
+            hidden_states, res_samples = down_block(hidden_states, time_embeds=embeds)
             down_block_res_samples += res_samples
 
         batch_size, channels, height, width = hidden_states.shape
@@ -1225,13 +1329,18 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     return custom_forward
 
                 hidden_states = checkpoint(
-                    create_custom_forward(layer), hidden_states, encoder_hidden_states, encoder_attention_mask
+                    create_custom_forward(layer),
+                    hidden_states,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    time_embeds=embeds,
                 )
             else:
                 hidden_states = layer(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
+                    time_embeds=embeds,
                 )
 
         if self.config.use_encoder_layernorm:
@@ -1242,7 +1351,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         for i, up_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-self.config.num_res_blocks :]
             down_block_res_samples = down_block_res_samples[: -self.config.num_res_blocks]
-            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None)
+            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None, time_embeds=embeds)
 
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
@@ -1337,6 +1446,13 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             if class_ids is not None:
                 input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
 
+            if self.config.add_time_embed:
+                timestep = (timesteps - step) / timesteps
+                shape = batch_size * 2 if guidance_scale > 0 else batch_size
+                timestep = torch.ones(shape, device=input_ids.device) * timestep
+            else:
+                timestep = None
+
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
                 if negative_embeds is None:
@@ -1346,12 +1462,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
-                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits, uncond_logits = self(
+                    model_input, encoder_hidden_states=condition, timesteps=timestep
+                ).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
             else:
-                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states, timesteps=timestep)
                 logits = logits[..., : self.config.codebook_size]
 
             # remove class token
