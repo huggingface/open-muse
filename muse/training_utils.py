@@ -19,7 +19,9 @@ import random
 from typing import Any, Dict, Iterable, Optional, Union
 
 import numpy as np
+import pandas as pd
 import torch
+import torch.nn.functional as F
 
 
 def enable_full_determinism(seed: int):
@@ -291,3 +293,131 @@ class EMA:
                 raise ValueError("shadow_params must be a list")
             if not all(isinstance(p, torch.Tensor) for p in self.shadow_params):
                 raise ValueError("shadow_params must all be Tensors")
+
+
+def entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
+    probs = F.softmax(logits, dim=-1)
+    log_probs = F.log_softmax(logits, dim=-1)
+
+    entropy_per_pixel = -((probs * log_probs).sum(-1))
+
+    # only calculated entropy over image tokens that were masked in the original image
+    masked_tokens = input_ids == mask_id
+
+    # the predictions for non-masked aren't used, so set their entropies to zero
+    entropy_per_pixel[~masked_tokens] = 0
+
+    entropy_per_image_numerator = entropy_per_pixel.sum(-1)
+    entropy_per_image_denominator = masked_tokens.sum(-1)
+    entropy_per_image = entropy_per_image_numerator / entropy_per_image_denominator
+
+    total_buckets = 10
+    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
+
+    entropy_by_masked_bucket = average_by_buckets(entropy_per_image, masked_buckets, total_buckets)
+
+    return entropy_by_masked_bucket
+
+
+def cross_entropy_per_percent_masked_bucket(cross_entropy_per_image, input_ids, mask_id):
+    total_buckets = 10
+    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
+
+    cross_entropy_by_percent_masked_bucket = average_by_buckets(cross_entropy_per_image, masked_buckets, total_buckets)
+
+    return cross_entropy_by_percent_masked_bucket
+
+
+def token_probability_distributions_per_percent_masked_bucket(logits, input_ids, mask_id):
+    probs = F.softmax(logits, dim=-1)
+
+    total_buckets = 10
+    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
+
+    data = []
+
+    for bucket_idx in range(total_buckets):
+        indices_for_bucket = masked_buckets[masked_buckets == bucket_idx]
+
+        # It's ok if none were noised in the range of this bucket. This
+        # function will be called for a later training step where it's likely
+        # there will be an element noised in the range.
+        if indices_for_bucket.shape[0] == 0:
+            continue
+
+        index_for_bucket = indices_for_bucket[0]
+
+        image_probs = probs[index_for_bucket]
+
+        # find the index of a masked pixel for the image
+        input_ids_for_image = input_ids[index_for_bucket]
+        masked_pixels_probs = image_probs[input_ids_for_image == mask_id]
+
+        masked_pixel_probs = masked_pixels_probs[0]
+
+        masked_pixel_probs = masked_pixel_probs.cpu().numpy()
+
+        for masked_pixel_prob in masked_pixel_probs:
+            data.append({"bucket": bucket_idx, "masked_pixel_prob": masked_pixel_prob})
+
+    df = pd.DataFrame(data)
+
+    return df
+
+
+def average_by_buckets(values, masked_buckets, total_buckets):
+    unique_buckets, bucket_counts = masked_buckets.unique(dim=0, return_counts=True)
+
+    numerator = torch.zeros(total_buckets, device=values.device)
+
+    numerator.scatter_add_(0, masked_buckets, values)
+
+    # default value is one because the buckets for which there aren't
+    # any values will have a numerator of zero. So we just need to not divide
+    # by zero.
+    denominator = torch.ones(total_buckets, device=values.device, dtype=torch.long)
+    denominator[unique_buckets] = bucket_counts
+
+    averaged_by_buckets = numerator / denominator
+
+    return averaged_by_buckets
+
+
+def input_ids_to_masked_buckets(input_ids, mask_id, total_buckets=10):
+    assert total_buckets == 10
+
+    masked_percent = (input_ids == mask_id).sum(-1) / input_ids.shape[-1]
+
+    # we do not formally use timesteps to noise images. Instead, we mask a percent
+    # of the pixels. We don't want to log entropy for every mask percent between 0 and 1,
+    # and we also want to track how the entropy evolves over time w/in a range of mask
+    # percents that should have similar entropy. So we bucket the masked percents into a
+    # fixed number of buckets
+
+    # we could generalize this later if needed but for now, let's just assume a fixed
+    # number of 10 buckets.
+
+    # How this maps to a bucket index:
+    # (mask) * bucket_index +
+    # (mask_1) * bucket_index_1
+    #
+    # -> Where the mask is true will be set to the expected bucket index,
+    # where the mask is false will be set to 0.
+    #
+    # Given the probabilities are between 0 and 1, each masked_percent will get mapped
+    # to a timestep by one and only one of the masks.
+
+    masked_buckets = (
+        ((0 < masked_percent) & (masked_percent <= 0.1)) * 0
+        + ((0.1 < masked_percent) & (masked_percent <= 0.2)) * 1
+        + ((0.2 < masked_percent) & (masked_percent <= 0.3)) * 2
+        + ((0.3 < masked_percent) & (masked_percent <= 0.4)) * 3
+        + ((0.4 < masked_percent) & (masked_percent <= 0.5)) * 4
+        + ((0.5 < masked_percent) & (masked_percent <= 0.6)) * 5
+        + ((0.6 < masked_percent) & (masked_percent <= 0.7)) * 6
+        + ((0.7 < masked_percent) & (masked_percent <= 0.8)) * 7
+        + ((0.8 < masked_percent) & (masked_percent <= 0.9)) * 8
+        + ((0.9 < masked_percent) & (masked_percent <= 1.0)) * 9
+    )
+
+    return masked_buckets
