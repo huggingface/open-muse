@@ -15,7 +15,7 @@
 import json
 
 import webdataset as wds
-from cv2 import imread
+from cv2 import COLOR_BGR2RGB, cvtColor, imread
 
 
 def main():
@@ -37,6 +37,7 @@ def main():
     for image_id, annotations in annotations_by_image_id.items():
         print(f"writing {image_id}")
         image = imread("../data/train2017/%012d.jpg" % image_id)
+        image = cvtColor(image, COLOR_BGR2RGB)
 
         annotations_metadata = []
 

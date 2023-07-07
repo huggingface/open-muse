@@ -853,6 +853,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=3,
         noise_schedule: Callable = cosine_schedule,
+        use_tqdm=True,
     ):
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
@@ -871,9 +872,12 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         starting_temperature = temperature
 
-        for timestep, steps_until_x0 in tqdm(
-            zip(torch.linspace(0, 1, timesteps, device=self.device), reversed(range(timesteps))), total=timesteps
-        ):
+        iterate_over = zip(torch.linspace(0, 1, timesteps, device=self.device), reversed(range(timesteps)))
+
+        if use_tqdm:
+            iterate_over = tqdm(iterate_over, total=timesteps)
+
+        for timestep, steps_until_x0 in iterate_over:
             rand_mask_prob = noise_schedule(timestep)
             num_token_masked = max(int((rand_mask_prob * seq_len).item()), 1)
 

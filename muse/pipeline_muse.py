@@ -78,6 +78,7 @@ class PipelineMuse:
         noise_type="mask",  # can be "mask" or "random_replace"
         predict_all_tokens=False,
         return_intermediate: bool = False,
+        use_tqdm=True,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -156,6 +157,7 @@ class PipelineMuse:
                 noise_schedule=get_mask_chedule(noise_schedule),
                 predict_all_tokens=predict_all_tokens,
                 return_intermediate=return_intermediate,
+                use_tqdm=use_tqdm,
             )
 
             if return_intermediate:
