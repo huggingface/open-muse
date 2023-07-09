@@ -742,7 +742,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(
             pixel_values, input_ids
         )
-        _, loss = model(
+        _, loss, _ = model(
             input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight
         )
         eval_loss += loss.mean()
