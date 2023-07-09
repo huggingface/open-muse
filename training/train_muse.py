@@ -609,27 +609,6 @@ def main():
                 else:
                     optimizer.zero_grad(set_to_none=True)
 
-            if (
-                ("log_entropy_every" in config.experiment)
-                and ((global_step + 1) % config.experiment.log_entropy_every == 0)
-                and accelerator.is_main_process
-            ):
-                log_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
-
-            if (
-                ("log_cross_entropy_every" in config.experiment)
-                and ((global_step + 1) % config.experiment.log_cross_entropy_every == 0)
-                and accelerator.is_main_process
-            ):
-                log_cross_entropy(cross_entropy_per_image, input_ids, mask_id, accelerator, global_step + 1)
-
-            if (
-                ("log_token_probability_distributions_every" in config.experiment)
-                and ((global_step + 1) % config.experiment.log_token_probability_distributions_every == 0)
-                and accelerator.is_main_process
-            ):
-                log_token_probability_distributions(logits, input_ids, mask_id, accelerator, global_step)
-
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 if config.training.get("use_ema", False):
@@ -664,6 +643,27 @@ def main():
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
                     data_time_m.reset()
+
+                if (
+                    ("log_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_cross_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_cross_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_cross_entropy(cross_entropy_per_image, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_token_probability_distributions_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_token_probability_distributions_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_token_probability_distributions(logits, input_ids, mask_id, accelerator, global_step + 1)
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
