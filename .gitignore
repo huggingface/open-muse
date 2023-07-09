@@ -6,7 +6,9 @@ wandb
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.jpg
+real
+generated
 # C extensions
 *.so
 

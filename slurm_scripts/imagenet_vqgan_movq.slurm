@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=vqgan_testing
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4          # crucial - only 1 task per dist per node!
 #SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:4
@@ -31,7 +31,7 @@ CMD=" \
     training.seed=9345104 \
     "
 
-GPUS_PER_NODE=1
+GPUS_PER_NODE=4
 NNODES=$SLURM_NNODES
 
 # so processes know who to talk to

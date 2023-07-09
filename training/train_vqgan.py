@@ -48,11 +48,12 @@ import timm
 from einops import repeat, rearrange
 from tqdm import tqdm
 import cProfile, pstats
+from pstats import SortKey
 try:
     import httplib  # python < 3.0
 except:
     import http.client as httplib
-
+pr = cProfile.Profile()
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -472,6 +473,8 @@ def main():
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+    pr.enable()
+
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
     avg_gen_loss, avg_discr_loss = None, None
@@ -564,6 +567,11 @@ def main():
                         log_grad_norm(discriminator, accelerator, global_step + 1)
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients and not generator_step:
+                pr.disable()
+                sortby = SortKey.CUMULATIVE
+                ps = pstats.Stats(pr).sort_stats(sortby)
+                ps.print_stats(100)
+                pr.enable()
                 if config.training.use_ema:
                     ema_model.step(model.parameters())
                 # wait for both generator and discriminator to settle
@@ -606,7 +614,6 @@ def main():
                     generate_images(model, pixel_values[:config.training.num_validation_log], accelerator, global_step + 1)
 
                 global_step += 1
-                # TODO: Add generation
 
             # Stop training if max steps is reached
             if global_step >= config.training.max_train_steps:

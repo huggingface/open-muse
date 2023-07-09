@@ -536,7 +536,6 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-                # ... do something ...
                 pr.disable()
                 sortby = SortKey.CUMULATIVE
                 ps = pstats.Stats(pr).sort_stats(sortby)

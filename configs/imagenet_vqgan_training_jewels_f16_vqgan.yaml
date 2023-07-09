@@ -3,7 +3,7 @@ wandb:
     mode: "offline"
 
 experiment:
-    project: "muse"
+    project: "muse_vqgan"
     name: "imagenet-vqgan-training"
     output_dir: "imagenet-vqgan-training"
     max_train_examples: 1281167 # total number of imagenet examples
