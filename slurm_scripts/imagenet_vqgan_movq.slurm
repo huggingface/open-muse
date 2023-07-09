@@ -8,14 +8,14 @@
 #SBATCH -A cstdl
 #SBATCH --partition booster
 #SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=0:06:00
+#SBATCH --time=0:10:00
 
 set -x -e
 
 echo "START TIME: $(date)"
 
 MUSE_REPO=/p/home/jusers/isozaki1/juwels/open-muse
-OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/4_node_6_min
+OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/1_node_10_min
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
