@@ -24,7 +24,6 @@ from typing import Any, List, Tuple, Union
 
 import numpy as np
 import plotly.express as px
-import plotly.figure_factory as ff
 import torch
 import torch.nn.functional as F
 from accelerate import Accelerator
