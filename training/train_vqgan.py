@@ -478,12 +478,14 @@ def main():
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
     avg_gen_loss, avg_discr_loss = None, None
+    print("gradient accumulation steps", config.training.gradient_accumulation_steps)
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for i, batch in tqdm(enumerate(train_dataloader)):
             pixel_values, _ = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
+            print(i, accelerator.sync_gradients)
             generator_step = ((i // config.training.gradient_accumulation_steps) % 2) == 0 and i > config.training.discriminator_warmup
             # TODO:
             # Add entropy to maximize codebook usage
@@ -567,6 +569,7 @@ def main():
                         log_grad_norm(discriminator, accelerator, global_step + 1)
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients and not generator_step:
+                print("sync gradients")
                 pr.disable()
                 sortby = SortKey.CUMULATIVE
                 ps = pstats.Stats(pr).sort_stats(sortby)
