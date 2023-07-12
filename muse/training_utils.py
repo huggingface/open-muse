@@ -296,7 +296,7 @@ class EMA:
 
 
 # calculates entropy over each pixel distribution
-def entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
+def pixel_entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
     # only calculated entropy over image tokens that were masked in the original image
     masked_tokens = input_ids == mask_id
     num_masked_pixels = masked_tokens.sum(-1)
@@ -324,7 +324,7 @@ def entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
 def image_entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
     # only calculated entropy over image tokens that were masked in the original image
     masked_tokens = input_ids == mask_id
-    num_masked_pixels = masked_tokens.sum(-1)
+    num_masked_pixels = masked_tokens.sum(-1, keepdim=True)
 
     pixel_probs = F.softmax(logits, dim=-1)
     pixel_probs[~masked_tokens] = 0

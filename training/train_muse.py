@@ -645,11 +645,18 @@ def main():
                     data_time_m.reset()
 
                 if (
-                    ("log_entropy_every" in config.experiment)
-                    and ((global_step + 1) % config.experiment.log_entropy_every == 0)
+                    ("log_pixel_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_pixel_entropy_every == 0)
                     and accelerator.is_main_process
                 ):
-                    log_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+                    log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_image_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_image_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_image_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
 
                 if (
                     ("log_cross_entropy_every" in config.experiment)
@@ -863,19 +870,35 @@ def log_grad_norm(model, accelerator, global_step):
 
 
 @torch.no_grad()
-def log_entropy(logits, input_ids, mask_id, accelerator, global_step):
-    entropy_per_percent_masked_bucket = muse.training_utils.entropy_per_percent_masked_bucket(
+def log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step):
+    pixel_entropy_per_percent_masked_bucket = muse.training_utils.pixel_entropy_per_percent_masked_bucket(
         logits, input_ids, mask_id
     )
 
     entropy_log = {}
 
-    for bucket, bucket_entropy in enumerate(entropy_per_percent_masked_bucket):
+    for bucket, bucket_entropy in enumerate(pixel_entropy_per_percent_masked_bucket):
         bucket_entropy = bucket_entropy.item()
         if bucket_entropy != 0:
             entropy_log[f"bucket {bucket}"] = bucket_entropy
 
-    accelerator.log({"entropy": entropy_log}, step=global_step)
+    accelerator.log({"pixel_entropy": entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_image_entropy(logits, input_ids, mask_id, accelerator, global_step):
+    image_entropy_per_percent_masked_bucket = muse.training_utils.image_entropy_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    entropy_log = {}
+
+    for bucket, bucket_entropy in enumerate(image_entropy_per_percent_masked_bucket):
+        bucket_entropy = bucket_entropy.item()
+        if bucket_entropy != 0:
+            entropy_log[f"bucket {bucket}"] = bucket_entropy
+
+    accelerator.log({"image_entropy": entropy_log}, step=global_step)
 
 
 @torch.no_grad()
