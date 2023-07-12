@@ -430,6 +430,7 @@ class TransformerLayer(nn.Module):
         self.intermediate_size = intermediate_size
         self.num_attention_heads = num_attention_heads
         self.use_normformer = use_normformer
+        self.add_cross_attention = add_cross_attention
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
         self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
@@ -465,7 +466,7 @@ class TransformerLayer(nn.Module):
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
 
-        if encoder_hidden_states is not None:
+        if encoder_hidden_states is not None and self.add_cross_attention:
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
@@ -1050,6 +1051,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
+        concat_encoder_hidden_states=False,
         **kwargs,
     ):
         super().__init__()
@@ -1065,9 +1067,13 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
+        # both can't be true
+        if add_cross_attention and concat_encoder_hidden_states:
+            raise ValueError("Both `add_cross_attention` and `concat_encoder_hidden_states` can't be True.")
+
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
 
-        if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
+        if project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
             self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
             encoder_hidden_size = hidden_size
@@ -1219,6 +1225,12 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
 
+        if self.config.concat_encoder_hidden_states:
+            hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
+            encoder_length = encoder_hidden_states.shape[1]
+            encoder_hidden_states = None
+            encoder_attention_mask = None
+
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
 
@@ -1237,6 +1249,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                 )
+
+        if self.config.concat_encoder_hidden_states:
+            hidden_states = hidden_states[:, encoder_length:, :]
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
