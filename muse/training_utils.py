@@ -343,7 +343,15 @@ def image_entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
     return entropy_by_masked_bucket
 
 
-def cross_entropy_per_percent_masked_bucket(cross_entropy_per_image, input_ids, mask_id):
+def cross_entropy_per_percent_masked_bucket(logits, labels, input_ids, mask_id, output_size, label_smoothing):
+    cross_entropy_per_image = F.cross_entropy(
+        logits.view(-1, output_size),
+        labels.view(-1),
+        ignore_index=-100,
+        label_smoothing=label_smoothing,
+        reduction="none",
+    )
+
     total_buckets = 10
     masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
 

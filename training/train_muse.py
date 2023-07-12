@@ -300,6 +300,7 @@ def main():
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
+    output_size = model.output_size
 
     # Create EMA
     if config.training.get("use_ema", False):
@@ -575,7 +576,7 @@ def main():
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
-                    logits, loss, cross_entropy_per_image = model(
+                    logits, loss = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
@@ -663,7 +664,16 @@ def main():
                     and ((global_step + 1) % config.experiment.log_cross_entropy_every == 0)
                     and accelerator.is_main_process
                 ):
-                    log_cross_entropy(cross_entropy_per_image, input_ids, mask_id, accelerator, global_step + 1)
+                    log_cross_entropy(
+                        logits,
+                        labels,
+                        input_ids,
+                        mask_id,
+                        output_size,
+                        config.training.label_smoothing,
+                        accelerator,
+                        global_step + 1,
+                    )
 
                 if (
                     ("log_token_probability_distributions_every" in config.experiment)
@@ -749,7 +759,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(
             pixel_values, input_ids
         )
-        _, loss, _ = model(
+        _, loss = model(
             input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight
         )
         eval_loss += loss.mean()
@@ -902,9 +912,9 @@ def log_image_entropy(logits, input_ids, mask_id, accelerator, global_step):
 
 
 @torch.no_grad()
-def log_cross_entropy(cross_entropy_per_image, input_ids, mask_id, accelerator, global_step):
+def log_cross_entropy(logits, labels, input_ids, mask_id, output_size, label_smoothing, accelerator, global_step):
     cross_entropy_per_percent_masked_bucket = muse.training_utils.cross_entropy_per_percent_masked_bucket(
-        cross_entropy_per_image, input_ids, mask_id
+        logits, labels, input_ids, mask_id, output_size, label_smoothing
     )
 
     cross_entropy_log = {}

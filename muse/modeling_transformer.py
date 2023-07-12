@@ -1253,21 +1253,18 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         logits = self.mlm_layer(hidden_states)
 
         if labels is not None:
-            cross_entropy_per_image = F.cross_entropy(
+            reduction = "none" if loss_weight is not None else "mean"
+            loss = F.cross_entropy(
                 logits.view(-1, self.output_size),
                 labels.view(-1),
                 ignore_index=-100,
                 label_smoothing=label_smoothing,
-                reduction="none",
+                reduction=reduction,
             )
-
-            if loss_weight is None:
-                loss = cross_entropy_per_image.mean()
-            else:
+            if loss_weight is not None:
                 loss_weight = loss_weight.view(-1)
-                loss = ((cross_entropy_per_image * loss_weight).sum(dim=-1) / loss_weight.sum(dim=-1)).mean()
-
-            return logits, loss, cross_entropy_per_image
+                loss = ((loss * loss_weight).sum(dim=-1) / loss_weight.sum(dim=-1)).mean()
+            return logits, loss
         return logits
 
     def _set_gradient_checkpointing(self, module, value=False):
