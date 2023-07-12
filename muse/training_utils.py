@@ -295,21 +295,45 @@ class EMA:
                 raise ValueError("shadow_params must all be Tensors")
 
 
+# calculates entropy over each pixel distribution
 def entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
+    # only calculated entropy over image tokens that were masked in the original image
+    masked_tokens = input_ids == mask_id
+    num_masked_pixels = masked_tokens.sum(-1)
+
     probs = F.softmax(logits, dim=-1)
     log_probs = F.log_softmax(logits, dim=-1)
 
     entropy_per_pixel = -((probs * log_probs).sum(-1))
 
-    # only calculated entropy over image tokens that were masked in the original image
-    masked_tokens = input_ids == mask_id
-
     # the predictions for non-masked aren't used, so set their entropies to zero
     entropy_per_pixel[~masked_tokens] = 0
 
     entropy_per_image_numerator = entropy_per_pixel.sum(-1)
-    entropy_per_image_denominator = masked_tokens.sum(-1)
-    entropy_per_image = entropy_per_image_numerator / entropy_per_image_denominator
+    entropy_per_image = entropy_per_image_numerator / num_masked_pixels
+
+    total_buckets = 10
+    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
+
+    entropy_by_masked_bucket = average_by_buckets(entropy_per_image, masked_buckets, total_buckets)
+
+    return entropy_by_masked_bucket
+
+
+# calculates entropy over the averaged distribution of pixels for the whole image
+def image_entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
+    # only calculated entropy over image tokens that were masked in the original image
+    masked_tokens = input_ids == mask_id
+    num_masked_pixels = masked_tokens.sum(-1)
+
+    pixel_probs = F.softmax(logits, dim=-1)
+    pixel_probs[~masked_tokens] = 0
+    image_probs_numerator = pixel_probs.sum(-2)
+    image_probs = image_probs_numerator / num_masked_pixels
+
+    image_log_probs = image_probs.log()
+
+    entropy_per_image = -((image_probs * image_log_probs).sum(-1))
 
     total_buckets = 10
     masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
