@@ -29,6 +29,8 @@ _deps = [
     "datasets",
     "wandb",
     "sentencepiece",  # for T5 tokenizer
+    "plotly",
+    "pandas",
 ]
 
 _extras_dev_deps = [

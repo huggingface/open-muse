@@ -23,9 +23,9 @@ from pathlib import Path
 from typing import Any, List, Tuple, Union
 
 import numpy as np
+import plotly.express as px
 import torch
 import torch.nn.functional as F
-import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
@@ -37,6 +37,8 @@ from torch.optim import AdamW  # why is shampoo not available in PT :(
 from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 import muse
+import muse.training_utils
+import wandb
 from muse import (
     MOVQ,
     EMAModel,
@@ -298,6 +300,7 @@ def main():
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
+    output_size = model.output_size
 
     # Create EMA
     if config.training.get("use_ema", False):
@@ -573,7 +576,7 @@ def main():
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
-                    _, loss = model(
+                    logits, loss = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
@@ -641,6 +644,43 @@ def main():
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
                     data_time_m.reset()
+
+                if (
+                    ("log_pixel_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_pixel_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_image_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_image_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_image_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_cross_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_cross_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_cross_entropy(
+                        logits,
+                        labels,
+                        input_ids,
+                        mask_id,
+                        output_size,
+                        config.training.label_smoothing,
+                        accelerator,
+                        global_step + 1,
+                    )
+
+                if (
+                    ("log_token_probability_distributions_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_token_probability_distributions_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_token_probability_distributions(logits, input_ids, mask_id, accelerator, global_step + 1)
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
@@ -837,6 +877,71 @@ def log_grad_norm(model, accelerator, global_step):
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
             accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
+
+
+@torch.no_grad()
+def log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step):
+    pixel_entropy_per_percent_masked_bucket = muse.training_utils.pixel_entropy_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    entropy_log = {}
+
+    for bucket, bucket_entropy in enumerate(pixel_entropy_per_percent_masked_bucket):
+        bucket_entropy = bucket_entropy.item()
+        if bucket_entropy != 0:
+            entropy_log[f"bucket {bucket}"] = bucket_entropy
+
+    accelerator.log({"pixel_entropy": entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_image_entropy(logits, input_ids, mask_id, accelerator, global_step):
+    image_entropy_per_percent_masked_bucket = muse.training_utils.image_entropy_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    entropy_log = {}
+
+    for bucket, bucket_entropy in enumerate(image_entropy_per_percent_masked_bucket):
+        bucket_entropy = bucket_entropy.item()
+        if bucket_entropy != 0:
+            entropy_log[f"bucket {bucket}"] = bucket_entropy
+
+    accelerator.log({"image_entropy": entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_cross_entropy(logits, labels, input_ids, mask_id, output_size, label_smoothing, accelerator, global_step):
+    cross_entropy_per_percent_masked_bucket = muse.training_utils.cross_entropy_per_percent_masked_bucket(
+        logits, labels, input_ids, mask_id, output_size, label_smoothing
+    )
+
+    cross_entropy_log = {}
+
+    for bucket, bucket_cross_entropy in enumerate(cross_entropy_per_percent_masked_bucket):
+        bucket_cross_entropy = bucket_cross_entropy.item()
+        if bucket_cross_entropy != 0:
+            cross_entropy_log[f"bucket {bucket}"] = bucket_cross_entropy
+
+    accelerator.log({"cross entropy": cross_entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_token_probability_distributions(logits, input_ids, mask_id, accelerator, global_step):
+    token_probability_distributions = muse.training_utils.token_probability_distributions_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    token_probability_distributions_fig = px.histogram(
+        token_probability_distributions,
+        x="masked_pixel_prob",
+        color="bucket",
+        color_discrete_sequence=px.colors.qualitative.Plotly,
+        marginal="rug",
+    )
+
+    accelerator.log({"token_probability_distributions": token_probability_distributions_fig}, step=global_step)
 
 
 if __name__ == "__main__":
