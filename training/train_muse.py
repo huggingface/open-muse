@@ -26,6 +26,7 @@ import numpy as np
 import plotly.express as px
 import torch
 import torch.nn.functional as F
+import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
@@ -38,7 +39,6 @@ from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokeniz
 
 import muse
 import muse.training_utils
-import wandb
 from muse import (
     MOVQ,
     EMAModel,
@@ -893,7 +893,7 @@ def log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step):
         if bucket_entropy != 0:
             entropy_log[f"bucket {bucket}"] = bucket_entropy
 
-    accelerator.log({"pixel_entropy": entropy_log}, step=global_step)
+    accelerator.log({"pixel_entropy/stats": entropy_log}, step=global_step)
 
 
 @torch.no_grad()
@@ -909,7 +909,7 @@ def log_image_entropy(logits, input_ids, mask_id, accelerator, global_step):
         if bucket_entropy != 0:
             entropy_log[f"bucket {bucket}"] = bucket_entropy
 
-    accelerator.log({"image_entropy": entropy_log}, step=global_step)
+    accelerator.log({"image_entropy/stats": entropy_log}, step=global_step)
 
 
 @torch.no_grad()
@@ -925,7 +925,7 @@ def log_cross_entropy(logits, labels, input_ids, mask_id, output_size, label_smo
         if bucket_cross_entropy != 0:
             cross_entropy_log[f"bucket {bucket}"] = bucket_cross_entropy
 
-    accelerator.log({"cross entropy": cross_entropy_log}, step=global_step)
+    accelerator.log({"cross entropy/strats": cross_entropy_log}, step=global_step)
 
 
 @torch.no_grad()
@@ -942,7 +942,7 @@ def log_token_probability_distributions(logits, input_ids, mask_id, accelerator,
         marginal="rug",
     )
 
-    accelerator.log({"token_probability_distributions": token_probability_distributions_fig}, step=global_step)
+    accelerator.log({"token_probability_distributions/stats": token_probability_distributions_fig}, step=global_step)
 
 
 if __name__ == "__main__":
