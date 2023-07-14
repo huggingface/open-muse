@@ -7,17 +7,17 @@ experiment:
     output_dir: "coyo-f8"
     max_train_examples: 700000000 # toal sucessfully downloaded images for laiona6plus
     max_eval_examples: 8118
-    save_every: 1000
-    eval_every: 1000
-    generate_every: 1000
+    save_every: 2000
+    eval_every: 2000
+    generate_every: 2000
     log_every: 50
-    log_grad_norm_every: 500
+    log_grad_norm_every: 100
     resume_from_checkpoint: False
     resume_lr_scheduler: True
-    log_pixel_entropy_every: 1000
-    log_image_entropy_every: 1000
-    log_cross_entropy_every: 1000
-    log_token_probability_distributions_every: 1000
+    log_pixel_entropy_every: 2000
+    log_image_entropy_every: 2000
+    log_cross_entropy_every: 2000
+    log_token_probability_distributions_every: 2000
 
 model:
     vq_model:
