@@ -574,6 +574,7 @@ class ConvEmbed(nn.Module):
         patch_size=2,
         max_position_embeddings=256,
         norm_type="layernorm",
+        layer_norm_embedddings=False,
         layer_norm_eps=1e-5,
         use_position_embeddings=True,
         use_bias=False,
@@ -583,6 +584,7 @@ class ConvEmbed(nn.Module):
         self.patch_size = patch_size
         self.max_position_embeddings = max_position_embeddings
         self.use_position_embeddings = use_position_embeddings
+        self.layer_norm_embedddings = layer_norm_embedddings
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
@@ -592,6 +594,8 @@ class ConvEmbed(nn.Module):
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
         if use_position_embeddings:
             self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
+        if self.layer_norm_embedddings:
+            self.embeddings_ln = Norm2D(hidden_size, eps=layer_norm_eps, norm_type=norm_type)
 
     def forward(self, input_ids):
         batch_size, seq_length = input_ids.shape
@@ -608,6 +612,8 @@ class ConvEmbed(nn.Module):
             position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = embeddings + position_embeddings
+        if self.layer_norm_embedddings:
+            embeddings = self.embeddings_ln(embeddings)
         return embeddings
 
 
@@ -1050,6 +1056,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
+        layer_norm_before_mlm=False,
+        layer_norm_embedddings=False,
         **kwargs,
     ):
         super().__init__()
@@ -1079,6 +1087,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_out_channels[0],
             patch_size=patch_size,
             norm_type=norm_type,
+            layer_norm_embedddings=layer_norm_embedddings,
             layer_norm_eps=layer_norm_eps,
             use_position_embeddings=use_position_embeddings,
             use_bias=use_bias,
@@ -1150,6 +1159,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 )
             )
 
+        if layer_norm_before_mlm:
+            self.layer_norm_before_mlm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+
         # Output
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
         self.mlm_layer = ConvMlmLayer(
@@ -1165,9 +1177,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         # --- WEIGHT INIT ---
         self.apply(self._init_weights)  # General init
-        nn.init.constant_(self.mlm_layer.conv1.weight, 0)
+        nn.init.xavier_uniform_(self.embed.conv.weight, 0.02)  # inputs
         nn.init.normal_(self.embed.embeddings.weight, std=np.sqrt(1 / vocab_size))
-        nn.init.normal_(self.mlm_layer.conv2.weight, std=np.sqrt(1 / codebook_size))
+        nn.init.constant_(self.mlm_layer.conv1.weight, 0)  # output
+        self.mlm_layer.conv2.weight.data = self.embed.embeddings.weight.data[:codebook_size, :, None, None].clone()
 
     def _init_weights(self, module):
         """
@@ -1247,6 +1260,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             res_samples = down_block_res_samples[-self.config.num_res_blocks :]
             down_block_res_samples = down_block_res_samples[: -self.config.num_res_blocks]
             hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None)
+
+        if self.config.layer_norm_before_mlm:
+            hidden_states = self.layer_norm_before_mlm(hidden_states)
 
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
