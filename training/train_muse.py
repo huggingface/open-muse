@@ -824,6 +824,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         gen_token_ids = accelerator.unwrap_model(model).generate2(
             encoder_hidden_states=encoder_hidden_states,
             guidance_scale=config.training.guidance_scale,
+            temperature=config.training.get("generation_temperature", 1.0),
             timesteps=config.training.generation_timesteps,
             noise_schedule=mask_schedule,
             noise_type=config.training.get("noise_type", "mask"),
