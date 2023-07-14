@@ -1160,7 +1160,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             )
 
         if layer_norm_before_mlm:
-            self.layer_norm_before_mlm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.layer_norm_before_mlm = Norm2D(self.hidden_size, norm_type=norm_type, eps=layer_norm_eps)
 
         # Output
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
