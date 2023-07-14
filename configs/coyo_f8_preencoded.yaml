@@ -11,7 +11,7 @@ experiment:
     eval_every: 2000
     generate_every: 2000
     log_every: 50
-    log_grad_norm_every: 100
+    log_grad_norm_every: 1000
     resume_from_checkpoint: False
     resume_lr_scheduler: True
     log_pixel_entropy_every: 2000
