@@ -1270,7 +1270,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
         elif isinstance(module, (nn.LayerNorm, RMSNorm)):
-            if hasattr(module, "weight") and module.bias is not None:
+            if hasattr(module, "weight") and module.weight is not None:
                 module.weight.data.fill_(1.0)
             if hasattr(module, "bias") and module.bias is not None:
                 module.bias.data.zero_()
