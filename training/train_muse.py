@@ -542,7 +542,7 @@ def main():
 
         if not is_pre_encode:
             if config.model.transformer.add_cond_embeds:
-                outputs = text_encoder(text_input_ids_or_embeds, return_dict=True)
+                outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
                 encoder_hidden_states = outputs.hidden_states[-2]
                 clip_embeds = outputs[0]
             else:
@@ -843,7 +843,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     ).input_ids
 
     if config.model.transformer.add_cond_embeds:
-        outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True)
+        outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
         encoder_hidden_states = outputs.hidden_states[-2]
         clip_embeds = outputs[0]
     else:
