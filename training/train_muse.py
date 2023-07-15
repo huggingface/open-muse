@@ -35,7 +35,13 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
 from PIL import Image
 from torch.optim import AdamW  # why is shampoo not available in PT :(
-from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
+from transformers import (
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    CLIPTokenizer,
+    T5EncoderModel,
+    T5Tokenizer,
+)
 
 import muse
 import muse.training_utils
@@ -278,7 +284,10 @@ def main():
     is_pre_encode = config.training.get("pre_encode", False)
     if not is_pre_encode:
         if config.model.text_encoder.type == "clip":
-            text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+            text_encoder_cls = (
+                CLIPTextModelWithProjection if config.model.transformer.add_cond_embeds else CLIPTextModel
+            )
+            text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
             tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
         elif config.model.text_encoder.type == "t5":
             text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
@@ -532,15 +541,22 @@ def main():
                 soft_targets = None
 
         if not is_pre_encode:
-            encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
+            if config.model.transformer.add_cond_embeds:
+                outputs = text_encoder(text_input_ids_or_embeds, return_dict=True)
+                encoder_hidden_states = outputs.hidden_states[-2]
+                clip_embeds = outputs[0]
+            else:
+                encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
+                clip_embeds = None
         else:
             encoder_hidden_states = text_input_ids_or_embeds
+            clip_embeds = None
 
         # create MLM mask and labels
         input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
             image_tokens, mask_id, config, mask_schedule=mask_schedule
         )
-        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -557,9 +573,15 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight = prepare_inputs_and_labels(
-                pixel_values, input_ids, config.training.min_masking_rate
-            )
+            (
+                input_ids,
+                encoder_hidden_states,
+                labels,
+                soft_targets,
+                mask_prob,
+                loss_weight,
+                clip_embeds,
+            ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -582,6 +604,7 @@ def main():
                         labels=labels,
                         label_smoothing=config.training.label_smoothing,
                         cond_dropout_prob=config.training.cond_dropout_prob,
+                        cond_embeds=clip_embeds,
                         loss_weight=loss_weight,
                     )
 
@@ -756,11 +779,15 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _, loss_weight = prepare_inputs_and_labels(
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds = prepare_inputs_and_labels(
             pixel_values, input_ids
         )
         _, loss = model(
-            input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels, loss_weight=loss_weight
+            input_ids=input_ids,
+            encoder_hidden_states=encoder_hidden_states,
+            labels=labels,
+            cond_embeds=clip_embeds,
+            loss_weight=loss_weight,
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
@@ -814,7 +841,14 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         truncation=True,
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
-    encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
+
+    if config.model.transformer.add_cond_embeds:
+        outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True)
+        encoder_hidden_states = outputs.hidden_states[-2]
+        clip_embeds = outputs[0]
+    else:
+        encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
+        clip_embeds = None
 
     if config.training.get("pre_encode", False):
         del text_encoder
@@ -823,6 +857,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate2(
             encoder_hidden_states=encoder_hidden_states,
+            cond_embeds=clip_embeds,
             guidance_scale=config.training.guidance_scale,
             temperature=config.training.get("generation_temperature", 1.0),
             timesteps=config.training.generation_timesteps,

@@ -113,6 +113,21 @@ class LayerNorm(nn.Module):
         return F.layer_norm(x, (self.dim,), self.weight, self.bias, self.eps)
 
 
+class AdaLNModulation(nn.Module):
+    def __init__(self, cond_embed_dim, hidden_size):
+        super().__init__()
+        self.mapper = nn.Linear(cond_embed_dim, hidden_size * 2)
+
+    def forward(self, hidden_states, cond_embeds):
+        cond_embeds = F.silu(cond_embeds)
+        scale, shift = self.mapper(cond_embeds).chunk(2, dim=1)
+        if hidden_states.dim() > 3:
+            scale, shift = scale[:, :, None, None], shift[:, :, None, None]
+        else:
+            scale, shift = scale[:, None], shift[:, None]
+        return hidden_states * (1 + scale) + shift
+
+
 # U-ViT blocks
 # Adpated from https://github.com/dome272/Paella/blob/main/src_distributed/modules.py
 class Norm2D(nn.Module):
@@ -150,6 +165,8 @@ class ResBlock(nn.Module):
         dropout=0.0,
         norm_type="layernorm",
         ln_elementwise_affine=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -172,13 +189,19 @@ class ResBlock(nn.Module):
             nn.Linear(channels * 4, channels, bias=use_bias),
         )
 
-    def forward(self, x, x_skip=None):
+        if add_cond_embeds:
+            self.adaLN_modulation = AdaLNModulation(cond_embed_dim=cond_embed_dim, hidden_size=channels)
+
+    def forward(self, x, x_skip=None, cond_embeds=None):
         x_res = x
         if x_skip is not None:
             x = torch.cat([x, x_skip], dim=1)
         x = self.norm(self.depthwise(x)).permute(0, 2, 3, 1)
         x = self.channelwise(x).permute(0, 3, 1, 2)
-        return x + x_res
+        x = x + x_res
+        if cond_embeds is not None:
+            x = self.adaLN_modulation(x, cond_embeds)
+        return x
 
 
 class DownsampleBlock(nn.Module):
@@ -193,6 +216,8 @@ class DownsampleBlock(nn.Module):
         norm_type="layernorm",
         ln_elementwise_affine=True,
         add_downsample=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -221,6 +246,8 @@ class DownsampleBlock(nn.Module):
                     dropout=dropout,
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
                 for _ in range(num_res_blocks)
@@ -229,7 +256,7 @@ class DownsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None):
+    def forward(self, x, x_skip=None, cond_embeds=None):
         if self.add_downsample:
             x = self.downsample(x)
 
@@ -245,7 +272,7 @@ class DownsampleBlock(nn.Module):
 
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_skip)
             else:
-                x = res_block(x, x_skip)
+                x = res_block(x, x_skip, cond_embeds=cond_embeds)
 
             output_states += (x,)
         return x, output_states
@@ -263,6 +290,8 @@ class UpsampleBlock(nn.Module):
         norm_type="layernorm",
         ln_elementwise_affine=True,
         add_upsample=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -279,6 +308,8 @@ class UpsampleBlock(nn.Module):
                     dropout=dropout,
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
                 for i in range(num_res_blocks)
@@ -299,7 +330,7 @@ class UpsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None):
+    def forward(self, x, x_skip=None, cond_embeds=None):
         for i, res_block in enumerate(self.res_blocks):
             x_res = x_skip[0] if i == 0 and x_skip is not None else None
 
@@ -313,7 +344,7 @@ class UpsampleBlock(nn.Module):
 
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_res)
             else:
-                x = res_block(x, x_res)
+                x = res_block(x, x_res, cond_embeds=cond_embeds)
 
         if self.add_upsample:
             x = self.upsample(x)
@@ -420,6 +451,8 @@ class FeedForward(nn.Module):
         layer_norm_eps=1e-5,
         ln_elementwise_affine=True,
         use_normformer=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -436,10 +469,13 @@ class FeedForward(nn.Module):
             )
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
+        if add_cond_embeds:
+            self.adaLN_modulation = AdaLNModulation(cond_embed_dim=cond_embed_dim, hidden_size=hidden_size)
 
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, cond_embeds=None) -> torch.FloatTensor:
         hidden_states = self.pre_mlp_layer_norm(hidden_states)
-
+        if cond_embeds is not None:
+            hidden_states = self.adaLN_modulation(hidden_states, cond_embeds)
         hidden_gelu = F.gelu(self.wi_0(hidden_states))
         hidden_linear = self.wi_1(hidden_states)
         hidden_states = hidden_gelu * hidden_linear
@@ -465,6 +501,8 @@ class TransformerLayer(nn.Module):
         layer_norm_eps=1e-5,
         ln_elementwise_affine=True,
         use_normformer=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -491,6 +529,8 @@ class TransformerLayer(nn.Module):
             layer_norm_eps,
             ln_elementwise_affine,
             use_normformer,
+            add_cond_embeds,
+            cond_embed_dim,
             use_bias,
         )
 
@@ -506,10 +546,19 @@ class TransformerLayer(nn.Module):
                     self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
                 )
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        if add_cond_embeds:
+            self.self_attn_adaLN_modulation = AdaLNModulation(cond_embed_dim=cond_embed_dim, hidden_size=hidden_size)
+            if add_cross_attention:
+                self.cross_attn_adaLN_modulation = AdaLNModulation(
+                    cond_embed_dim=cond_embed_dim, hidden_size=hidden_size
+                )
+
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
+        if cond_embeds is not None:
+            hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
         attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
@@ -519,6 +568,8 @@ class TransformerLayer(nn.Module):
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
+            if cond_embeds is not None:
+                hidden_states = self.cross_attn_adaLN_modulation(hidden_states, cond_embeds)
             attention_output = self.crossattention(
                 hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
@@ -529,7 +580,7 @@ class TransformerLayer(nn.Module):
             hidden_states = residual + attention_output
 
         residual = hidden_states
-        hidden_states = self.ffn(hidden_states)
+        hidden_states = self.ffn(hidden_states, cond_embeds=cond_embeds)
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -1119,6 +1170,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         patch_size=1,
         layer_norm_before_mlm=False,
         layer_norm_embedddings=False,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         **kwargs,
     ):
         super().__init__()
@@ -1157,6 +1210,15 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             use_bias=use_bias,
         )
 
+        # Condition embeddings
+        if add_cond_embeds:
+            self.cond_embed = nn.Sequential(
+                nn.Linear(cond_embed_dim, hidden_size, bias=use_bias),
+                nn.SiLU(),
+                nn.Linear(hidden_size, hidden_size, bias=use_bias),
+            )
+            cond_embed_dim = hidden_size
+
         # Downsample
         output_channels = block_out_channels[0]
         self.down_blocks = nn.ModuleList([])
@@ -1175,6 +1237,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_downsample=not is_first_block,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
             )
@@ -1194,6 +1258,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     ln_elementwise_affine=ln_elementwise_affine,
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
                 for _ in range(self.num_hidden_layers)
@@ -1224,6 +1290,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_upsample=not is_final_block,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
             )
@@ -1283,26 +1351,32 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         cond_dropout_prob=0.0,
+        cond_embeds=None,
         loss_weight=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
-
-        hidden_states = self.embed(input_ids)
-
-        if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
-            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
-            encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
             mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
             encoder_hidden_states = encoder_hidden_states * mask
+            if cond_embeds is not None:
+                cond_embeds = cond_embeds * mask.squeeze(-1)
+
+        if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
+            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
+
+        if cond_embeds is not None:
+            cond_embeds = self.cond_embed(cond_embeds)
+
+        hidden_states = self.embed(input_ids)
 
         down_block_res_samples = ()
         for down_block in self.down_blocks:
-            hidden_states, res_samples = down_block(hidden_states)
+            hidden_states, res_samples = down_block(hidden_states, cond_embeds=cond_embeds)
             down_block_res_samples += res_samples
 
         batch_size, channels, height, width = hidden_states.shape
@@ -1318,13 +1392,18 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     return custom_forward
 
                 hidden_states = checkpoint(
-                    create_custom_forward(layer), hidden_states, encoder_hidden_states, encoder_attention_mask
+                    create_custom_forward(layer),
+                    hidden_states,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    cond_embeds,
                 )
             else:
                 hidden_states = layer(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
+                    cond_embeds=cond_embeds,
                 )
 
         if self.config.use_encoder_layernorm:
@@ -1335,7 +1414,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         for i, up_block in enumerate(self.up_blocks):
             res_samples = down_block_res_samples[-self.config.num_res_blocks :]
             down_block_res_samples = down_block_res_samples[: -self.config.num_res_blocks]
-            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None)
+            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None, cond_embeds=cond_embeds)
 
         if self.config.layer_norm_before_mlm:
             hidden_states = self.layer_norm_before_mlm(hidden_states)
@@ -1372,6 +1451,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        cond_embeds: torch.FloatTensor = None,
         negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
@@ -1440,9 +1520,15 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 else:
                     uncond_encoder_states = negative_embeds
 
+                if cond_embeds is not None:
+                    uncond_embeds = torch.zeros_like(cond_embeds)
+                    cond_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
+
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
-                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits, uncond_logits = self(
+                    model_input, encoder_hidden_states=condition, cond_embeds=cond_embeds
+                ).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
