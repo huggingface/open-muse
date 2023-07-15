@@ -73,43 +73,55 @@ try:
 except Exception:
 
     class RMSNorm(nn.Module):
-        def __init__(self, normalized_shape, eps=1e-6):
+        def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True):
             super().__init__()
-            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.elementwise_affine = elementwise_affine
+            if elementwise_affine:
+                self.weight = nn.Parameter(torch.ones(normalized_shape))
             self.variance_epsilon = eps
 
         def forward(self, input):
+            input_dtype = input.dtype
             variance = input.to(torch.float32).pow(2).mean(-1, keepdim=True)
             input = input * torch.rsqrt(variance + self.variance_epsilon)
 
-            # convert into half-precision if necessary
-            if self.weight.dtype in [torch.float16, torch.bfloat16]:
-                input = input.to(self.weight.dtype)
+            if self.elementwise_affine:
+                # convert into half-precision if necessary
+                if self.weight.dtype in [torch.float16, torch.bfloat16]:
+                    input = input.to(self.weight.dtype)
+                input = input * self.weight
+            else:
+                input = input.to(input_dtype)
 
-            return self.weight * input
+            return input
 
 
 # layer norm without bias
 class LayerNorm(nn.Module):
-    def __init__(self, dim, eps=1e-5, use_bias=False):
+    def __init__(self, dim, eps=1e-5, use_bias=False, elementwise_affine=True):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.bias = nn.Parameter(torch.zeros(dim)) if use_bias else None
+        self.dim = dim
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(dim))
+            self.bias = nn.Parameter(torch.zeros(dim)) if use_bias else None
+        else:
+            self.weight = None
+            self.bias = None
         self.eps = eps
 
     def forward(self, x):
-        return F.layer_norm(x, self.weight.shape, self.weight, self.bias, self.eps)
+        return F.layer_norm(x, (self.dim,), self.weight, self.bias, self.eps)
 
 
 # U-ViT blocks
 # Adpated from https://github.com/dome272/Paella/blob/main/src_distributed/modules.py
 class Norm2D(nn.Module):
-    def __init__(self, dim, eps=1e-5, use_bias=False, norm_type="layernorm"):
+    def __init__(self, dim, eps=1e-5, use_bias=False, norm_type="layernorm", elementwise_affine=True):
         super().__init__()
         if norm_type == "layernorm":
-            self.norm = LayerNorm(dim, eps, use_bias)
+            self.norm = LayerNorm(dim, eps, use_bias, elementwise_affine=elementwise_affine)
         elif norm_type == "rmsnorm":
-            self.norm = RMSNorm(dim, eps)
+            self.norm = RMSNorm(dim, eps, elementwise_affine=elementwise_affine)
 
     def forward(self, x):
         return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
@@ -131,7 +143,14 @@ class GlobalResponseNorm(nn.Module):
 
 class ResBlock(nn.Module):
     def __init__(
-        self, channels, skip_channels=None, kernel_size=3, dropout=0.0, norm_type="layernorm", use_bias=False
+        self,
+        channels,
+        skip_channels=None,
+        kernel_size=3,
+        dropout=0.0,
+        norm_type="layernorm",
+        ln_elementwise_affine=True,
+        use_bias=False,
     ):
         super().__init__()
         self.depthwise = nn.Conv2d(
@@ -142,7 +161,9 @@ class ResBlock(nn.Module):
             groups=channels,
             bias=use_bias,
         )
-        self.norm = Norm2D(channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias)
+        self.norm = Norm2D(
+            channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
+        )
         self.channelwise = nn.Sequential(
             nn.Linear(channels, channels * 4, bias=use_bias),
             nn.GELU(),
@@ -170,6 +191,7 @@ class DownsampleBlock(nn.Module):
         kernel_size=3,
         dropout=0.0,
         norm_type="layernorm",
+        ln_elementwise_affine=True,
         add_downsample=True,
         use_bias=False,
     ):
@@ -177,7 +199,13 @@ class DownsampleBlock(nn.Module):
         self.add_downsample = add_downsample
         if add_downsample:
             self.downsample = nn.Sequential(
-                Norm2D(input_channels, eps=1e-6, use_bias=use_bias, norm_type=norm_type),
+                Norm2D(
+                    input_channels,
+                    eps=1e-6,
+                    use_bias=use_bias,
+                    norm_type=norm_type,
+                    elementwise_affine=ln_elementwise_affine,
+                ),
                 nn.Conv2d(input_channels, output_channels, kernel_size=2, stride=2, bias=use_bias),
             )
             self.input_channels = output_channels
@@ -192,6 +220,7 @@ class DownsampleBlock(nn.Module):
                     kernel_size=kernel_size,
                     dropout=dropout,
                     norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     use_bias=use_bias,
                 )
                 for _ in range(num_res_blocks)
@@ -232,6 +261,7 @@ class UpsampleBlock(nn.Module):
         kernel_size=3,
         dropout=0.0,
         norm_type="layernorm",
+        ln_elementwise_affine=True,
         add_upsample=True,
         use_bias=False,
     ):
@@ -248,6 +278,7 @@ class UpsampleBlock(nn.Module):
                     kernel_size=kernel_size,
                     dropout=dropout,
                     norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     use_bias=use_bias,
                 )
                 for i in range(num_res_blocks)
@@ -256,7 +287,13 @@ class UpsampleBlock(nn.Module):
 
         if add_upsample:
             self.upsample = nn.Sequential(
-                Norm2D(self.input_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias),
+                Norm2D(
+                    self.input_channels,
+                    eps=1e-6,
+                    norm_type=norm_type,
+                    use_bias=use_bias,
+                    elementwise_affine=ln_elementwise_affine,
+                ),
                 nn.ConvTranspose2d(self.input_channels, self.output_channels, kernel_size=2, stride=2, bias=use_bias),
             )
 
@@ -381,17 +418,22 @@ class FeedForward(nn.Module):
         hidden_dropout=0.0,
         norm_type="layernorm",
         layer_norm_eps=1e-5,
+        ln_elementwise_affine=True,
         use_normformer=True,
         use_bias=False,
     ):
         super().__init__()
         self.use_normformer = use_normformer
-        self.pre_mlp_layer_norm = LayerNorm(hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+        self.pre_mlp_layer_norm = LayerNorm(
+            hidden_size, eps=layer_norm_eps, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
+        )
         self.wi_0 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         if use_normformer:
             norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-            self.mid_mlp_layer_norm = norm_cls(intermediate_size, eps=layer_norm_eps)
+            self.mid_mlp_layer_norm = norm_cls(
+                intermediate_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
 
@@ -421,6 +463,7 @@ class TransformerLayer(nn.Module):
         attention_dropout=0.0,
         norm_type="layernorm",
         layer_norm_eps=1e-5,
+        ln_elementwise_affine=True,
         use_normformer=True,
         use_bias=False,
     ):
@@ -432,29 +475,36 @@ class TransformerLayer(nn.Module):
         self.use_normformer = use_normformer
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+        self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
         if use_normformer:
-            self.post_attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.post_attn_layer_norm = norm_cls(
+                self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
         self.ffn = FeedForward(
             self.hidden_size,
             self.intermediate_size,
             hidden_dropout,
             norm_type,
             layer_norm_eps,
+            ln_elementwise_affine,
             use_normformer,
             use_bias,
         )
 
         if add_cross_attention:
-            self.crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.crossattn_layer_norm = norm_cls(
+                self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
             self.crossattention = Attention(
                 self.hidden_size, self.num_attention_heads, encoder_hidden_size, attention_dropout, use_bias
             )
             if use_normformer:
-                self.post_crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+                self.post_crossattn_layer_norm = norm_cls(
+                    self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+                )
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         residual = hidden_states
@@ -574,6 +624,7 @@ class ConvEmbed(nn.Module):
         patch_size=2,
         max_position_embeddings=256,
         norm_type="layernorm",
+        ln_elementwise_affine=True,
         layer_norm_embedddings=False,
         layer_norm_eps=1e-5,
         use_position_embeddings=True,
@@ -588,14 +639,16 @@ class ConvEmbed(nn.Module):
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps)
+        self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
         if patch_size > 1:
             self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
         if use_position_embeddings:
             self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
         if self.layer_norm_embedddings:
-            self.embeddings_ln = Norm2D(hidden_size, eps=layer_norm_eps, norm_type=norm_type)
+            self.embeddings_ln = Norm2D(
+                hidden_size, eps=layer_norm_eps, norm_type=norm_type, elementwise_affine=ln_elementwise_affine
+            )
 
     def forward(self, input_ids):
         batch_size, seq_length = input_ids.shape
@@ -625,6 +678,7 @@ class ConvMlmLayer(nn.Module):
         hidden_size,
         patch_size=2,
         norm_type="layernorm",
+        ln_elementwise_affine=True,
         layer_norm_eps=1e-5,
         use_bias=False,
     ):
@@ -634,7 +688,13 @@ class ConvMlmLayer(nn.Module):
         self.conv1 = nn.Conv2d(hidden_size, embedding_size * (patch_size**2), kernel_size=1, bias=use_bias)
         if patch_size > 1:
             self.pixel_shuffle = nn.PixelShuffle(patch_size)
-        self.layer_norm = Norm2D(embedding_size, norm_type=norm_type, eps=layer_norm_eps, use_bias=use_bias)
+        self.layer_norm = Norm2D(
+            embedding_size,
+            norm_type=norm_type,
+            eps=layer_norm_eps,
+            use_bias=use_bias,
+            elementwise_affine=ln_elementwise_affine,
+        )
         self.conv2 = nn.Conv2d(embedding_size, vocab_size, kernel_size=1, bias=use_bias)
 
     def forward(self, hidden_states):
@@ -1046,6 +1106,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         project_encoder_hidden_states=False,
         initializer_range=0.02,
         norm_type="layernorm",  # or rmsnorm
+        ln_elementwise_affine=True,
         layer_norm_eps=1e-5,
         use_normformer=False,
         use_encoder_layernorm=True,
@@ -1077,7 +1138,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
-            self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
+            self.encoder_proj_layer_norm = norm_cls(
+                hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
             encoder_hidden_size = hidden_size
 
         # Embeddings
@@ -1089,6 +1152,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             norm_type=norm_type,
             layer_norm_embedddings=layer_norm_embedddings,
             layer_norm_eps=layer_norm_eps,
+            ln_elementwise_affine=ln_elementwise_affine,
             use_position_embeddings=use_position_embeddings,
             use_bias=use_bias,
         )
@@ -1109,6 +1173,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     kernel_size=3,
                     dropout=hidden_dropout,
                     norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     add_downsample=not is_first_block,
                     use_bias=use_bias,
                 )
@@ -1126,6 +1191,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     hidden_dropout=self.hidden_dropout,
                     attention_dropout=self.attention_dropout,
                     norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
@@ -1134,7 +1200,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             ]
         )
         if use_encoder_layernorm:
-            self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.encoder_layer_norm = norm_cls(
+                self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
 
         # Up sample
         reversed_block_out_channels = list(reversed(block_out_channels))
@@ -1154,13 +1222,19 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     kernel_size=3,
                     dropout=hidden_dropout,
                     norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     add_upsample=not is_final_block,
                     use_bias=use_bias,
                 )
             )
 
         if layer_norm_before_mlm:
-            self.layer_norm_before_mlm = Norm2D(block_out_channels[0], norm_type=norm_type, eps=layer_norm_eps)
+            self.layer_norm_before_mlm = Norm2D(
+                block_out_channels[0],
+                norm_type=norm_type,
+                eps=layer_norm_eps,
+                ln_elementwise_affine=ln_elementwise_affine,
+            )
 
         # Output
         self.output_size = codebook_size if use_codebook_size_for_output else self.vocab_size
@@ -1170,6 +1244,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_out_channels[0],
             patch_size=patch_size,
             norm_type=norm_type,
+            ln_elementwise_affine=ln_elementwise_affine,
             layer_norm_eps=layer_norm_eps,
             use_bias=use_bias,
         )
@@ -1195,7 +1270,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
         elif isinstance(module, (nn.LayerNorm, RMSNorm)):
-            module.weight.data.fill_(1.0)
+            if hasattr(module, "weight") and module.bias is not None:
+                module.weight.data.fill_(1.0)
             if hasattr(module, "bias") and module.bias is not None:
                 module.bias.data.zero_()
 
