@@ -1233,7 +1233,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 block_out_channels[0],
                 norm_type=norm_type,
                 eps=layer_norm_eps,
-                ln_elementwise_affine=ln_elementwise_affine,
+                elementwise_affine=ln_elementwise_affine,
             )
 
         # Output
