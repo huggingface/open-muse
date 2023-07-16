@@ -285,7 +285,7 @@ def main():
     if not is_pre_encode:
         if config.model.text_encoder.type == "clip":
             text_encoder_cls = (
-                CLIPTextModelWithProjection if config.model.transformer.add_cond_embeds else CLIPTextModel
+                CLIPTextModelWithProjection if config.model.transformer.get("add_cond_embeds", False) else CLIPTextModel
             )
             text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
             tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
@@ -541,7 +541,7 @@ def main():
                 soft_targets = None
 
         if not is_pre_encode:
-            if config.model.transformer.add_cond_embeds:
+            if config.model.transformer.get("add_cond_embeds", False):
                 outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
                 encoder_hidden_states = outputs.hidden_states[-2]
                 clip_embeds = outputs[0]
@@ -842,7 +842,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
 
-    if config.model.transformer.add_cond_embeds:
+    if config.model.transformer.get("add_cond_embeds", False):
         outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
         encoder_hidden_states = outputs.hidden_states[-2]
         clip_embeds = outputs[0]
