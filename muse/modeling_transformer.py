@@ -1508,6 +1508,20 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         else:
             guidance_scales = torch.ones(timesteps) * guidance_scale
 
+        # classifier free guidance
+        if encoder_hidden_states is not None and guidance_scale > 0:
+            if negative_embeds is None:
+                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+            else:
+                uncond_encoder_states = negative_embeds
+            condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+            model_conds = {"encoder_hidden_states": condition}
+
+            if cond_embeds is not None:
+                uncond_embeds = torch.zeros_like(cond_embeds)
+                cond_embeds = torch.cat([cond_embeds, uncond_embeds])
+                model_conds["cond_embeds"] = cond_embeds
+
         for step in range(timesteps):
             # prepend class token to input_ids
             if class_ids is not None:
@@ -1515,20 +1529,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                if negative_embeds is None:
-                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
-                else:
-                    uncond_encoder_states = negative_embeds
-
-                if cond_embeds is not None:
-                    uncond_embeds = torch.zeros_like(cond_embeds)
-                    cond_embeds = torch.cat([cond_embeds, uncond_embeds], dim=0)
-
                 model_input = torch.cat([input_ids] * 2)
-                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
-                cond_logits, uncond_logits = self(
-                    model_input, encoder_hidden_states=condition, cond_embeds=cond_embeds
-                ).chunk(2)
+                cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
