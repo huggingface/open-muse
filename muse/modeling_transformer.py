@@ -1522,7 +1522,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
                 if cond_embeds is not None:
                     uncond_embeds = torch.zeros_like(cond_embeds)
-                    cond_embeds = torch.cat([cond_embeds, uncond_embeds], dim=1)
+                    cond_embeds = torch.cat([cond_embeds, uncond_embeds], dim=0)
 
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
