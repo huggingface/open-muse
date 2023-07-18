@@ -21,6 +21,7 @@ from PIL import Image
 from torchvision import transforms
 from transformers import (
     AutoTokenizer,
+    CLIPConfig,
     CLIPTextModel,
     CLIPTextModelWithProjection,
     PreTrainedTokenizer,
@@ -245,13 +246,13 @@ class PipelineMuse:
             text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
 
             if is_clip:
-                config = text_encoder_cls.load_config(**text_encoder_args)
-                if config["_class_name"] == "CLIPTextModel":
-                    text_encoder = CLIPTextModel.from_pretrained(**text_encoder_args)
+                config = CLIPConfig.from_pretrained(**text_encoder_args)
+                if config.architectures[0] == "CLIPTextModel":
+                    text_encoder_cls = CLIPTextModel
                 else:
-                    text_encoder = CLIPTextModelWithProjection.from_pretrained(**text_encoder_args)
+                    text_encoder_cls = CLIPTextModelWithProjection
 
-            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
+            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args, projection_dim=768)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         transformer_config = MaskGitTransformer.load_config(**transformer_args)
