@@ -339,6 +339,9 @@ def main():
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
 
+    if config.model.get("enable_flash_attn", False):
+        model.enable_flash_attn()
+
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
     if optimizer_config.scale_lr:

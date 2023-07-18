@@ -17,6 +17,13 @@ try:
 except ImportError:
     is_xformers_available = False
 
+try:
+    import flash_attn
+
+    is_flash_attn_available = True
+except:
+    is_flash_attn_available = False
+
 
 class SpatialNorm(nn.Module):
     def __init__(
@@ -173,6 +180,8 @@ class AttnBlock(nn.Module):
         self.use_memory_efficient_attention_xformers = False
         self.xformers_attention_op = None
 
+        self.use_flash_attn = False
+
     def set_use_memory_efficient_attention_xformers(
         self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
     ):
@@ -180,6 +189,18 @@ class AttnBlock(nn.Module):
             raise ImportError("Please install xformers to use memory efficient attention")
         self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
         self.xformers_attention_op = attention_op
+
+        if self.use_flash_attn and self.use_memory_efficient_attention_xformers:
+            raise ValueError("set one and only one of flash attnetion and xformers")
+
+    def set_use_flash_attn(self, use_flash_attn: bool):
+        if use_flash_attn and not is_flash_attn_available:
+            raise ImportError("Please install flash attention")
+
+        self.use_flash_attn = use_flash_attn
+
+        if self.use_flash_attn and self.use_memory_efficient_attention_xformers:
+            raise ValueError("set one and only one of flash attnetion and xformers")
 
     def forward(self, hidden_states, zq=None):
         residual = hidden_states
@@ -201,6 +222,8 @@ class AttnBlock(nn.Module):
             hidden_states = xops.memory_efficient_attention(
                 query, key, value, attn_bias=None, op=self.xformers_attention_op
             )
+        elif self.use_flash_attn:
+            hidden_states = flash_attn.flash_attn_func(query, key, value)
         else:
             attention_scores = torch.baddbmm(
                 torch.empty(
