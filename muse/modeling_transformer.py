@@ -114,9 +114,9 @@ class LayerNorm(nn.Module):
 
 
 class AdaLNModulation(nn.Module):
-    def __init__(self, cond_embed_dim, hidden_size):
+    def __init__(self, cond_embed_dim, hidden_size, use_bias=False):
         super().__init__()
-        self.mapper = nn.Linear(cond_embed_dim, hidden_size * 2)
+        self.mapper = nn.Linear(cond_embed_dim, hidden_size * 2, bias=use_bias)
 
     def forward(self, hidden_states, cond_embeds):
         cond_embeds = F.silu(cond_embeds)
@@ -190,7 +190,9 @@ class ResBlock(nn.Module):
         )
 
         if add_cond_embeds:
-            self.adaLN_modulation = AdaLNModulation(cond_embed_dim=cond_embed_dim, hidden_size=channels)
+            self.adaLN_modulation = AdaLNModulation(
+                cond_embed_dim=cond_embed_dim, hidden_size=channels, use_bias=use_bias
+            )
 
     def forward(self, x, x_skip=None, cond_embeds=None):
         x_res = x
@@ -470,7 +472,9 @@ class FeedForward(nn.Module):
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
         if add_cond_embeds:
-            self.adaLN_modulation = AdaLNModulation(cond_embed_dim=cond_embed_dim, hidden_size=hidden_size)
+            self.adaLN_modulation = AdaLNModulation(
+                cond_embed_dim=cond_embed_dim, hidden_size=hidden_size, use_bias=use_bias
+            )
 
     def forward(self, hidden_states: torch.FloatTensor, cond_embeds=None) -> torch.FloatTensor:
         hidden_states = self.pre_mlp_layer_norm(hidden_states)
@@ -547,10 +551,14 @@ class TransformerLayer(nn.Module):
                 )
 
         if add_cond_embeds:
-            self.self_attn_adaLN_modulation = AdaLNModulation(cond_embed_dim=cond_embed_dim, hidden_size=hidden_size)
+            self.self_attn_adaLN_modulation = AdaLNModulation(
+                cond_embed_dim=cond_embed_dim, hidden_size=hidden_size, use_bias=use_bias
+            )
             if add_cross_attention:
                 self.cross_attn_adaLN_modulation = AdaLNModulation(
-                    cond_embed_dim=cond_embed_dim, hidden_size=hidden_size
+                    cond_embed_dim=cond_embed_dim,
+                    hidden_size=hidden_size,
+                    use_bias=use_bias,
                 )
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
@@ -1324,6 +1332,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         nn.init.normal_(self.embed.embeddings.weight, std=np.sqrt(1 / vocab_size))
         nn.init.constant_(self.mlm_layer.conv1.weight, 0)  # output
         self.mlm_layer.conv2.weight.data = self.embed.embeddings.weight.data[:codebook_size, :, None, None].clone()
+
+        # init AdaLNModulation.mapper layers to 0
+        if add_cond_embeds:
+            for m in self.modules():
+                if isinstance(m, AdaLNModulation):
+                    nn.init.constant_(m.mapper.weight, 0)
+                    if hasattr(m, "bias") and m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
 
     def _init_weights(self, module):
         """
