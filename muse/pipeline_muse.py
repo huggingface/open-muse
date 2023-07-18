@@ -22,6 +22,7 @@ from torchvision import transforms
 from transformers import (
     AutoTokenizer,
     CLIPTextModel,
+    CLIPTextModelWithProjection,
     PreTrainedTokenizer,
     T5EncoderModel,
 )
@@ -106,7 +107,13 @@ class PipelineMuse:
                 max_length=self.tokenizer.model_max_length,
             ).input_ids  # TODO: remove hardcode
             input_ids = input_ids.to(self.device)
-            encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+
+            if self.transformer.config.add_cond_embeds:
+                outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
+                pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
+            else:
+                encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+                pooled_embeds = None
 
             if negative_text is not None:
                 if isinstance(negative_text, str):
@@ -128,6 +135,10 @@ class PipelineMuse:
             bs_embed, seq_len, _ = encoder_hidden_states.shape
             encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
             encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            if pooled_embeds is not None:
+                bs_embed, _ = pooled_embeds.shape
+                pooled_embeds = pooled_embeds.repeat(1, num_images_per_prompt)
+                pooled_embeds = pooled_embeds.view(bs_embed * num_images_per_prompt, -1)
             if negative_encoder_hidden_states is not None:
                 bs_embed, seq_len, _ = negative_encoder_hidden_states.shape
                 negative_encoder_hidden_states = negative_encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
@@ -138,6 +149,7 @@ class PipelineMuse:
             model_inputs = {
                 "encoder_hidden_states": encoder_hidden_states,
                 "negative_embeds": negative_encoder_hidden_states,
+                "cond_embeds": pooled_embeds,
             }
 
         generate = self.transformer.generate
@@ -231,6 +243,13 @@ class PipelineMuse:
             # TODO: Add config for pipeline to specify text encoder
             is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"].lower()
             text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
+
+            if is_clip:
+                config = text_encoder_cls.load_config(**text_encoder_args)
+                if config["_class_name"] == "CLIPTextModel":
+                    text_encoder = CLIPTextModel.from_pretrained(**text_encoder_args)
+                else:
+                    text_encoder = CLIPTextModelWithProjection.from_pretrained(**text_encoder_args)
 
             text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
