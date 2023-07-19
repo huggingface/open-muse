@@ -363,6 +363,7 @@ class Attention(nn.Module):
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
+        self.attention_dropout = attention_dropout
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
                 f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.hidden_size} and"
@@ -407,7 +408,7 @@ class Attention(nn.Module):
         value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, p=self.dropout if self.training else 0.0)
+            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0)
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
             attention_mask = None
