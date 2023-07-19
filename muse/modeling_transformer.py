@@ -1180,6 +1180,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         layer_norm_embedddings=False,
         add_cond_embeds=False,
         cond_embed_dim=None,
+        xavier_init_embed=True,
         **kwargs,
     ):
         super().__init__()
@@ -1328,7 +1329,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         # --- WEIGHT INIT ---
         self.apply(self._init_weights)  # General init
-        nn.init.xavier_uniform_(self.embed.conv.weight, 0.02)  # inputs
+        if xavier_init_embed:
+            nn.init.xavier_uniform_(self.embed.conv.weight, 0.02)  # inputs
         nn.init.normal_(self.embed.embeddings.weight, std=np.sqrt(1 / vocab_size))
         nn.init.constant_(self.mlm_layer.conv1.weight, 0)  # output
         self.mlm_layer.conv2.weight.data = self.embed.embeddings.weight.data[:codebook_size, :, None, None].clone()
