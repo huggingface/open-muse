@@ -291,6 +291,8 @@ def main():
             )
             text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
             tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+            if config.model.text_encoder.get("pad_token_id", None):
+                tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
         elif config.model.text_encoder.type == "t5":
             text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
             tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
