@@ -1181,6 +1181,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         add_cond_embeds=False,
         cond_embed_dim=None,
         xavier_init_embed=True,
+        use_empty_embeds_for_uncond=False,
         **kwargs,
     ):
         super().__init__()
@@ -1371,15 +1372,27 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         cond_dropout_prob=0.0,
         cond_embeds=None,
         loss_weight=None,
+        empty_embeds=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
+
+        if self.config.use_empty_embeds_for_uncond and empty_embeds is None:
+            raise ValueError("If `use_empty_embeds_for_uncond` is True, `empty_embeds` should be provided.")
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
             mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
-            encoder_hidden_states = encoder_hidden_states * mask
+
+            if self.config.use_empty_embeds_for_uncond:
+                # empty embeds is of shape (1, seq, hidden_size) expand it to batch size
+                empty_embeds = empty_embeds.expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds
+                )
+            else:
+                encoder_hidden_states = encoder_hidden_states * mask
             if cond_embeds is not None:
                 cond_embeds = cond_embeds * mask.squeeze(-1)
 
@@ -1470,6 +1483,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         cond_embeds: torch.FloatTensor = None,
+        empty_embeds: torch.FloatTensor = None,
         negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
@@ -1529,7 +1543,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         # classifier free guidance
         if encoder_hidden_states is not None and guidance_scale > 0:
             if negative_embeds is None:
-                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                if self.config.use_empty_embeds_for_uncond:
+                    uncond_encoder_states = empty_embeds.expand(batch_size, -1, -1)
+                else:
+                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
             else:
                 uncond_encoder_states = negative_embeds
             condition = torch.cat([encoder_hidden_states, uncond_encoder_states])

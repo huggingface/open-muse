@@ -477,6 +477,12 @@ def main():
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
 
+    if not is_pre_encode and config.model.transformer.get("use_empty_embeds_for_uncond", False):
+        empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
+        empty_embeds = text_encoder(empty_input).last_hidden_state
+    else:
+        empty_embeds = None
+
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
 
@@ -610,6 +616,7 @@ def main():
                         cond_dropout_prob=config.training.cond_dropout_prob,
                         cond_embeds=clip_embeds,
                         loss_weight=loss_weight,
+                        empty_embeds=empty_embeds,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -720,7 +727,9 @@ def main():
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
 
-                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
+                    validate_model(
+                        model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels, empty_embeds
+                    )
 
                     if config.training.get("use_ema", False):
                         # Switch back to the original model parameters for training.
@@ -742,6 +751,7 @@ def main():
                         config,
                         global_step + 1,
                         mask_schedule=mask_schedule,
+                        empty_embeds=empty_embeds,
                     )
 
                     if config.training.get("use_ema", False):
@@ -774,7 +784,7 @@ def main():
 
 
 @torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels):
+def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, empty_embeds=None):
     logger.info("Evaluating...")
     model.eval()
     eval_loss = 0
@@ -792,6 +802,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             labels=labels,
             cond_embeds=clip_embeds,
             loss_weight=loss_weight,
+            empty_embeds=empty_embeds,
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
@@ -803,7 +814,9 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 
 
 @torch.no_grad()
-def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule):
+def generate_images(
+    model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule, empty_embeds=None
+):
     logger.info("Generating images...")
     model.eval()
     # fmt: off
@@ -862,6 +875,7 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         gen_token_ids = accelerator.unwrap_model(model).generate2(
             encoder_hidden_states=encoder_hidden_states,
             cond_embeds=clip_embeds,
+            empty_embeds=empty_embeds,
             guidance_scale=config.training.guidance_scale,
             temperature=config.training.get("generation_temperature", 1.0),
             timesteps=config.training.generation_timesteps,
