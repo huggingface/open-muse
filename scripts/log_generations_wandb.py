@@ -14,7 +14,7 @@ def chunk(it, size):
 
 
 def generate_and_log(args):
-    run_name = f"samples-{args.run_id}-{args.checkpoint}-t={args.timesteps}-g={args.guidance_scale}-temp={args.temperature}-maskgit={args.use_maskgit_generate}"
+    run_name = f"{args.transformer} samples at checkpoint {args.checkpoint}"
     wandb.init(
         project=args.project,
         entity=args.entity,
