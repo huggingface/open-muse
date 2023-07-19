@@ -26,25 +26,23 @@
 # laion 6a) 23.4 minutes
 # laion 5a) 19h43m
 
-import os
-import webdataset as wds
-from torch.utils.data import DataLoader
+import argparse
+import concurrent.futures
 import logging
-import torchvision.transforms.functional as TF
-from transformers import CLIPTokenizerFast, CLIPTextModel
-from torchvision.transforms import InterpolationMode
+import os
+import re
+from collections import OrderedDict
+from threading import Lock
+
 import numpy as np
 import torch
-import concurrent.futures
-import re
-from threading import Lock
-from collections import OrderedDict
-import argparse
+import torchvision.transforms.functional as TF
+import webdataset as wds
+from torch.utils.data import DataLoader
+from torchvision.transforms import InterpolationMode
+from transformers import CLIPTextModel, CLIPTokenizerFast
 
-from muse import (
-    PaellaVQModel,
-    VQGANModel,
-)
+from muse import PaellaVQModel, VQGANModel
 
 torch.set_float32_matmul_precision("high")
 torch.set_grad_enabled(False)

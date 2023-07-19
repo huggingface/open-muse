@@ -222,9 +222,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -285,7 +285,9 @@ def main():
     if not is_pre_encode:
         if config.model.text_encoder.type == "clip":
             text_encoder_cls = (
-                CLIPTextModelWithProjection if config.model.transformer.get("add_cond_embeds", False) else CLIPTextModel
+                CLIPTextModelWithProjection
+                if config.model.transformer.get("add_cond_embeds", False)
+                else CLIPTextModel
             )
             text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
             tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
