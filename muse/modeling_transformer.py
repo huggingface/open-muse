@@ -1182,6 +1182,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         cond_embed_dim=None,
         xavier_init_embed=True,
         use_empty_embeds_for_uncond=False,
+        learn_uncond_embeds=False,
         **kwargs,
     ):
         super().__init__()
@@ -1198,6 +1199,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+
+        if learn_uncond_embeds:
+            self.uncond_embeds = nn.Parameter(torch.randn(size=(77, encoder_hidden_size), requires_grad=True))
+            nn.init.normal_(self.uncond_embeds, std=0.02)
 
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
@@ -1391,6 +1396,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 encoder_hidden_states = torch.where(
                     (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds
                 )
+            elif self.config.learn_uncond_embeds:
+                uncond_embeds = self.uncond_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, uncond_embeds
+                )
             else:
                 encoder_hidden_states = encoder_hidden_states * mask
             if cond_embeds is not None:
@@ -1545,6 +1555,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             if negative_embeds is None:
                 if self.config.use_empty_embeds_for_uncond:
                     uncond_encoder_states = empty_embeds.expand(batch_size, -1, -1)
+                elif self.config.learn_uncond_embeds:
+                    uncond_encoder_states = self.uncond_embeds.unsqueeze(0).expand(batch_size, -1, -1)
                 else:
                     uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
             else:
