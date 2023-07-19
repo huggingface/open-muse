@@ -407,7 +407,7 @@ class Attention(nn.Module):
         value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op)
+            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, p=self.dropout if self.training else 0.0)
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
             attention_mask = None
@@ -1248,7 +1248,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     skip_channels=0,
                     num_res_blocks=num_res_blocks,
                     kernel_size=3,
-                    dropout=hidden_dropout,
+                    dropout=hidden_dropout if i == 0 else 0.0,
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_downsample=not is_first_block,
@@ -1301,7 +1301,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     output_channels=output_channels,
                     num_res_blocks=num_res_blocks,
                     kernel_size=3,
-                    dropout=hidden_dropout,
+                    dropout=hidden_dropout if i== 0 else 0.0,
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_upsample=not is_final_block,
