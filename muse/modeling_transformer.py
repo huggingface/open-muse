@@ -1382,7 +1382,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
 
-        if self.config.use_empty_embeds_for_uncond and empty_embeds is None:
+        if self.training and self.config.use_empty_embeds_for_uncond and empty_embeds is None:
             raise ValueError("If `use_empty_embeds_for_uncond` is True, `empty_embeds` should be provided.")
 
         # condition dropout for classifier free guidance
