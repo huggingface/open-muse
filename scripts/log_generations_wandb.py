@@ -74,7 +74,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--guidance_scale", type=float, default=8)
     parser.add_argument("--num_generations", type=int, default=8)
-    parser.add_argument("--checkpoint", type=int, required=True)
+    parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--text_encoder", type=str, default="google/t5-v1_1-large")
     parser.add_argument("--vae", type=str, default="openMUSE/maskgit-vqgan-imagenet-f16-256")
     parser.add_argument("--transformer", type=str, required=True)
