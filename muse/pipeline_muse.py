@@ -250,8 +250,9 @@ class PipelineMuse:
                     text_encoder_cls = CLIPTextModel
                 else:
                     text_encoder_cls = CLIPTextModelWithProjection
+                    text_encoder_args["projection_dim"] = 768
 
-            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args, projection_dim=768)
+            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         transformer_config = MaskGitTransformer.load_config(**transformer_args)
