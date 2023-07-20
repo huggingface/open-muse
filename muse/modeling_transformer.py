@@ -408,7 +408,9 @@ class Attention(nn.Module):
         value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0)
+            attn_output = xops.memory_efficient_attention(
+                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0
+            )
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
             attention_mask = None
@@ -1196,6 +1198,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.attention_dropout = attention_dropout
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
+        self.use_projection = block_out_channels[-1] != hidden_size
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
@@ -1259,6 +1262,12 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 )
             )
 
+        if self.use_projection:
+            self.project_to_hidden_norm = norm_cls(
+                block_out_channels[-1], eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
+            self.project_to_hidden = nn.Linear(block_out_channels[-1], hidden_size, bias=use_bias)
+
         # Mid Transformer
         self.transformer_layers = nn.ModuleList(
             [
@@ -1286,6 +1295,12 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
             )
 
+        if self.use_projection:
+            self.project_from_hidden_norm = norm_cls(
+                hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
+            self.project_from_hidden = nn.Linear(hidden_size, block_out_channels[-1], bias=use_bias)
+
         # Up sample
         reversed_block_out_channels = list(reversed(block_out_channels))
         output_channels = reversed_block_out_channels[0]
@@ -1302,7 +1317,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     output_channels=output_channels,
                     num_res_blocks=num_res_blocks,
                     kernel_size=3,
-                    dropout=hidden_dropout if i== 0 else 0.0,
+                    dropout=hidden_dropout if i == 0 else 0.0,
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_upsample=not is_final_block,
@@ -1424,6 +1439,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
 
+        if self.use_projection:
+            hidden_states = self.project_to_hidden_norm(hidden_states)
+            hidden_states = self.project_to_hidden(hidden_states)
+
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
 
@@ -1450,6 +1469,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
+
+        if self.use_projection:
+            hidden_states = self.project_from_hidden_norm(hidden_states)
+            hidden_states = self.project_from_hidden(hidden_states)
 
         hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
 
