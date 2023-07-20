@@ -233,6 +233,37 @@ class ClassificationDataset:
         return self._eval_dataloader
 
 
+# taken from https://github.com/dome272/Paella/blob/main/src_distributed/utils.py#L20
+class WebdatasetFilter:
+    def __init__(self, min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9):
+        self.min_size = min_size
+        self.max_pwatermark = max_pwatermark
+        self.aesthetic_threshold = aesthetic_threshold
+
+    def __call__(self, x):
+        try:
+            if "json" in x:
+                x_json = json.loads(x["json"])
+                filter_size = (x_json.get("original_width", 0.0) or 0.0) >= self.min_size and x_json.get(
+                    "original_height", 0
+                ) >= self.min_size
+                filter_watermark = (x_json.get("pwatermark", 1.0) or 1.0) <= self.max_pwatermark
+                filter_aesthetic_a = (x_json.get("aesthetic", 0.0) or 0.0) >= self.aesthetic_threshold
+                filter_aesthetic_b = (x_json.get("AESTHETIC_SCORE", 0.0) or 0.0) >= self.aesthetic_threshold
+                filter_aesthetic_coyo = (
+                    x_json.get("aesthetic_score_laion_v2", 0.0) or 0.0
+                ) >= self.aesthetic_threshold
+                return (
+                    filter_size
+                    and filter_watermark
+                    and (filter_aesthetic_a or filter_aesthetic_b or filter_aesthetic_coyo)
+                )
+            else:
+                return False
+        except:
+            return False
+
+
 class Text2ImageDataset:
     def __init__(
         self,
@@ -253,6 +284,7 @@ class Text2ImageDataset:
         is_pre_encoded: bool = False,
         vae_checkpoint: Optional[str] = None,
         text_encoder_checkpoint: Optional[str] = None,
+        use_filtered_dataset: bool = False,
     ):
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
@@ -299,6 +331,11 @@ class Text2ImageDataset:
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
+            wds.select(
+                WebdatasetFilter(min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9)
+                if use_filtered_dataset
+                else lambda x: True
+            ),
             tarfile_to_samples_nothrow,
             wds.shuffle(shuffle_buffer_size),
             *processing_pipeline,
