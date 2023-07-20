@@ -447,7 +447,7 @@ def main():
         is_pre_encoded=is_pre_encode,
         vae_checkpoint=config.model.vq_model.pretrained,
         text_encoder_checkpoint=config.model.text_encoder.pretrained,
-        use_filtered_dataset=config.dataset.get("use_filtered_dataset", False),
+        use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
