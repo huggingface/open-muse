@@ -18,7 +18,6 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 from PIL import Image
-from torchvision import transforms
 from transformers import (
     AutoTokenizer,
     CLIPConfig,
@@ -325,6 +324,8 @@ class PipelineMuseInpainting(PipelineMuse):
         use_fp16: bool = False,
         image_size: int = 256,
     ):
+        from torchvision import transforms
+
         assert use_maskgit_generate
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
