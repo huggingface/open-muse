@@ -331,12 +331,12 @@ class Text2ImageDataset:
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
+            tarfile_to_samples_nothrow,
             wds.select(
                 WebdatasetFilter(min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9)
                 if use_filtered_dataset
                 else lambda x: True
             ),
-            tarfile_to_samples_nothrow,
             wds.shuffle(shuffle_buffer_size),
             *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
