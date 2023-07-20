@@ -248,6 +248,7 @@ class WebdatasetFilter:
                     "original_height", 0
                 ) >= self.min_size
                 filter_watermark = (x_json.get("pwatermark", 1.0) or 1.0) <= self.max_pwatermark
+                filter_watermark_coyo = (x_json.get("watermark_score", 1.0) or 1.0) <= self.max_pwatermark
                 filter_aesthetic_a = (x_json.get("aesthetic", 0.0) or 0.0) >= self.aesthetic_threshold
                 filter_aesthetic_b = (x_json.get("AESTHETIC_SCORE", 0.0) or 0.0) >= self.aesthetic_threshold
                 filter_aesthetic_coyo = (
@@ -255,7 +256,7 @@ class WebdatasetFilter:
                 ) >= self.aesthetic_threshold
                 return (
                     filter_size
-                    and filter_watermark
+                    and (filter_watermark or filter_watermark_coyo)
                     and (filter_aesthetic_a or filter_aesthetic_b or filter_aesthetic_coyo)
                 )
             else:
