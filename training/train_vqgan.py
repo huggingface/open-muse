@@ -37,7 +37,7 @@ import muse
 from muse import MOVQ, MaskGitTransformer, MaskGitVQGAN, VQGANModel
 from muse.lr_schedulers import get_scheduler
 from muse.sampling import cosine_schedule
-from training.discriminator import Discriminator
+from training.discriminator import Discriminator, PaellaDiscriminator
 try:
     import apex
 
@@ -105,6 +105,14 @@ def get_vq_model_class(model_type):
         return MaskGitVQGAN
     elif model_type == "taming_vqgan":
         return VQGANModel
+    else:
+        raise ValueError(f"model_type {model_type} not supported for VQGAN")
+
+def get_discriminator_class(model_type):
+    if model_type == "paella":
+        return PaellaDiscriminator
+    elif model_type == "default":
+        return Discriminator
     else:
         raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
@@ -312,8 +320,8 @@ def main():
     model = vq_class.from_pretrained(config.model.vq_model.pretrained)
     if config.training.use_ema:
         ema_model = EMAModel(model.parameters(), model_cls=vq_class, model_config=model.config)
-
-    discriminator = Discriminator(config)
+    discriminator_class = get_discriminator_class(config.discriminator.discriminator_type)
+    discriminator = discriminator_class(config)
     # TODO: Add timm_discriminator_backend to config.training. Set default to vgg16
     idx = _map_layer_to_idx(config.training.timm_discriminator_backend,\
                             config.training.timm_disc_layers.split("|"), config.training.timm_discr_offset)

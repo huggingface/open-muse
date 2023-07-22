@@ -24,7 +24,7 @@ pushd $MUSE_REPO
 source /p/home/jusers/isozaki1/juwels/miniconda3/etc/profile.d/conda.sh
 conda activate muse
 CMD=" \
-    training/train_vqgan.py config=configs/imagenet_vqgan_training_jewels_f16_vqgan.yaml \
+    training/train_vqgan.py config=configs/imagenet_vqgan_training_jewels_f16_vqgan_paella_disc.yaml \
     wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \

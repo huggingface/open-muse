@@ -43,14 +43,11 @@ dataset:
         center_crop: True
         random_flip: False
 discriminator:
-    discriminator_type: default
-    dim: 64
+    discriminator_type: paella
     channels: 3
-    groups: 32
-    init_kernel_size: 5
-    kernel_size: 3
-    act: "silu"
-    discr_layers: 4
+    cond_channels: 0
+    hidden_channels: 2048
+    depth: 6
 optimizer:
     name: adamw
     params: # default adamw params
