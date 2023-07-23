@@ -1878,6 +1878,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         return sampled_ids
 
 # Taken and slightly adapted from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/max_vit.py
+# Originally proposed https://arxiv.org/abs/1709.01507
+# The main idea is without changing the size of the input, choose to prioritize some channels over others
 class SqueezeExcitation(nn.Module):
     def __init__(self, dim, shrinkage_rate = 0.25):
         super().__init__()
@@ -1920,34 +1922,39 @@ class Dropsample(nn.Module):
         keep_mask = torch.FloatTensor((x.shape[0], 1, 1, 1), device = device).uniform_() > self.prob
         return x * keep_mask / (1 - self.prob)
 
-def MBConv(
-    dim_in,
-    dim_out,
-    *,
-    downsample,
-    expansion_rate = 4,
-    shrinkage_rate = 0.25,
-    dropout = 0.,
-):
-    hidden_dim = int(expansion_rate * dim_out)
-    stride = 2 if downsample else 1
+class MBConv(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        *,
+        downsample,
+        expansion_rate = 4,
+        shrinkage_rate = 0.25,
+        dropout = 0.,
+    ):
+        # One function of this mbconv layer argued in the paper is to provide conditional position encoding especially with the depthwise convolution
+        # so that we do not need explicit positional embeddings
+        hidden_dim = int(expansion_rate * dim_out)
+        stride = 2 if downsample else 1
 
-    net = nn.Sequential(
-        nn.Conv2d(dim_in, hidden_dim, 1),
-        nn.BatchNorm2d(hidden_dim),
-        nn.GELU(),
-        nn.Conv2d(hidden_dim, hidden_dim, 3, stride = stride, padding = 1, groups = hidden_dim),
-        nn.BatchNorm2d(hidden_dim),
-        nn.GELU(),
-        SqueezeExcitation(hidden_dim, shrinkage_rate = shrinkage_rate),
-        nn.Conv2d(hidden_dim, dim_out, 1),
-        nn.BatchNorm2d(dim_out)
-    )
+        self.net = nn.Sequential(
+            nn.Conv2d(dim_in, hidden_dim, 1),
+            nn.BatchNorm2d(hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, stride = stride, padding = 1, groups = hidden_dim),
+            nn.BatchNorm2d(hidden_dim),
+            nn.GELU(),
+            SqueezeExcitation(hidden_dim, shrinkage_rate = shrinkage_rate),
+            nn.Conv2d(hidden_dim, dim_out, 1),
+            nn.BatchNorm2d(dim_out)
+        )
 
-    if dim_in == dim_out and not downsample:
-        net = MBConvResidual(net, dropout = dropout)
+        if dim_in == dim_out and not downsample:
+            self.net = MBConvResidual(self.net, dropout = dropout)
+    def forward(self, x):
+        return self.net(x)
 
-    return net
 
 class MaxVitAttention(Attention):
     def __init__(self, hidden_size, num_heads, window_size=7, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
