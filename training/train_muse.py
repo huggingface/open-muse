@@ -50,7 +50,6 @@ from muse import (
     EMAModel,
     MaskGitTransformer,
     MaskGiTUViT,
-    MaskGiTMaxViT,
     MaskGitVQGAN,
     PaellaVQModel,
     VQGANModel,
