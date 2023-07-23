@@ -73,43 +73,70 @@ try:
 except Exception:
 
     class RMSNorm(nn.Module):
-        def __init__(self, normalized_shape, eps=1e-6):
+        def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True):
             super().__init__()
-            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.elementwise_affine = elementwise_affine
+            if elementwise_affine:
+                self.weight = nn.Parameter(torch.ones(normalized_shape))
             self.variance_epsilon = eps
 
         def forward(self, input):
+            input_dtype = input.dtype
             variance = input.to(torch.float32).pow(2).mean(-1, keepdim=True)
             input = input * torch.rsqrt(variance + self.variance_epsilon)
 
-            # convert into half-precision if necessary
-            if self.weight.dtype in [torch.float16, torch.bfloat16]:
-                input = input.to(self.weight.dtype)
+            if self.elementwise_affine:
+                # convert into half-precision if necessary
+                if self.weight.dtype in [torch.float16, torch.bfloat16]:
+                    input = input.to(self.weight.dtype)
+                input = input * self.weight
+            else:
+                input = input.to(input_dtype)
 
-            return self.weight * input
+            return input
 
 
 # layer norm without bias
 class LayerNorm(nn.Module):
-    def __init__(self, dim, eps=1e-5, use_bias=False):
+    def __init__(self, dim, eps=1e-5, use_bias=False, elementwise_affine=True):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(dim))
-        self.bias = nn.Parameter(torch.zeros(dim)) if use_bias else None
+        self.dim = dim
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(dim))
+            self.bias = nn.Parameter(torch.zeros(dim)) if use_bias else None
+        else:
+            self.weight = None
+            self.bias = None
         self.eps = eps
 
     def forward(self, x):
-        return F.layer_norm(x, self.weight.shape, self.weight, self.bias, self.eps)
+        return F.layer_norm(x, (self.dim,), self.weight, self.bias, self.eps)
+
+
+class AdaLNModulation(nn.Module):
+    def __init__(self, cond_embed_dim, hidden_size, use_bias=False):
+        super().__init__()
+        self.mapper = nn.Linear(cond_embed_dim, hidden_size * 2, bias=use_bias)
+
+    def forward(self, hidden_states, cond_embeds):
+        cond_embeds = F.silu(cond_embeds)
+        scale, shift = self.mapper(cond_embeds).chunk(2, dim=1)
+        if hidden_states.dim() > 3:
+            scale, shift = scale[:, :, None, None], shift[:, :, None, None]
+        else:
+            scale, shift = scale[:, None], shift[:, None]
+        return hidden_states * (1 + scale) + shift
 
 
 # U-ViT blocks
 # Adpated from https://github.com/dome272/Paella/blob/main/src_distributed/modules.py
 class Norm2D(nn.Module):
-    def __init__(self, dim, eps=1e-5, use_bias=False, norm_type="layernorm"):
+    def __init__(self, dim, eps=1e-5, use_bias=False, norm_type="layernorm", elementwise_affine=True):
         super().__init__()
         if norm_type == "layernorm":
-            self.norm = LayerNorm(dim, eps, use_bias)
+            self.norm = LayerNorm(dim, eps, use_bias, elementwise_affine=elementwise_affine)
         elif norm_type == "rmsnorm":
-            self.norm = RMSNorm(dim, eps)
+            self.norm = RMSNorm(dim, eps, elementwise_affine=elementwise_affine)
 
     def forward(self, x):
         return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
@@ -130,32 +157,99 @@ class GlobalResponseNorm(nn.Module):
 
 
 class ResBlock(nn.Module):
-    def __init__(self, channels, skip_channels=None, kernel_size=3, dropout=0.0, use_bias=False):
+    def __init__(
+        self,
+        in_channels,
+        skip_channels=None,
+        kernel_size=3,
+        dropout=0.0,
+        norm_type="layernorm",
+        ln_elementwise_affine=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
+        use_bias=False,
+        **kwargs,
+    ):
         super().__init__()
         self.depthwise = nn.Conv2d(
-            channels + skip_channels,
-            channels,
+            in_channels + skip_channels,
+            in_channels,
             kernel_size=kernel_size,
             padding=kernel_size // 2,
-            groups=channels,
+            groups=in_channels,
             bias=use_bias,
         )
-        self.norm = Norm2D(channels, eps=1e-6, use_bias=use_bias)
+        self.norm = Norm2D(
+            in_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
+        )
         self.channelwise = nn.Sequential(
-            nn.Linear(channels, channels * 4, bias=use_bias),
+            nn.Linear(in_channels, in_channels * 4, bias=use_bias),
             nn.GELU(),
-            GlobalResponseNorm(channels * 4),
+            GlobalResponseNorm(in_channels * 4),
             nn.Dropout(dropout),
-            nn.Linear(channels * 4, channels, bias=use_bias),
+            nn.Linear(in_channels * 4, in_channels, bias=use_bias),
         )
 
-    def forward(self, x, x_skip=None):
+        if add_cond_embeds:
+            self.adaLN_modulation = AdaLNModulation(
+                cond_embed_dim=cond_embed_dim, hidden_size=in_channels, use_bias=use_bias
+            )
+
+    def forward(self, x, x_skip=None, cond_embeds=None):
         x_res = x
         if x_skip is not None:
             x = torch.cat([x, x_skip], dim=1)
         x = self.norm(self.depthwise(x)).permute(0, 2, 3, 1)
         x = self.channelwise(x).permute(0, 3, 1, 2)
-        return x + x_res
+        x = x + x_res
+        if cond_embeds is not None:
+            x = self.adaLN_modulation(x, cond_embeds)
+        return x
+
+
+class ResnetBlockVanilla(nn.Module):
+    def __init__(self, in_channels, out_channels=None, conv_shortcut=False, dropout=0.0, use_bias=False, **kwargs):
+        super().__init__()
+        self.in_channels = in_channels
+        out_channels = in_channels if out_channels is None else out_channels
+        self.out_channels = out_channels
+        self.use_conv_shortcut = conv_shortcut
+
+        self.norm1 = torch.nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
+        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=use_bias)
+
+        self.norm2 = torch.nn.GroupNorm(num_groups=32, num_channels=out_channels, eps=1e-6, affine=True)
+        self.dropout = torch.nn.Dropout(dropout)
+        self.conv2 = torch.nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=use_bias)
+
+        if self.in_channels != self.out_channels:
+            if self.use_conv_shortcut:
+                self.conv_shortcut = torch.nn.Conv2d(
+                    in_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=use_bias
+                )
+            else:
+                self.nin_shortcut = torch.nn.Conv2d(
+                    in_channels, out_channels, kernel_size=1, stride=1, padding=0, bias=use_bias
+                )
+
+    def forward(self, hidden_states, **kwargs):
+        residual = hidden_states
+        hidden_states = self.norm1(hidden_states)
+        hidden_states = F.silu(hidden_states)
+        hidden_states = self.conv1(hidden_states)
+
+        hidden_states = self.norm2(hidden_states)
+        hidden_states = F.silu(hidden_states)
+        hidden_states = self.dropout(hidden_states)
+        hidden_states = self.conv2(hidden_states)
+
+        if self.in_channels != self.out_channels:
+            if self.use_conv_shortcut:
+                residual = self.conv_shortcut(residual)
+            else:
+                residual = self.nin_shortcut(residual)
+
+        return residual + hidden_states
 
 
 class DownsampleBlock(nn.Module):
@@ -167,14 +261,25 @@ class DownsampleBlock(nn.Module):
         num_res_blocks=4,
         kernel_size=3,
         dropout=0.0,
+        norm_type="layernorm",
+        ln_elementwise_affine=True,
         add_downsample=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
+        **kwargs,
     ):
         super().__init__()
         self.add_downsample = add_downsample
         if add_downsample:
             self.downsample = nn.Sequential(
-                Norm2D(input_channels, eps=1e-6, use_bias=use_bias),
+                Norm2D(
+                    input_channels,
+                    eps=1e-6,
+                    use_bias=use_bias,
+                    norm_type=norm_type,
+                    elementwise_affine=ln_elementwise_affine,
+                ),
                 nn.Conv2d(input_channels, output_channels, kernel_size=2, stride=2, bias=use_bias),
             )
             self.input_channels = output_channels
@@ -188,6 +293,10 @@ class DownsampleBlock(nn.Module):
                     skip_channels=skip_channels,
                     kernel_size=kernel_size,
                     dropout=dropout,
+                    norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
                 for _ in range(num_res_blocks)
@@ -196,7 +305,7 @@ class DownsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None):
+    def forward(self, x, x_skip=None, cond_embeds=None, **kwargs):
         if self.add_downsample:
             x = self.downsample(x)
 
@@ -212,7 +321,7 @@ class DownsampleBlock(nn.Module):
 
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_skip)
             else:
-                x = res_block(x, x_skip)
+                x = res_block(x, x_skip, cond_embeds=cond_embeds)
 
             output_states += (x,)
         return x, output_states
@@ -227,8 +336,13 @@ class UpsampleBlock(nn.Module):
         num_res_blocks=4,
         kernel_size=3,
         dropout=0.0,
+        norm_type="layernorm",
+        ln_elementwise_affine=True,
         add_upsample=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
+        **kwargs,
     ):
         super().__init__()
         self.add_upsample = add_upsample
@@ -242,6 +356,10 @@ class UpsampleBlock(nn.Module):
                     skip_channels=skip_channels if i == 0 else 0,
                     kernel_size=kernel_size,
                     dropout=dropout,
+                    norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
                 for i in range(num_res_blocks)
@@ -250,13 +368,19 @@ class UpsampleBlock(nn.Module):
 
         if add_upsample:
             self.upsample = nn.Sequential(
-                Norm2D(self.input_channels, eps=1e-6, use_bias=use_bias),
+                Norm2D(
+                    self.input_channels,
+                    eps=1e-6,
+                    norm_type=norm_type,
+                    use_bias=use_bias,
+                    elementwise_affine=ln_elementwise_affine,
+                ),
                 nn.ConvTranspose2d(self.input_channels, self.output_channels, kernel_size=2, stride=2, bias=use_bias),
             )
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None):
+    def forward(self, x, x_skip=None, cond_embeds=None, **kwargs):
         for i, res_block in enumerate(self.res_blocks):
             x_res = x_skip[0] if i == 0 and x_skip is not None else None
 
@@ -270,10 +394,125 @@ class UpsampleBlock(nn.Module):
 
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_res)
             else:
-                x = res_block(x, x_res)
+                x = res_block(x, x_res, cond_embeds=cond_embeds)
 
         if self.add_upsample:
             x = self.upsample(x)
+        return x
+
+
+class DownsampleBlockVanilla(nn.Module):
+    def __init__(
+        self,
+        input_channels,
+        output_channels=None,
+        num_res_blocks=4,
+        dropout=0.0,
+        add_downsample=True,
+        use_bias=False,
+        **kwargs,
+    ):
+        super().__init__()
+        self.add_downsample = add_downsample
+
+        res_blocks = []
+        for i in range(num_res_blocks):
+            in_channels = input_channels if i == 0 else output_channels
+            res_blocks.append(
+                ResnetBlockVanilla(
+                    in_channels=in_channels, out_channels=output_channels, dropout=dropout, use_bias=use_bias
+                )
+            )
+        self.res_blocks = nn.ModuleList(res_blocks)
+
+        if add_downsample:
+            self.downsample_conv = nn.Conv2d(output_channels, output_channels, 3, stride=2, bias=use_bias)
+
+        self.gradient_checkpointing = False
+
+    def forward(self, x, **kwargs):
+        output_states = ()
+        for res_block in self.res_blocks:
+            if self.training and self.gradient_checkpointing:
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+
+                    return custom_forward
+
+                x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x)
+            else:
+                x = res_block(x)
+
+            output_states = output_states + (x,)
+
+        if self.add_downsample:
+            pad = (0, 1, 0, 1)
+            x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
+            x = self.downsample_conv(x)
+            output_states = output_states + (x,)
+
+        return x, output_states
+
+
+class UpsampleBlockVanilla(nn.Module):
+    def __init__(
+        self,
+        input_channels,
+        output_channels,
+        skip_channels=None,
+        num_res_blocks=4,
+        dropout=0.0,
+        add_upsample=True,
+        use_bias=False,
+        **kwargs,
+    ):
+        super().__init__()
+        self.add_upsample = add_upsample
+        res_blocks = []
+        for i in range(num_res_blocks):
+            res_skip_channels = input_channels if (i == num_res_blocks - 1) else output_channels
+            resnet_in_channels = skip_channels if i == 0 else output_channels
+
+            res_blocks.append(
+                ResnetBlockVanilla(
+                    in_channels=resnet_in_channels + res_skip_channels,
+                    out_channels=output_channels,
+                    dropout=dropout,
+                )
+            )
+        self.res_blocks = nn.ModuleList(res_blocks)
+
+        if add_upsample:
+            self.upsample_conv = nn.Conv2d(output_channels, output_channels, 3, padding=1)
+
+        self.gradient_checkpointing = False
+
+    def forward(self, x, x_skip, **kwargs):
+        for res_block in self.res_blocks:
+            # pop res hidden states
+            res_hidden_states = x_skip[-1]
+            x_skip = x_skip[:-1]
+            x = torch.cat([x, res_hidden_states], dim=1)
+            if self.training and self.gradient_checkpointing:
+
+                def create_custom_forward(module):
+                    def custom_forward(*inputs):
+                        return module(*inputs)
+
+                    return custom_forward
+
+                x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x)
+            else:
+                x = res_block(x)
+
+        if self.add_upsample:
+            if x.shape[0] >= 64:
+                x = x.contiguous()
+            x = F.interpolate(x, scale_factor=2.0, mode="nearest")
+            x = self.upsample_conv(x)
+
         return x
 
 
@@ -287,6 +526,7 @@ class Attention(nn.Module):
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
+        self.attention_dropout = attention_dropout
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
                 f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.hidden_size} and"
@@ -331,7 +571,13 @@ class Attention(nn.Module):
         value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
+<<<<<<< HEAD
             attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, attn_bias=bias)
+=======
+            attn_output = xops.memory_efficient_attention(
+                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0
+            )
+>>>>>>> 21b5600a636f39569160876cd6ea291220e8cbcb
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
             attention_mask = None
@@ -376,23 +622,35 @@ class FeedForward(nn.Module):
         hidden_dropout=0.0,
         norm_type="layernorm",
         layer_norm_eps=1e-5,
+        ln_elementwise_affine=True,
         use_normformer=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
         self.use_normformer = use_normformer
-        self.pre_mlp_layer_norm = LayerNorm(hidden_size, eps=layer_norm_eps, use_bias=use_bias)
+        self.pre_mlp_layer_norm = LayerNorm(
+            hidden_size, eps=layer_norm_eps, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
+        )
         self.wi_0 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         if use_normformer:
             norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-            self.mid_mlp_layer_norm = norm_cls(intermediate_size, eps=layer_norm_eps)
+            self.mid_mlp_layer_norm = norm_cls(
+                intermediate_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
         self.wo = nn.Linear(intermediate_size, hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(hidden_dropout)
+        if add_cond_embeds:
+            self.adaLN_modulation = AdaLNModulation(
+                cond_embed_dim=cond_embed_dim, hidden_size=hidden_size, use_bias=use_bias
+            )
 
-    def forward(self, hidden_states: torch.FloatTensor) -> torch.FloatTensor:
+    def forward(self, hidden_states: torch.FloatTensor, cond_embeds=None) -> torch.FloatTensor:
         hidden_states = self.pre_mlp_layer_norm(hidden_states)
-
+        if cond_embeds is not None:
+            hidden_states = self.adaLN_modulation(hidden_states, cond_embeds)
         hidden_gelu = F.gelu(self.wi_0(hidden_states))
         hidden_linear = self.wi_1(hidden_states)
         hidden_states = hidden_gelu * hidden_linear
@@ -416,7 +674,10 @@ class TransformerLayer(nn.Module):
         attention_dropout=0.0,
         norm_type="layernorm",
         layer_norm_eps=1e-5,
+        ln_elementwise_affine=True,
         use_normformer=True,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -427,34 +688,56 @@ class TransformerLayer(nn.Module):
         self.use_normformer = use_normformer
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+        self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
         self.attention = Attention(
             self.hidden_size, self.num_attention_heads, attention_dropout=attention_dropout, use_bias=use_bias
         )
         if use_normformer:
-            self.post_attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.post_attn_layer_norm = norm_cls(
+                self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
         self.ffn = FeedForward(
             self.hidden_size,
             self.intermediate_size,
             hidden_dropout,
             norm_type,
             layer_norm_eps,
+            ln_elementwise_affine,
             use_normformer,
+            add_cond_embeds,
+            cond_embed_dim,
             use_bias,
         )
 
         if add_cross_attention:
-            self.crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.crossattn_layer_norm = norm_cls(
+                self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
             self.crossattention = Attention(
                 self.hidden_size, self.num_attention_heads, encoder_hidden_size, attention_dropout, use_bias
             )
             if use_normformer:
-                self.post_crossattn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+                self.post_crossattn_layer_norm = norm_cls(
+                    self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+                )
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        if add_cond_embeds:
+            self.self_attn_adaLN_modulation = AdaLNModulation(
+                cond_embed_dim=cond_embed_dim, hidden_size=hidden_size, use_bias=use_bias
+            )
+            if add_cross_attention:
+                self.cross_attn_adaLN_modulation = AdaLNModulation(
+                    cond_embed_dim=cond_embed_dim,
+                    hidden_size=hidden_size,
+                    use_bias=use_bias,
+                )
+
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
+        if cond_embeds is not None:
+            hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
         attention_output = self.attention(hidden_states)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
@@ -464,6 +747,8 @@ class TransformerLayer(nn.Module):
             residual = hidden_states
             # TODO: should norm be applied to encoder_hidden_states as well?
             hidden_states = self.crossattn_layer_norm(hidden_states)
+            if cond_embeds is not None:
+                hidden_states = self.cross_attn_adaLN_modulation(hidden_states, cond_embeds)
             attention_output = self.crossattention(
                 hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
@@ -474,7 +759,7 @@ class TransformerLayer(nn.Module):
             hidden_states = residual + attention_output
 
         residual = hidden_states
-        hidden_states = self.ffn(hidden_states)
+        hidden_states = self.ffn(hidden_states, cond_embeds=cond_embeds)
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -569,6 +854,8 @@ class ConvEmbed(nn.Module):
         patch_size=2,
         max_position_embeddings=256,
         norm_type="layernorm",
+        ln_elementwise_affine=True,
+        layer_norm_embedddings=False,
         layer_norm_eps=1e-5,
         use_position_embeddings=True,
         use_bias=False,
@@ -578,15 +865,20 @@ class ConvEmbed(nn.Module):
         self.patch_size = patch_size
         self.max_position_embeddings = max_position_embeddings
         self.use_position_embeddings = use_position_embeddings
+        self.layer_norm_embedddings = layer_norm_embedddings
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps)
+        self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
         if patch_size > 1:
             self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
         if use_position_embeddings:
             self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
+        if self.layer_norm_embedddings:
+            self.embeddings_ln = Norm2D(
+                hidden_size, eps=layer_norm_eps, norm_type=norm_type, elementwise_affine=ln_elementwise_affine
+            )
 
     def forward(self, input_ids):
         batch_size, seq_length = input_ids.shape
@@ -603,6 +895,8 @@ class ConvEmbed(nn.Module):
             position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = embeddings + position_embeddings
+        if self.layer_norm_embedddings:
+            embeddings = self.embeddings_ln(embeddings)
         return embeddings
 
 
@@ -614,6 +908,7 @@ class ConvMlmLayer(nn.Module):
         hidden_size,
         patch_size=2,
         norm_type="layernorm",
+        ln_elementwise_affine=True,
         layer_norm_eps=1e-5,
         use_bias=False,
     ):
@@ -623,7 +918,13 @@ class ConvMlmLayer(nn.Module):
         self.conv1 = nn.Conv2d(hidden_size, embedding_size * (patch_size**2), kernel_size=1, bias=use_bias)
         if patch_size > 1:
             self.pixel_shuffle = nn.PixelShuffle(patch_size)
-        self.layer_norm = Norm2D(embedding_size, norm_type=norm_type, eps=layer_norm_eps, use_bias=use_bias)
+        self.layer_norm = Norm2D(
+            embedding_size,
+            norm_type=norm_type,
+            eps=layer_norm_eps,
+            use_bias=use_bias,
+            elementwise_affine=ln_elementwise_affine,
+        )
         self.conv2 = nn.Conv2d(embedding_size, vocab_size, kernel_size=1, bias=use_bias)
 
     def forward(self, hidden_states):
@@ -713,6 +1014,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
             self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
+            encoder_hidden_size = hidden_size
 
         self.transformer_layers = nn.ModuleList(
             [
@@ -838,6 +1140,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
     def generate(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         temperature=1.0,
@@ -846,6 +1149,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=3,
         noise_schedule: Callable = cosine_schedule,
+        use_tqdm=True,
     ):
         # begin with all image token ids masked
         mask_token_id = self.config.mask_token_id
@@ -857,16 +1161,19 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         # shift the class ids by the codebook size
         if class_ids is not None:
             class_ids += self.config.codebook_size
-
         # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
         scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
 
         starting_temperature = temperature
 
-        for timestep, steps_until_x0 in tqdm(
-            zip(torch.linspace(0, 1, timesteps, device=self.device), reversed(range(timesteps))), total=timesteps
-        ):
+        iterate_over = zip(torch.linspace(0, 1, timesteps, device=self.device), reversed(range(timesteps)))
+
+        if use_tqdm:
+            iterate_over = tqdm(iterate_over, total=timesteps)
+
+        for timestep, steps_until_x0 in iterate_over:
             rand_mask_prob = noise_schedule(timestep)
             num_token_masked = max(int((rand_mask_prob * seq_len).item()), 1)
 
@@ -909,13 +1216,14 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             scores = 1 - probs_without_temperature.gather(2, pred_ids[..., None])
             scores = rearrange(scores, "... 1 -> ...")  # TODO: use torch
-
         return input_ids
 
     def generate2(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
@@ -939,7 +1247,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
 
         for step in range(timesteps):
             # prepend class token to input_ids
@@ -948,7 +1257,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                if negative_embeds is None:
+                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+                else:
+                    uncond_encoder_states = negative_embeds
+
                 model_input = torch.cat([input_ids] * 2)
                 condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
                 cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
@@ -1023,6 +1336,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         project_encoder_hidden_states=False,
         initializer_range=0.02,
         norm_type="layernorm",  # or rmsnorm
+        ln_elementwise_affine=True,
         layer_norm_eps=1e-5,
         use_normformer=False,
         use_encoder_layernorm=True,
@@ -1033,6 +1347,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
+        layer_norm_before_mlm=False,
+        layer_norm_embedddings=False,
+        add_cond_embeds=False,
+        cond_embed_dim=None,
+        xavier_init_embed=True,
+        use_empty_embeds_for_uncond=False,
+        learn_uncond_embeds=False,
+        use_vannilla_resblock=False,
         **kwargs,
     ):
         super().__init__()
@@ -1045,14 +1367,22 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.attention_dropout = attention_dropout
         self.max_position_embeddings = max_position_embeddings
         self.initializer_range = initializer_range
+        self.use_projection = block_out_channels[-1] != hidden_size
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
 
+        if learn_uncond_embeds:
+            self.uncond_embeds = nn.Parameter(torch.randn(size=(77, encoder_hidden_size), requires_grad=True))
+            nn.init.normal_(self.uncond_embeds, std=0.02)
+
         if add_cross_attention is not None and project_encoder_hidden_states:  # Cross attention
             self.encoder_proj = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
-            self.encoder_proj_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps)
+            self.encoder_proj_layer_norm = norm_cls(
+                hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
+            encoder_hidden_size = hidden_size
 
         # Embeddings
         self.embed = ConvEmbed(
@@ -1061,30 +1391,59 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_out_channels[0],
             patch_size=patch_size,
             norm_type=norm_type,
+            layer_norm_embedddings=layer_norm_embedddings,
             layer_norm_eps=layer_norm_eps,
+            ln_elementwise_affine=ln_elementwise_affine,
             use_position_embeddings=use_position_embeddings,
             use_bias=use_bias,
         )
 
+        # Condition embeddings
+        if add_cond_embeds:
+            self.cond_embed = nn.Sequential(
+                nn.Linear(cond_embed_dim, hidden_size, bias=use_bias),
+                nn.SiLU(),
+                nn.Linear(hidden_size, hidden_size, bias=use_bias),
+            )
+            cond_embed_dim = hidden_size
+
         # Downsample
+        DownBlock = DownsampleBlockVanilla if use_vannilla_resblock else DownsampleBlock
         output_channels = block_out_channels[0]
         self.down_blocks = nn.ModuleList([])
         for i in range(len(block_out_channels)):
             is_first_block = i == 0
+            is_final_block = i == len(block_out_channels) - 1
             input_channels = output_channels
             output_channels = block_out_channels[i]
+
+            if use_vannilla_resblock:
+                add_downsample = not is_final_block
+            else:
+                add_downsample = not is_first_block
+
             self.down_blocks.append(
-                DownsampleBlock(
+                DownBlock(
                     input_channels=input_channels,
                     output_channels=output_channels,
                     skip_channels=0,
                     num_res_blocks=num_res_blocks,
                     kernel_size=3,
-                    dropout=hidden_dropout,
-                    add_downsample=not is_first_block,
+                    dropout=hidden_dropout if i == 0 else 0.0,
+                    norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
+                    add_downsample=add_downsample,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
             )
+
+        if self.use_projection:
+            self.project_to_hidden_norm = norm_cls(
+                block_out_channels[-1], eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
+            self.project_to_hidden = nn.Linear(block_out_channels[-1], hidden_size, bias=use_bias)
 
         # Mid Transformer
         self.transformer_layers = nn.ModuleList(
@@ -1098,36 +1457,67 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     hidden_dropout=self.hidden_dropout,
                     attention_dropout=self.attention_dropout,
                     norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
                 for _ in range(self.num_hidden_layers)
             ]
         )
         if use_encoder_layernorm:
-            self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
+            self.encoder_layer_norm = norm_cls(
+                self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
+
+        if self.use_projection:
+            self.project_from_hidden_norm = norm_cls(
+                hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            )
+            self.project_from_hidden = nn.Linear(hidden_size, block_out_channels[-1], bias=use_bias)
 
         # Up sample
+        UpBlock = UpsampleBlockVanilla if use_vannilla_resblock else UpsampleBlock
         reversed_block_out_channels = list(reversed(block_out_channels))
         output_channels = reversed_block_out_channels[0]
         self.up_blocks = nn.ModuleList([])
         for i in range(len(reversed_block_out_channels)):
             is_final_block = i == len(block_out_channels) - 1
-            input_channel = reversed_block_out_channels[i]
-            output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
-            prev_output_channels = output_channels if i != 0 else 0
+
+            if use_vannilla_resblock:
+                prev_output_channels = output_channels
+                output_channels = reversed_block_out_channels[i]
+                input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+            else:
+                input_channel = reversed_block_out_channels[i]
+                output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
+                prev_output_channels = input_channel if i != 0 else 0
+
             self.up_blocks.append(
-                UpsampleBlock(
+                UpBlock(
                     input_channels=input_channel,
                     skip_channels=prev_output_channels,
                     output_channels=output_channels,
-                    num_res_blocks=num_res_blocks,
+                    num_res_blocks=num_res_blocks + 1 if use_vannilla_resblock else num_res_blocks,
                     kernel_size=3,
-                    dropout=hidden_dropout,
+                    dropout=hidden_dropout if i == 0 else 0.0,
+                    norm_type=norm_type,
+                    ln_elementwise_affine=ln_elementwise_affine,
                     add_upsample=not is_final_block,
+                    add_cond_embeds=add_cond_embeds,
+                    cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
                 )
+            )
+
+        if layer_norm_before_mlm:
+            self.layer_norm_before_mlm = Norm2D(
+                block_out_channels[0],
+                norm_type=norm_type,
+                eps=layer_norm_eps,
+                elementwise_affine=ln_elementwise_affine,
             )
 
         # Output
@@ -1138,6 +1528,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_out_channels[0],
             patch_size=patch_size,
             norm_type=norm_type,
+            ln_elementwise_affine=ln_elementwise_affine,
             layer_norm_eps=layer_norm_eps,
             use_bias=use_bias,
         )
@@ -1145,9 +1536,19 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         # --- WEIGHT INIT ---
         self.apply(self._init_weights)  # General init
-        nn.init.constant_(self.mlm_layer.conv1.weight, 0)
+        if xavier_init_embed:
+            nn.init.xavier_uniform_(self.embed.conv.weight, 0.02)  # inputs
         nn.init.normal_(self.embed.embeddings.weight, std=np.sqrt(1 / vocab_size))
-        nn.init.normal_(self.mlm_layer.conv2.weight, std=np.sqrt(1 / codebook_size))
+        nn.init.constant_(self.mlm_layer.conv1.weight, 0)  # output
+        self.mlm_layer.conv2.weight.data = self.embed.embeddings.weight.data[:codebook_size, :, None, None].clone()
+
+        # init AdaLNModulation.mapper layers to 0
+        if add_cond_embeds:
+            for m in self.modules():
+                if isinstance(m, AdaLNModulation):
+                    nn.init.constant_(m.mapper.weight, 0)
+                    if hasattr(m, "bias") and m.bias is not None:
+                        nn.init.constant_(m.bias, 0)
 
     def _init_weights(self, module):
         """
@@ -1162,7 +1563,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         elif isinstance(module, nn.Embedding):
             nn.init.trunc_normal_(module.weight, std=self.config.initializer_range)
         elif isinstance(module, (nn.LayerNorm, RMSNorm)):
-            module.weight.data.fill_(1.0)
+            if hasattr(module, "weight") and module.weight is not None:
+                module.weight.data.fill_(1.0)
             if hasattr(module, "bias") and module.bias is not None:
                 module.bias.data.zero_()
 
@@ -1174,29 +1576,57 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         cond_dropout_prob=0.0,
+        cond_embeds=None,
+        loss_weight=None,
+        empty_embeds=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
 
-        hidden_states = self.embed(input_ids)
-
-        if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
-            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
-            encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
+        if self.training and self.config.use_empty_embeds_for_uncond and empty_embeds is None:
+            raise ValueError("If `use_empty_embeds_for_uncond` is True, `empty_embeds` should be provided.")
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
             mask = prob_mask_like((batch_size, 1, 1), 1.0 - cond_dropout_prob, encoder_hidden_states.device)
-            encoder_hidden_states = encoder_hidden_states * mask
 
-        down_block_res_samples = ()
+            if self.config.use_empty_embeds_for_uncond:
+                # empty embeds is of shape (1, seq, hidden_size) expand it to batch size
+                empty_embeds = empty_embeds.expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds
+                )
+            elif self.config.learn_uncond_embeds:
+                uncond_embeds = self.uncond_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, uncond_embeds
+                )
+            else:
+                encoder_hidden_states = encoder_hidden_states * mask
+            if cond_embeds is not None:
+                cond_embeds = cond_embeds * mask.squeeze(-1)
+
+        if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
+            encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
+
+        if cond_embeds is not None:
+            cond_embeds = self.cond_embed(cond_embeds)
+
+        hidden_states = self.embed(input_ids)
+
+        down_block_res_samples = (hidden_states,)
         for down_block in self.down_blocks:
-            hidden_states, res_samples = down_block(hidden_states)
+            hidden_states, res_samples = down_block(hidden_states, cond_embeds=cond_embeds)
             down_block_res_samples += res_samples
 
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+
+        if self.use_projection:
+            hidden_states = self.project_to_hidden_norm(hidden_states)
+            hidden_states = self.project_to_hidden(hidden_states)
 
         for layer in self.transformer_layers:
             if self.gradient_checkpointing:
@@ -1208,33 +1638,60 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     return custom_forward
 
                 hidden_states = checkpoint(
-                    create_custom_forward(layer), hidden_states, encoder_hidden_states, encoder_attention_mask
+                    create_custom_forward(layer),
+                    hidden_states,
+                    encoder_hidden_states,
+                    encoder_attention_mask,
+                    cond_embeds,
                 )
             else:
                 hidden_states = layer(
                     hidden_states,
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
+                    cond_embeds=cond_embeds,
                 )
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
 
+        if self.use_projection:
+            hidden_states = self.project_from_hidden_norm(hidden_states)
+            hidden_states = self.project_from_hidden(hidden_states)
+
         hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
 
         for i, up_block in enumerate(self.up_blocks):
-            res_samples = down_block_res_samples[-self.config.num_res_blocks :]
-            down_block_res_samples = down_block_res_samples[: -self.config.num_res_blocks]
-            hidden_states = up_block(hidden_states, x_skip=res_samples if i > 0 else None)
+            num_up_blocks = len(up_block.res_blocks)
+            res_samples = down_block_res_samples[-num_up_blocks:]
+            down_block_res_samples = down_block_res_samples[:-num_up_blocks]
+
+            if self.config.use_vannilla_resblock:
+                x_skip = res_samples
+            else:
+                x_skip = res_samples if i > 0 else None
+
+            hidden_states = up_block(hidden_states, x_skip=x_skip, cond_embeds=cond_embeds)
+
+        if self.config.layer_norm_before_mlm:
+            hidden_states = self.layer_norm_before_mlm(hidden_states)
 
         batch_size, channels, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
         logits = self.mlm_layer(hidden_states)
 
         if labels is not None:
+            reduction = "none" if loss_weight is not None else "mean"
             loss = F.cross_entropy(
-                logits.view(-1, self.output_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
+                logits.view(-1, self.output_size),
+                labels.view(-1),
+                ignore_index=-100,
+                label_smoothing=label_smoothing,
+                reduction=reduction,
             )
+            if loss_weight is not None:
+                loss_weight = loss_weight.view(-1)
+                loss = ((loss * loss_weight).sum(dim=-1) / loss_weight.sum(dim=-1)).mean()
             return logits, loss
         return logits
 
@@ -1243,15 +1700,26 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if isinstance(module, (DownsampleBlock, UpsampleBlock)):
             module.gradient_checkpointing = value
 
+    def generate(self):
+        pass
+
     def generate2(
         self,
+        input_ids: torch.LongTensor = None,
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
+        cond_embeds: torch.FloatTensor = None,
+        empty_embeds: torch.FloatTensor = None,
+        negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
+        guidance_schedule=None,
         noise_schedule=cosine_schedule,
+        noise_type="mask",  # can be "mask" or "random_replace"
+        predict_all_tokens=False,
         generator: torch.Generator = None,
+        return_intermediate=False,
         **kwargs,
     ):
         """
@@ -1265,12 +1733,57 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
         shape = (batch_size, seq_len)
 
+        if isinstance(temperature, tuple):
+            temperatures = torch.linspace(temperature[0], temperature[1], timesteps)
+        else:
+            temperatures = torch.linspace(temperature, 0.01, timesteps)
+
         # shift the class ids by the codebook size
         if class_ids is not None:
             class_ids += self.config.codebook_size
 
-        # initialize with all image tokens masked
-        input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+        if input_ids is None:
+            # initialize with all image tokens masked
+            if noise_type == "mask":
+                input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+            elif noise_type == "random_replace":
+                input_ids = torch.randint(0, self.config.codebook_size, shape, device=self.device)
+            else:
+                raise ValueError(f"noise_type {noise_type} not recognized")
+
+        if return_intermediate:
+            intermediate = []
+
+        if guidance_schedule == "linear":
+            guidance_scales = torch.linspace(0, guidance_scale, timesteps)
+        elif guidance_schedule == "cosine":
+            guidance_scales = []
+            for step in range(timesteps):
+                ratio = 1.0 * (step + 1) / timesteps
+                scale = cosine_schedule(torch.tensor(1 - ratio)) * guidance_scale
+                guidance_scales.append(scale.floor())
+            guidance_scales = torch.tensor(guidance_scales)
+        else:
+            guidance_scales = torch.ones(timesteps) * guidance_scale
+
+        # classifier free guidance
+        if encoder_hidden_states is not None and guidance_scale > 0:
+            if negative_embeds is None:
+                if self.config.use_empty_embeds_for_uncond:
+                    uncond_encoder_states = empty_embeds.expand(batch_size, -1, -1)
+                elif self.config.learn_uncond_embeds:
+                    uncond_encoder_states = self.uncond_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+                else:
+                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+            else:
+                uncond_encoder_states = negative_embeds
+            condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+            model_conds = {"encoder_hidden_states": condition}
+
+            if cond_embeds is not None:
+                uncond_embeds = torch.zeros_like(cond_embeds)
+                cond_embeds = torch.cat([cond_embeds, uncond_embeds])
+                model_conds["cond_embeds"] = cond_embeds
 
         for step in range(timesteps):
             # prepend class token to input_ids
@@ -1279,13 +1792,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
                 model_input = torch.cat([input_ids] * 2)
-                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
-                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
-                logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
+                logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
             else:
                 logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
                 logits = logits[..., : self.config.codebook_size]
@@ -1295,40 +1806,79 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 input_ids = input_ids[:, 1:]
                 logits = logits[:, 1:]
 
-            # Samples the ids using categorical sampling: [batch_size, seq_length].
-            # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
-            sampled_ids = torch.stack(
-                [torch.multinomial(l.softmax(dim=-1), 1, generator=generator).squeeze(1) for l in logits]
-            )
+            if noise_type == "mask":
+                # Samples the ids using categorical sampling: [batch_size, seq_length].
+                if predict_all_tokens:
+                    probs = logits.div(temperatures[step]).softmax(dim=-1)
+                else:
+                    probs = logits.softmax(dim=-1)
 
-            # Just updates the masked tokens.
-            unknown_map = input_ids == mask_token_id
-            sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
-            # Defines the mask ratio for the next round. The number to mask out is
-            # determined by mask_ratio * unknown_number_in_the_beginning.
-            ratio = 1.0 * (step + 1) / timesteps
-            mask_ratio = noise_schedule(torch.tensor(ratio))
-            # Computes the probabilities of each selected tokens.
-            probs = logits.softmax(dim=-1)
-            selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
-            selected_probs = selected_probs.squeeze(-1)
+                sampled = probs.reshape(-1, logits.size(-1))
+                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
 
-            # Ignores the tokens given in the input by overwriting their confidence.
-            selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
-            # Gets mask lens for each sample in the batch according to the mask ratio.
-            mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
-            # Keeps at least one of prediction in this round and also masks out at least
-            # one and for the next iteration
-            mask_len = torch.max(
-                torch.tensor([1], device=logits.device), torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len)
-            )
+                if return_intermediate:
+                    intermediate.append(sampled_ids)
 
-            # Adds noise for randomness
-            temperature = temperature * (1.0 - ratio)
-            masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
-            # Masks tokens with lower confidence.
-            input_ids = torch.where(masking, mask_token_id, sampled_ids)
+                # Just updates the masked tokens.
+                unknown_map = input_ids == mask_token_id
+                sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
+                # Defines the mask ratio for the next round. The number to mask out is
+                # determined by mask_ratio * unknown_number_in_the_beginning.
+                ratio = 1.0 * (step + 1) / timesteps
+                mask_ratio = noise_schedule(torch.tensor(ratio))
 
+                # Gets mask lens for each sample in the batch according to the mask ratio.
+                mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
+                # Keeps at least one of prediction in this round and also masks out at least
+                # one and for the next iteration
+                mask_len = torch.max(
+                    torch.tensor([1], device=logits.device),
+                    torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len),
+                )
+
+                # Adds noise for randomness
+                if not predict_all_tokens:
+                    selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
+                    selected_probs = selected_probs.squeeze(-1)
+                    # Ignores the tokens given in the input by overwriting their confidence.
+                    selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
+                    temperature = temperatures[step]
+                    masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
+                    # Masks tokens with lower confidence.
+                    input_ids = torch.where(masking, mask_token_id, sampled_ids)
+                else:
+                    batch_size, seq_len = input_ids.shape
+                    batch_randperm = torch.rand(batch_size, seq_len, device=input_ids.device).argsort(dim=-1)
+                    mask = batch_randperm < mask_len
+                    # mask images and create input and labels
+                    input_ids = torch.where(mask, mask_token_id, sampled_ids)
+            else:
+                # Samples the ids using categorical sampling: [batch_size, seq_length].
+                probs = logits.div(temperatures[step]).softmax(dim=-1)
+                # probs = logits.softmax(dim=-1)
+                sampled = probs.reshape(-1, logits.size(-1))
+                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
+
+                if return_intermediate:
+                    intermediate.append(sampled_ids)
+
+                # Defines the mask ratio for the next round. The number to mask out is
+                # determined by mask_ratio * unknown_number_in_the_beginning.
+                ratio = 1.0 * (step + 1) / timesteps
+                mask_ratio = noise_schedule(torch.tensor(ratio))
+
+                # Adds noise for randomness
+                num_token_masked = (seq_len * mask_ratio).round().clamp(min=1).to(sampled_ids.device)
+                batch_randperm = torch.rand(batch_size, seq_len, device=sampled_ids.device).argsort(dim=-1)
+                mask = batch_randperm < num_token_masked.unsqueeze(-1)
+                # sample random tokens from the vocabulary
+                random_tokens = torch.randint_like(
+                    input_ids, low=0, high=self.config.codebook_size, device=input_ids.device
+                )
+                input_ids = torch.where(mask, random_tokens, sampled_ids)
+
+        if return_intermediate:
+            return sampled_ids, intermediate
         return sampled_ids
 
 # Taken and slightly adapted from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/max_vit.py

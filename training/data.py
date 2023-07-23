@@ -20,7 +20,7 @@ import json
 import math
 import random
 import re
-from typing import List, Union
+from typing import List, Optional, Union
 
 import webdataset as wds
 from braceexpand import braceexpand
@@ -126,6 +126,7 @@ class ClassificationDataset:
         shuffle_buffer_size: int = 1000,
         pin_memory: bool = False,
         persistent_workers: bool = False,
+        **kwargs,
     ):
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
@@ -232,6 +233,38 @@ class ClassificationDataset:
         return self._eval_dataloader
 
 
+# taken from https://github.com/dome272/Paella/blob/main/src_distributed/utils.py#L20
+class WebdatasetFilter:
+    def __init__(self, min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9):
+        self.min_size = min_size
+        self.max_pwatermark = max_pwatermark
+        self.aesthetic_threshold = aesthetic_threshold
+
+    def __call__(self, x):
+        try:
+            if "json" in x:
+                x_json = json.loads(x["json"])
+                filter_size = (x_json.get("original_width", 0.0) or 0.0) >= self.min_size and x_json.get(
+                    "original_height", 0
+                ) >= self.min_size
+                filter_watermark = (x_json.get("pwatermark", 1.0) or 1.0) <= self.max_pwatermark
+                filter_watermark_coyo = (x_json.get("watermark_score", 1.0) or 1.0) <= self.max_pwatermark
+                filter_aesthetic_a = (x_json.get("aesthetic", 0.0) or 0.0) >= self.aesthetic_threshold
+                filter_aesthetic_b = (x_json.get("AESTHETIC_SCORE", 0.0) or 0.0) >= self.aesthetic_threshold
+                filter_aesthetic_coyo = (
+                    x_json.get("aesthetic_score_laion_v2", 0.0) or 0.0
+                ) >= self.aesthetic_threshold
+                return (
+                    filter_size
+                    and (filter_watermark or filter_watermark_coyo)
+                    and (filter_aesthetic_a or filter_aesthetic_b or filter_aesthetic_coyo)
+                )
+            else:
+                return False
+        except:
+            return False
+
+
 class Text2ImageDataset:
     def __init__(
         self,
@@ -249,6 +282,10 @@ class Text2ImageDataset:
         shuffle_buffer_size: int = 1000,
         pin_memory: bool = False,
         persistent_workers: bool = False,
+        is_pre_encoded: bool = False,
+        vae_checkpoint: Optional[str] = None,
+        text_encoder_checkpoint: Optional[str] = None,
+        use_filtered_dataset: bool = False,
     ):
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
@@ -269,16 +306,40 @@ class Text2ImageDataset:
             # flatten list using itertools
             eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
 
+        if not is_pre_encoded:
+            processing_pipeline = [
+                wds.decode("pil", handler=wds.ignore_and_continue),
+                wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
+                wds.map(filter_keys(set(["image", "input_ids"]))),
+                wds.map_dict(image=transform.train_transform, input_ids=tokenize),
+                wds.to_tuple("image", "input_ids"),
+            ]
+        else:
+            # lowercase and replace / with .
+            vae_checkpoint = vae_checkpoint.lower().replace("/", ".")
+            text_encoder_checkpoint = text_encoder_checkpoint.lower().replace("/", ".")
+            processing_pipeline = [
+                wds.decode(wds.handle_extension("pth", wds.autodecode.torch_loads), handler=wds.ignore_and_continue),
+                wds.rename(
+                    input_ids=f"{vae_checkpoint}.pth",
+                    encoder_hidden_states=f"{text_encoder_checkpoint}.pth",
+                    handler=wds.warn_and_continue,
+                ),
+                wds.map(filter_keys(set(["input_ids", "encoder_hidden_states"]))),
+                wds.to_tuple("input_ids", "encoder_hidden_states"),
+            ]
+
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
             tarfile_to_samples_nothrow,
+            wds.select(
+                WebdatasetFilter(min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9)
+                if use_filtered_dataset
+                else lambda x: True
+            ),
             wds.shuffle(shuffle_buffer_size),
-            wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
-            wds.map(filter_keys(set(["image", "input_ids"]))),
-            wds.map_dict(image=transform.train_transform, input_ids=tokenize),
-            wds.to_tuple("image", "input_ids"),
+            *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
 
@@ -306,11 +367,7 @@ class Text2ImageDataset:
             wds.SimpleShardList(eval_shards_path_or_url),
             wds.split_by_worker,
             wds.tarfile_to_samples(handler=wds.ignore_and_continue),
-            wds.decode("pil", handler=wds.ignore_and_continue),
-            wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
-            wds.map(filter_keys(set(["image", "input_ids"]))),
-            wds.map_dict(image=transform.train_transform, input_ids=tokenize),
-            wds.to_tuple("image", "input_ids"),
+            *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
         ]
         self._eval_dataset = wds.DataPipeline(*pipeline)

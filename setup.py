@@ -26,8 +26,11 @@ _deps = [
     "einops==0.6.0",
     "omegaconf==2.3.0",
     "webdataset>=0.2.39",
+    "datasets",
     "wandb",
     "sentencepiece",  # for T5 tokenizer
+    "plotly",
+    "pandas",
 ]
 
 _extras_dev_deps = [

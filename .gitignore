@@ -1,9 +1,16 @@
 generated
 real
 # Byte-compiled / optimized / DLL files
+generated
+real
 output.jpg
+<<<<<<< HEAD
 wandb
 imagenet-text2image
+=======
+segmented.jpg
+
+>>>>>>> 21b5600a636f39569160876cd6ea291220e8cbcb
 __pycache__/
 *.py[cod]
 *$py.class

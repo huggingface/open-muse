@@ -20,9 +20,10 @@ import os
 import time
 from functools import partial
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Union
 
 import numpy as np
+import plotly.express as px
 import torch
 import torch.nn.functional as F
 import wandb
@@ -34,15 +35,24 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
 from PIL import Image
 from torch.optim import AdamW  # why is shampoo not available in PT :(
-from transformers import CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
+from transformers import (
+    CLIPTextModel,
+    CLIPTextModelWithProjection,
+    CLIPTokenizer,
+    T5EncoderModel,
+    T5Tokenizer,
+)
 
 import muse
+import muse.training_utils
 from muse import (
     MOVQ,
+    EMAModel,
     MaskGitTransformer,
     MaskGiTUViT,
     MaskGiTMaxViT,
     MaskGitVQGAN,
+    PaellaVQModel,
     VQGANModel,
     get_mask_chedule,
 )
@@ -105,6 +115,8 @@ def get_vq_model_class(model_type):
         return MOVQ
     elif model_type == "maskgit_vqgan":
         return MaskGitVQGAN
+    elif model_type == "paella_vq":
+        return PaellaVQModel
     else:
         raise ValueError(f"model_type {model_type} not supported for VQGAN")
 
@@ -126,6 +138,48 @@ def soft_target_cross_entropy(logits, targets, soft_targets):
     num_active_elements = padding_mask.numel() - padding_mask.long().sum()
     loss = loss.sum() / num_active_elements
     return loss
+
+
+def get_loss_weight(t, mask, min_val=0.3):
+    return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
+
+
+def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule):
+    batch_size, seq_len = image_tokens.shape
+    # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
+    # Sample a random timestep for each image
+    timesteps = torch.rand(batch_size, device=image_tokens.device)
+    # Sample a random mask probability for each image using timestep and cosine schedule
+    mask_prob = mask_schedule(timesteps)
+    mask_prob = mask_prob.clip(config.training.min_masking_rate)
+    # creat a random mask for each image
+    num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
+    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+    mask = batch_randperm < num_token_masked.unsqueeze(-1)
+
+    # mask images and create input and labels
+    if config.training.get("noise_type", "mask"):
+        input_ids = torch.where(mask, mask_id, image_tokens)
+    elif config.training.get("noise_type", "random_replace"):
+        # sample random tokens from the vocabulary
+        random_tokens = torch.randint_like(
+            image_tokens, low=0, high=config.model.codebook_size, device=image_tokens.device
+        )
+        input_ids = torch.where(mask, random_tokens, image_tokens)
+    else:
+        raise ValueError(f"noise_type {config.training.noise_type} not supported")
+
+    if (
+        config.training.get("predict_all_tokens", False)
+        or config.training.get("noise_type", "mask") == "random_replace"
+    ):
+        labels = image_tokens
+        loss_weight = get_loss_weight(mask_prob, mask.long())
+    else:
+        labels = torch.where(mask, image_tokens, -100)
+        loss_weight = None
+
+    return input_ids, labels, loss_weight, mask_prob
 
 
 class AverageMeter(object):
@@ -228,29 +282,63 @@ def main():
     #########################
     logger.info("Loading models and optimizer")
 
-    if config.model.text_encoder.type == "clip":
-        text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
-    elif config.model.text_encoder.type == "t5":
-        text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
-        tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
-    else:
-        raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+    is_pre_encode = config.training.get("pre_encode", False)
+    if not is_pre_encode:
+        if config.model.text_encoder.type == "clip":
+            text_encoder_cls = (
+                CLIPTextModelWithProjection
+                if config.model.transformer.get("add_cond_embeds", False)
+                else CLIPTextModel
+            )
+            text_encoder = text_encoder_cls.from_pretrained(config.model.text_encoder.pretrained, projection_dim=768)
+            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+            if config.model.text_encoder.get("pad_token_id", None):
+                tokenizer.pad_token_id = config.model.text_encoder.pad_token_id
+        elif config.model.text_encoder.type == "t5":
+            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        else:
+            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
 
-    vq_class = get_vq_model_class(config.model.vq_model.type)
-    vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
-    if config.model.get("architecture", "transformer") == "transformer":
-        model_cls = MaskGitTransformer
-    elif config.model.get("architecture", "transformer") == "transformer":
-        model_cls = MaskGiTUViT
+        vq_class = get_vq_model_class(config.model.vq_model.type)
+        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+
+        # Freeze the text model and VQGAN
+        text_encoder.requires_grad_(False)
+        vq_model.requires_grad_(False)
     else:
-        model_cls = MaskGiTMaxViT
+        text_encoder = None
+        tokenizer = None
+        vq_model = None
+
+    model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
+    output_size = model.output_size
 
-    # Freeze the text model and VQGAN
-    text_encoder.requires_grad_(False)
-    vq_model.requires_grad_(False)
+    # Create EMA
+    if config.training.get("use_ema", False):
+        ema = EMAModel(
+            model.parameters(),
+            decay=config.training.ema_decay,
+            update_after_step=config.training.ema_update_after_step,
+            update_every=config.training.ema_update_every,
+            model_cls=model_cls,
+            model_config=model.config,
+        )
+
+        # Create custom saving and loading hooks so that `accelerator.save_state(...)` serializes in a nice format.
+        def load_model_hook(models, input_dir):
+            load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=model_cls)
+            ema.load_state_dict(load_model.state_dict())
+            ema.to(accelerator.device)
+            del load_model
+
+        def save_model_hook(models, weights, output_dir):
+            ema.save_pretrained(os.path.join(output_dir, "ema_model"))
+
+        accelerator.register_load_state_pre_hook(load_model_hook)
+        accelerator.register_save_state_pre_hook(save_model_hook)
 
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
@@ -308,6 +396,14 @@ def main():
         eps=optimizer_config.epsilon,
     )
 
+    # Cretae mask scheduler
+    if config.get("mask_schedule", None) is not None:
+        schedule = config.mask_schedule.schedule
+        args = config.mask_schedule.get("params", {})
+        mask_schedule = get_mask_chedule(schedule, **args)
+    else:
+        mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
+
     ##################################
     # DATLOADER and LR-SCHEDULER     #
     #################################
@@ -349,6 +445,10 @@ def main():
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
         pin_memory=dataset_config.pin_memory,
         persistent_workers=dataset_config.persistent_workers,
+        is_pre_encoded=is_pre_encode,
+        vae_checkpoint=config.model.vq_model.pretrained,
+        text_encoder_checkpoint=config.model.text_encoder.pretrained,
+        use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
@@ -373,8 +473,17 @@ def main():
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    text_encoder.to(device=accelerator.device, dtype=weight_dtype)
-    vq_model.to(device=accelerator.device)
+    if not is_pre_encode:
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        vq_model.to(device=accelerator.device)
+    if config.training.get("use_ema", False):
+        ema.to(accelerator.device)
+
+    if not is_pre_encode and config.model.transformer.get("use_empty_embeds_for_uncond", False):
+        empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
+        empty_embeds = text_encoder(empty_input).last_hidden_state
+    else:
+        empty_embeds = None
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -426,38 +535,40 @@ def main():
 
     @torch.no_grad()
     def prepare_inputs_and_labels(
-        pixel_values: torch.FloatTensor,
-        input_ids: torch.LongTensor,
+        pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
+        text_input_ids_or_embeds: Union[torch.LongTensor, torch.LongTensor],
         min_masking_rate: float = 0.0,
         is_train: bool = True,
     ):
-        if config.training.use_soft_code_target and is_train:
-            soft_targets, image_tokens = vq_model.get_soft_code(
-                pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
-            )
-        else:
-            image_tokens = vq_model.get_code(pixel_values)
+        if is_pre_encode:
+            image_tokens = pixel_values_or_image_ids
             soft_targets = None
+        else:
+            if config.training.use_soft_code_target and is_train:
+                soft_targets, image_tokens = vq_model.get_soft_code(
+                    pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+                )
+            else:
+                image_tokens = vq_model.get_code(pixel_values)
+                soft_targets = None
 
-        encoder_hidden_states = text_encoder(input_ids)[0]
+        if not is_pre_encode:
+            if config.model.transformer.get("add_cond_embeds", False):
+                outputs = text_encoder(text_input_ids_or_embeds, return_dict=True, output_hidden_states=True)
+                encoder_hidden_states = outputs.hidden_states[-2]
+                clip_embeds = outputs[0]
+            else:
+                encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
+                clip_embeds = None
+        else:
+            encoder_hidden_states = text_input_ids_or_embeds
+            clip_embeds = None
 
-        batch_size, seq_len = image_tokens.shape
-        # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
-        # Sample a random timestep for each image
-        timesteps = torch.rand(batch_size, device=image_tokens.device)
-        # Sample a random mask probability for each image using timestep and cosine schedule
-        mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
-        mask_prob = mask_schedule(timesteps)
-        mask_prob = mask_prob.clip(min_masking_rate)
-        # creat a random mask for each image
-        num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-        mask = batch_randperm < num_token_masked.unsqueeze(-1)
-        # mask images and create input and labels
-        input_ids = torch.where(mask, mask_id, image_tokens)
-        labels = torch.where(mask, image_tokens, -100)
-
-        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob
+        # create MLM mask and labels
+        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
+            image_tokens, mask_id, config, mask_schedule=mask_schedule
+        )
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -474,9 +585,15 @@ def main():
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
-            input_ids, encoder_hidden_states, labels, soft_targets, mask_prob = prepare_inputs_and_labels(
-                pixel_values, input_ids, config.training.min_masking_rate
-            )
+            (
+                input_ids,
+                encoder_hidden_states,
+                labels,
+                soft_targets,
+                mask_prob,
+                loss_weight,
+                clip_embeds,
+            ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -493,12 +610,15 @@ def main():
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
-                    _, loss = model(
+                    logits, loss = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
                         label_smoothing=config.training.label_smoothing,
                         cond_dropout_prob=config.training.cond_dropout_prob,
+                        cond_embeds=clip_embeds,
+                        loss_weight=loss_weight,
+                        empty_embeds=empty_embeds,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -528,6 +648,9 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
+                if config.training.get("use_ema", False):
+                    ema.step(model.parameters())
+
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
@@ -558,17 +681,84 @@ def main():
                     batch_time_m.reset()
                     data_time_m.reset()
 
-                # Evaluate model on main process
-                if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
-                    validate_model(model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels)
+                if (
+                    ("log_pixel_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_pixel_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_image_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_image_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_image_entropy(logits, input_ids, mask_id, accelerator, global_step + 1)
+
+                if (
+                    ("log_cross_entropy_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_cross_entropy_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_cross_entropy(
+                        logits,
+                        labels,
+                        input_ids,
+                        mask_id,
+                        output_size,
+                        config.training.label_smoothing,
+                        accelerator,
+                        global_step + 1,
+                    )
+
+                if (
+                    ("log_token_probability_distributions_every" in config.experiment)
+                    and ((global_step + 1) % config.experiment.log_token_probability_distributions_every == 0)
+                    and accelerator.is_main_process
+                ):
+                    log_token_probability_distributions(logits, input_ids, mask_id, accelerator, global_step + 1)
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
                     save_checkpoint(model, config, accelerator, global_step + 1)
 
+                # Evaluate model on main process
+                if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
+                    # Store the model parameters temporarily and load the EMA parameters to perform inference.
+                    if config.training.get("use_ema", False):
+                        ema.store(model.parameters())
+                        ema.copy_to(model.parameters())
+
+                    validate_model(
+                        model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels, empty_embeds
+                    )
+
+                    if config.training.get("use_ema", False):
+                        # Switch back to the original model parameters for training.
+                        ema.restore(model.parameters())
+
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
-                    generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step + 1)
+                    # Store the model parameters temporarily and load the EMA parameters to perform inference.
+                    if config.training.get("use_ema", False):
+                        ema.store(model.parameters())
+                        ema.copy_to(model.parameters())
+
+                    generate_images(
+                        model,
+                        vq_model,
+                        text_encoder,
+                        tokenizer,
+                        accelerator,
+                        config,
+                        global_step + 1,
+                        mask_schedule=mask_schedule,
+                        empty_embeds=empty_embeds,
+                    )
+
+                    if config.training.get("use_ema", False):
+                        # Switch back to the original model parameters for training.
+                        ema.restore(model.parameters())
 
                 global_step += 1
                 # TODO: Add generation
@@ -588,13 +778,15 @@ def main():
     # Save the final trained checkpoint
     if accelerator.is_main_process:
         model = accelerator.unwrap_model(model)
+        if config.training.get("use_ema", False):
+            ema.copy_to(model.parameters())
         model.save_pretrained(config.experiment.output_dir)
 
     accelerator.end_training()
 
 
 @torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels):
+def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, empty_embeds=None):
     logger.info("Evaluating...")
     model.eval()
     eval_loss = 0
@@ -603,8 +795,17 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _ = prepare_inputs_and_labels(pixel_values, input_ids)
-        _, loss = model(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states, labels=labels)
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds = prepare_inputs_and_labels(
+            pixel_values, input_ids
+        )
+        _, loss = model(
+            input_ids=input_ids,
+            encoder_hidden_states=encoder_hidden_states,
+            labels=labels,
+            cond_embeds=clip_embeds,
+            loss_weight=loss_weight,
+            empty_embeds=empty_embeds,
+        )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
@@ -615,7 +816,9 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 
 
 @torch.no_grad()
-def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, config, global_step):
+def generate_images(
+    model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule, empty_embeds=None
+):
     logger.info("Generating images...")
     model.eval()
     # fmt: off
@@ -629,6 +832,27 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
     else:
         validation_prompts = imagenet_class_names
 
+    if config.training.get("pre_encode", False):
+        if config.model.text_encoder.type == "clip":
+            text_encoder = CLIPTextModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = CLIPTokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        elif config.model.text_encoder.type == "t5":
+            text_encoder = T5EncoderModel.from_pretrained(config.model.text_encoder.pretrained)
+            tokenizer = T5Tokenizer.from_pretrained(config.model.text_encoder.pretrained)
+        else:
+            raise ValueError(f"Unknown text model type: {config.model.text_encoder.type}")
+
+        vq_class = get_vq_model_class(config.model.vq_model.type)
+        vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+
+        if accelerator.mixed_precision == "fp16":
+            weight_dtype = torch.float16
+        elif accelerator.mixed_precision == "bf16":
+            weight_dtype = torch.bfloat16
+
+        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        vq_model.to(accelerator.device)
+
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
@@ -636,22 +860,39 @@ def generate_images(model, vq_model, text_encoder, tokenizer, accelerator, confi
         truncation=True,
         max_length=config.dataset.preprocessing.max_seq_length,
     ).input_ids
-    encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
 
-    mask_schedule = get_mask_chedule(config.training.get("mask_schedule", "cosine"))
+    if config.model.transformer.get("add_cond_embeds", False):
+        outputs = text_encoder(input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
+        encoder_hidden_states = outputs.hidden_states[-2]
+        clip_embeds = outputs[0]
+    else:
+        encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
+        clip_embeds = None
+
+    if config.training.get("pre_encode", False):
+        del text_encoder
+
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         gen_token_ids = accelerator.unwrap_model(model).generate2(
             encoder_hidden_states=encoder_hidden_states,
+            cond_embeds=clip_embeds,
+            empty_embeds=empty_embeds,
             guidance_scale=config.training.guidance_scale,
+            temperature=config.training.get("generation_temperature", 1.0),
             timesteps=config.training.generation_timesteps,
             noise_schedule=mask_schedule,
+            noise_type=config.training.get("noise_type", "mask"),
+            predict_all_tokens=config.training.get("predict_all_tokens", False),
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
     images = vq_model.decode_code(gen_token_ids)
     model.train()
+
+    if config.training.get("pre_encode", False):
+        del vq_model
 
     # Convert to PIL images
     images = 2.0 * images - 1.0
@@ -692,6 +933,71 @@ def log_grad_norm(model, accelerator, global_step):
             grads = param.grad.detach().data
             grad_norm = (grads.norm(p=2) / grads.numel()).item()
             accelerator.log({"grad_norm/" + name: grad_norm}, step=global_step)
+
+
+@torch.no_grad()
+def log_pixel_entropy(logits, input_ids, mask_id, accelerator, global_step):
+    pixel_entropy_per_percent_masked_bucket = muse.training_utils.pixel_entropy_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    entropy_log = {}
+
+    for bucket, bucket_entropy in enumerate(pixel_entropy_per_percent_masked_bucket):
+        bucket_entropy = bucket_entropy.item()
+        if bucket_entropy != 0:
+            entropy_log[f"bucket {bucket}"] = bucket_entropy
+
+    accelerator.log({"pixel_entropy/stats": entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_image_entropy(logits, input_ids, mask_id, accelerator, global_step):
+    image_entropy_per_percent_masked_bucket = muse.training_utils.image_entropy_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    entropy_log = {}
+
+    for bucket, bucket_entropy in enumerate(image_entropy_per_percent_masked_bucket):
+        bucket_entropy = bucket_entropy.item()
+        if bucket_entropy != 0:
+            entropy_log[f"bucket {bucket}"] = bucket_entropy
+
+    accelerator.log({"image_entropy/stats": entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_cross_entropy(logits, labels, input_ids, mask_id, output_size, label_smoothing, accelerator, global_step):
+    cross_entropy_per_percent_masked_bucket = muse.training_utils.cross_entropy_per_percent_masked_bucket(
+        logits, labels, input_ids, mask_id, output_size, label_smoothing
+    )
+
+    cross_entropy_log = {}
+
+    for bucket, bucket_cross_entropy in enumerate(cross_entropy_per_percent_masked_bucket):
+        bucket_cross_entropy = bucket_cross_entropy.item()
+        if bucket_cross_entropy != 0:
+            cross_entropy_log[f"bucket {bucket}"] = bucket_cross_entropy
+
+    accelerator.log({"cross entropy/strats": cross_entropy_log}, step=global_step)
+
+
+@torch.no_grad()
+def log_token_probability_distributions(logits, input_ids, mask_id, accelerator, global_step):
+    token_probability_distributions = muse.training_utils.token_probability_distributions_per_percent_masked_bucket(
+        logits, input_ids, mask_id
+    )
+
+    token_probability_distributions_fig = px.histogram(
+        token_probability_distributions,
+        x="masked_pixel_prob",
+        color="bucket",
+        color_discrete_sequence=px.colors.qualitative.Plotly,
+        marginal="rug",
+    )
+
+    accelerator.log({"token_probability_distributions/stats": token_probability_distributions_fig}, step=global_step)
 
 
 if __name__ == "__main__":

@@ -1,64 +1,11 @@
-# coding=utf-8
-# Copyright 2023 The HuggingFace Inc. team.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import copy
-import os
-import random
 from typing import Any, Dict, Iterable, Optional, Union
 
-import numpy as np
-import pandas as pd
 import torch
-import torch.nn.functional as F
-
-
-def enable_full_determinism(seed: int):
-    """
-    Helper function for reproducible behavior during distributed training. See
-    - https://pytorch.org/docs/stable/notes/randomness.html for pytorch
-    """
-    # set seed first
-    set_seed(seed)
-
-    #  Enable PyTorch deterministic mode. This potentially requires either the environment
-    #  variable 'CUDA_LAUNCH_BLOCKING' or 'CUBLAS_WORKSPACE_CONFIG' to be set,
-    # depending on the CUDA version, so we set them both here
-    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
-    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":16:8"
-    torch.use_deterministic_algorithms(True)
-
-    # Enable CUDNN deterministic mode
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-def set_seed(seed: int):
-    """
-    Args:
-    Helper function for reproducible behavior to set the seed in `random`, `numpy`, `torch`.
-        seed (`int`): The seed to set.
-    """
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    # ^^ safe to call this function even if cuda is not available
 
 
 # Adapted from torch-ema https://github.com/fadel/pytorch_ema/blob/master/torch_ema/ema.py#L14
-class EMA:
+class EMAModel:
     """
     Exponential Moving Average of models weights
     """
@@ -69,12 +16,12 @@ class EMA:
         decay: float = 0.9999,
         min_decay: float = 0.0,
         update_after_step: int = 0,
+        update_every: int = 1,
         use_ema_warmup: bool = False,
         inv_gamma: Union[float, int] = 1.0,
         power: Union[float, int] = 2 / 3,
         model_cls: Optional[Any] = None,
         model_config: Dict[str, Any] = None,
-        **kwargs,
     ):
         """
         Args:
@@ -82,6 +29,7 @@ class EMA:
             decay (float): The decay factor for the exponential moving average.
             min_decay (float): The minimum decay factor for the exponential moving average.
             update_after_step (int): The number of steps to wait before starting to update the EMA weights.
+            update_every (int): The number of steps between each EMA update.
             use_ema_warmup (bool): Whether to use EMA warmup.
             inv_gamma (float):
                 Inverse multiplicative factor of EMA warmup. Default: 1. Only used if `use_ema_warmup` is True.
@@ -98,12 +46,12 @@ class EMA:
 
         parameters = list(parameters)
         self.shadow_params = [p.clone().detach() for p in parameters]
-
         self.temp_stored_params = None
 
         self.decay = decay
         self.min_decay = min_decay
         self.update_after_step = update_after_step
+        self.update_every = update_every
         self.use_ema_warmup = use_ema_warmup
         self.inv_gamma = inv_gamma
         self.power = power
@@ -114,7 +62,7 @@ class EMA:
         self.model_config = model_config
 
     @classmethod
-    def from_pretrained(cls, path, model_cls) -> "EMA":
+    def from_pretrained(cls, path, model_cls) -> "EMAModel":
         _, ema_kwargs = model_cls.load_config(path, return_unused_kwargs=True)
         model = model_cls.from_pretrained(path)
 
@@ -163,6 +111,9 @@ class EMA:
 
         self.optimization_step += 1
 
+        if (self.optimization_step - 1) % self.update_every != 0:
+            return
+
         # Compute the decay factor for the exponential moving average.
         decay = self.get_decay(self.optimization_step)
         self.cur_decay_value = decay
@@ -173,8 +124,6 @@ class EMA:
                 s_param.sub_(one_minus_decay * (s_param - param))
             else:
                 s_param.copy_(param)
-
-        torch.cuda.empty_cache()
 
     def copy_to(self, parameters: Iterable[torch.nn.Parameter]) -> None:
         """
@@ -293,163 +242,3 @@ class EMA:
                 raise ValueError("shadow_params must be a list")
             if not all(isinstance(p, torch.Tensor) for p in self.shadow_params):
                 raise ValueError("shadow_params must all be Tensors")
-
-
-# calculates entropy over each pixel distribution
-def pixel_entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
-    # only calculated entropy over image tokens that were masked in the original image
-    masked_tokens = input_ids == mask_id
-    num_masked_pixels = masked_tokens.sum(-1)
-
-    probs = F.softmax(logits, dim=-1)
-    log_probs = F.log_softmax(logits, dim=-1)
-
-    entropy_per_pixel = -((probs * log_probs).sum(-1))
-
-    # the predictions for non-masked aren't used, so set their entropies to zero
-    entropy_per_pixel[~masked_tokens] = 0
-
-    entropy_per_image_numerator = entropy_per_pixel.sum(-1)
-    entropy_per_image = entropy_per_image_numerator / num_masked_pixels
-
-    total_buckets = 10
-    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
-
-    entropy_by_masked_bucket = average_by_buckets(entropy_per_image, masked_buckets, total_buckets)
-
-    return entropy_by_masked_bucket
-
-
-# calculates entropy over the averaged distribution of pixels for the whole image
-def image_entropy_per_percent_masked_bucket(logits, input_ids, mask_id):
-    # only calculated entropy over image tokens that were masked in the original image
-    masked_tokens = input_ids == mask_id
-    num_masked_pixels = masked_tokens.sum(-1, keepdim=True)
-
-    pixel_probs = F.softmax(logits, dim=-1)
-    pixel_probs[~masked_tokens] = 0
-    image_probs_numerator = pixel_probs.sum(-2)
-    image_probs = image_probs_numerator / num_masked_pixels
-
-    image_log_probs = image_probs.log()
-
-    entropy_per_image = -((image_probs * image_log_probs).sum(-1))
-
-    total_buckets = 10
-    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
-
-    entropy_by_masked_bucket = average_by_buckets(entropy_per_image, masked_buckets, total_buckets)
-
-    return entropy_by_masked_bucket
-
-
-def cross_entropy_per_percent_masked_bucket(logits, labels, input_ids, mask_id, output_size, label_smoothing):
-    cross_entropy_per_image = F.cross_entropy(
-        logits.view(-1, output_size),
-        labels.view(-1),
-        ignore_index=-100,
-        label_smoothing=label_smoothing,
-        reduction="none",
-    )
-
-    total_buckets = 10
-    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
-
-    cross_entropy_by_percent_masked_bucket = average_by_buckets(cross_entropy_per_image, masked_buckets, total_buckets)
-
-    return cross_entropy_by_percent_masked_bucket
-
-
-def token_probability_distributions_per_percent_masked_bucket(logits, input_ids, mask_id):
-    probs = F.softmax(logits, dim=-1)
-
-    total_buckets = 10
-    masked_buckets = input_ids_to_masked_buckets(input_ids, mask_id, total_buckets)
-
-    data = []
-
-    for bucket_idx in range(total_buckets):
-        indices_for_bucket = masked_buckets[masked_buckets == bucket_idx]
-
-        # It's ok if none were noised in the range of this bucket. This
-        # function will be called for a later training step where it's likely
-        # there will be an element noised in the range.
-        if indices_for_bucket.shape[0] == 0:
-            continue
-
-        index_for_bucket = indices_for_bucket[0]
-
-        image_probs = probs[index_for_bucket]
-
-        # find the index of a masked pixel for the image
-        input_ids_for_image = input_ids[index_for_bucket]
-        masked_pixels_probs = image_probs[input_ids_for_image == mask_id]
-
-        masked_pixel_probs = masked_pixels_probs[0]
-
-        masked_pixel_probs = masked_pixel_probs.cpu().numpy()
-
-        for masked_pixel_prob in masked_pixel_probs:
-            data.append({"bucket": bucket_idx, "masked_pixel_prob": masked_pixel_prob})
-
-    df = pd.DataFrame(data)
-
-    return df
-
-
-def average_by_buckets(values, masked_buckets, total_buckets):
-    unique_buckets, bucket_counts = masked_buckets.unique(dim=0, return_counts=True)
-
-    numerator = torch.zeros(total_buckets, device=values.device)
-
-    numerator.scatter_add_(0, masked_buckets, values)
-
-    # default value is one because the buckets for which there aren't
-    # any values will have a numerator of zero. So we just need to not divide
-    # by zero.
-    denominator = torch.ones(total_buckets, device=values.device, dtype=torch.long)
-    denominator[unique_buckets] = bucket_counts
-
-    averaged_by_buckets = numerator / denominator
-
-    return averaged_by_buckets
-
-
-def input_ids_to_masked_buckets(input_ids, mask_id, total_buckets=10):
-    assert total_buckets == 10
-
-    masked_percent = (input_ids == mask_id).sum(-1) / input_ids.shape[-1]
-
-    # we do not formally use timesteps to noise images. Instead, we mask a percent
-    # of the pixels. We don't want to log entropy for every mask percent between 0 and 1,
-    # and we also want to track how the entropy evolves over time w/in a range of mask
-    # percents that should have similar entropy. So we bucket the masked percents into a
-    # fixed number of buckets
-
-    # we could generalize this later if needed but for now, let's just assume a fixed
-    # number of 10 buckets.
-
-    # How this maps to a bucket index:
-    # (mask) * bucket_index +
-    # (mask_1) * bucket_index_1
-    #
-    # -> Where the mask is true will be set to the expected bucket index,
-    # where the mask is false will be set to 0.
-    #
-    # Given the probabilities are between 0 and 1, each masked_percent will get mapped
-    # to a timestep by one and only one of the masks.
-
-    masked_buckets = (
-        ((0 < masked_percent) & (masked_percent <= 0.1)) * 0
-        + ((0.1 < masked_percent) & (masked_percent <= 0.2)) * 1
-        + ((0.2 < masked_percent) & (masked_percent <= 0.3)) * 2
-        + ((0.3 < masked_percent) & (masked_percent <= 0.4)) * 3
-        + ((0.4 < masked_percent) & (masked_percent <= 0.5)) * 4
-        + ((0.5 < masked_percent) & (masked_percent <= 0.6)) * 5
-        + ((0.6 < masked_percent) & (masked_percent <= 0.7)) * 6
-        + ((0.7 < masked_percent) & (masked_percent <= 0.8)) * 7
-        + ((0.8 < masked_percent) & (masked_percent <= 0.9)) * 8
-        + ((0.9 < masked_percent) & (masked_percent <= 1.0)) * 9
-    )
-
-    return masked_buckets
