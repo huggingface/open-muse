@@ -571,13 +571,9 @@ class Attention(nn.Module):
         value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-<<<<<<< HEAD
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, attn_bias=bias)
-=======
             attn_output = xops.memory_efficient_attention(
-                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0
+                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0, attn_bias=bias
             )
->>>>>>> 21b5600a636f39569160876cd6ea291220e8cbcb
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
             attention_mask = None
