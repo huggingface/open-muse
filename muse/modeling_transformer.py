@@ -675,6 +675,7 @@ class TransformerLayer(nn.Module):
         add_cond_embeds=False,
         cond_embed_dim=None,
         use_bias=False,
+        **kwargs
     ):
         super().__init__()
 
@@ -759,27 +760,31 @@ class TransformerLayer(nn.Module):
         hidden_states = residual + hidden_states
         return hidden_states
 
-class MaxVitTransformerLayer(nn.Module):
+class MaxVitTransformerLayer(TransformerLayer):
     def __init__(self,
         hidden_size,
         intermediate_size,
         num_attention_heads,
-        encoder_hidden_size=1024,
-        add_cross_attention=False,
         hidden_dropout=0.0,
         attention_dropout=0.0,
         norm_type="layernorm",
+        use_bias=False,
         window_size=7,
         mbconv_expansion_rate=4,
         mbconv_shrinkage_rate=0.25,
-        is_first=False,
-        use_bias=False,
+        **kwargs
     ):
-        super().__init__()
-        if add_cross_attention:
-            raise NotImplementedError("Currently defaults to just doing cross attention without self attention")
+        super().__init__(
+            hidden_size,
+            intermediate_size,
+            num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            norm_type=norm_type,
+            use_bias=use_bias,
+            **kwargs
+        )
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-
         self.mb_conv = MBConv(
             hidden_size,
             hidden_size,
@@ -789,34 +794,37 @@ class MaxVitTransformerLayer(nn.Module):
         )
         self.window_size = window_size
         self.norm0 = norm_cls(hidden_size)
-        self.attn0 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, encoder_hidden_size=encoder_hidden_size, window_size = window_size)
+        self.attn0 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, window_size = window_size)
         self.norm1 = norm_cls(hidden_size)
         # In lucidrian's code the implementation of feedforward is different
         self.ff0 = FeedForward(hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_dropout=hidden_dropout)
         self.norm2 = norm_cls(hidden_size)
-        self.attn1 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, encoder_hidden_size=encoder_hidden_size, window_size = window_size)
+        self.attn1 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, window_size = window_size)
         self.norm3 = norm_cls(hidden_size)
         self.ff1 = FeedForward(hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_dropout=hidden_dropout)
-    def forward(self, hidden, encoder_hidden_states=None, encoder_attention_mask=None):
+    def attention(self, hidden_states):
         # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives 
         # our local attention once positional embeddings are added to it
         # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
         # This helps us make a "global" grid of window_size x window_size
-        hidden = self.mb_conv(hidden)
+        residual = hidden_states
+        hidden_states = self.mb_conv(hidden_states)
         # block like attention(local attention)
-        hidden = rearrange(hidden, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
-        hidden = self.norm0(hidden)
-        hidden = self.attn0(hidden, encoder_hidden_states, encoder_attention_mask)
-        hidden = self.norm1(hidden)
-        hidden = self.ff0(hidden)
-        hidden = rearrange(hidden, 'b x y w1 w2 d -> b d (x w1) (y w2)')
+        hidden_states = rearrange(hidden_states, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden_states = self.norm0(hidden_states)
+        hidden_states = self.attn0(hidden_states)
+        hidden_states = self.norm1(hidden_states)
+        hidden_states = self.ff0(hidden_states)
+        hidden_states = rearrange(hidden_states, 'b x y w1 w2 d -> b d (x w1) (y w2)')
         # grid-like attention(global attention)
-        hidden = rearrange(hidden, 'b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
-        hidden = self.norm2(hidden)
-        hidden = self.attn1(hidden, encoder_hidden_states, encoder_attention_mask)
-        hidden = self.norm3(hidden)
-        hidden = self.ff1(hidden)
-        return rearrange(hidden, 'b x y w1 w2 d -> b d (w1 x) (w2 y)')
+        hidden_states = rearrange(hidden_states, 'b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.attn1(hidden_states)
+        hidden_states = self.norm3(hidden_states)
+        hidden_states = self.ff1(hidden_states)
+        hidden_states =  rearrange(hidden_states, 'b x y w1 w2 d -> b d (w1 x) (w2 y)')
+        hidden_states =  hidden_states + residual
+
 
 class Embed(nn.Module):
     def __init__(
