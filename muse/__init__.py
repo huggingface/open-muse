@@ -20,6 +20,6 @@ from .modeling_maskgit_vqgan import MaskGitVQGAN
 from .modeling_movq import MOVQ
 from .modeling_paella_vq import PaellaVQModel
 from .modeling_taming_vqgan import VQGANModel
-from .modeling_transformer import MaskGitTransformer, MaskGiTUViT, MaskGiTMaxViT
+from .modeling_transformer import MaskGitTransformer, MaskGiTUViT
 from .pipeline_muse import PipelineMuse, PipelineMuseInpainting
 from .sampling import get_mask_chedule
