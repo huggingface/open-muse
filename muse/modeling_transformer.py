@@ -1381,7 +1381,6 @@ def MBConv(
     shrinkage_rate = 0.25,
     dropout = 0.,
 ):
-    print(f"dimin: {dim_in} dim_out: {dim_out}")
     hidden_dim = int(expansion_rate * dim_out)
     stride = 2 if downsample else 1
 
@@ -1411,10 +1410,33 @@ class MaxVitAttention(Attention):
         pos = torch.arange(window_size)
         grid = torch.stack(torch.meshgrid(pos, pos, indexing = 'ij'))
         grid = rearrange(grid, 'c i j -> (i j) c')
+        """
+        grid is
+        tensor([[ 0,  0],
+        [ 0,  1],
+        [ 0,  2],
+        ...,
+        [window_size-1, window_size-1]])
+        with shape [window_size**2, 2]
+        This is essentially 2d coordinates for window_size x window_size grid
+        """
         rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
         rel_pos += window_size - 1
+        """
+        rel_pos has shape [window_size**2, window_wize**2, 2]
+        here rel_pos[i] = tensor([[24+(i // window_size), 24+(i % window_size)],
+        [24+(i // window_size), 23+(i % window_size)],
+        [24+(i // window_size), 22+(i % window_size)],
+        ...,
+        [ (i // window_size),  2+(i % window_size)],
+        [ (i // window_size),  1+(i % window_size)],
+        [ (i // window_size),  (i % window_size)]])
+        """
         rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
-
+        """
+        rel_pos_indices has shape (625, 625)
+        rel_pos_indices[i] = [i, i+1, i+2...i+window_size-1, i+2*window_size-1, i+2*window_size....]
+        """
         self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
     def attention(self, query, key, value, attention_mask=None):
         batch, seq_len = query.shape[:2]
@@ -1453,8 +1475,6 @@ class MaxVitBlock(nn.Module):
     def __init__(self, stage_dim_in, layer_dim, norm_cls=LayerNorm, window_size=7, mbconv_expansion_rate=4, mbconv_shrinkage_rate=0.25, is_first=False, dropout=0.0,\
                 num_heads=3):
         super().__init__()
-        print('maxvit block')
-        print(stage_dim_in, layer_dim)
         self.mb_conv = MBConv(
             stage_dim_in,
             layer_dim,
