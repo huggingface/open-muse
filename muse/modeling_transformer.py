@@ -314,7 +314,7 @@ class Attention(nn.Module):
         self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
         self.xformers_attention_op = attention_op
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, bias=None):
         if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
             raise ValueError("Memory efficient attention does not yet support encoder attention mask")
 
@@ -331,19 +331,19 @@ class Attention(nn.Module):
         value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op)
+            attn_output = xops.memory_efficient_attention(query, key, value, op=self.xformers_attention_op, attn_bias=bias)
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
             attention_mask = None
             if encoder_attention_mask is not None:
                 src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
                 attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
-            attn_output = self.attention(query, key, value, attention_mask)
+            attn_output = self.attention(query, key, value, attention_mask, bias)
 
         attn_output = self.out(attn_output)
         return attn_output
 
-    def attention(self, query, key, value, attention_mask=None):
+    def attention(self, query, key, value, attention_mask=None, bias=None):
         batch, seq_len = query.shape[:2]
         kv_seq_len = key.shape[1]
         query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
@@ -355,6 +355,8 @@ class Attention(nn.Module):
             alpha=1 / self.scale_attn,
         )
         attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
+        if bias is not None:
+            attn_weights += bias
         # Apply the attention mask
         if attention_mask is not None:
             attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
@@ -1438,34 +1440,14 @@ class MaxVitAttention(Attention):
         rel_pos_indices[i] = [i, i+1, i+2...i+window_size-1, i+2*window_size-1, i+2*window_size....]
         """
         self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
-    def attention(self, query, key, value, attention_mask=None):
-        batch, seq_len = query.shape[:2]
-        kv_seq_len = key.shape[1]
-        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
-
-        attn_weights = torch.baddbmm(
-            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
-            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
-            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
-            alpha=1 / self.scale_attn,
-        )
-        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
-        bias = self.rel_pos_bias(self.rel_pos_indices)
-        attn_weights = attn_weights + rearrange(bias, 'i j h -> h i j')
-        # Apply the attention mask
-        if attention_mask is not None:
-            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        # re-assemble all head outputs side by side
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
-        return attn_output
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         batch, height, width, window_height, window_width, _ = hidden_states.shape
         # flatten
+        # Here, w1 and w2 are both window size so x will have size (b x y), window_size**2, d
         x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
-        out = super().forward(x, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask)
+        bias = self.rel_pos_bias(self.rel_pos_indices)
+        bias = rearrange(bias, 'i j h -> h i j')
+        out = super().forward(x, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
         out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
 
         # combine heads out
