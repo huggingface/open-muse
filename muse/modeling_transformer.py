@@ -1992,7 +1992,9 @@ class MaxVitAttention(Attention):
         # Here, w1 and w2 are both window size so x will have size (b x y), window_size**2, d
         x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
         bias = self.rel_pos_bias(self.rel_pos_indices)
+        # shape is [window_size**2, window_size**2, self.num_heads]
         bias = rearrange(bias, 'i j h -> h i j')
+        # shape is [self.num_heads, window_size**2, window_size**2]
         out = super().forward(x, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
         out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
 
@@ -2123,8 +2125,6 @@ class MaskGiTMaxViT(ModelMixin, ConfigMixin):
         )
 
         self.layers = nn.ModuleList([])
-        print(f"dim_conv_stem: {dim_conv_stem}")
-        print(block_out_channels)
         # iterate through stages
 
         for i in range(len(block_out_channels)):
