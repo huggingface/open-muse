@@ -782,21 +782,21 @@ class MaxVitTransformerLayer(nn.Module):
 
         self.mb_conv = MBConv(
             hidden_size,
-            intermediate_size,
-            downsample = is_first,
+            hidden_size,
             expansion_rate = mbconv_expansion_rate,
-            shrinkage_rate = mbconv_shrinkage_rate
+            shrinkage_rate = mbconv_shrinkage_rate,
+            dropout=hidden_dropout
         )
         self.window_size = window_size
-        self.norm0 = norm_cls(intermediate_size)
-        self.attn0 = MaxVitAttention(hidden_size = intermediate_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, encoder_hidden_size=encoder_hidden_size, window_size = window_size)
-        self.norm1 = norm_cls(intermediate_size)
+        self.norm0 = norm_cls(hidden_size)
+        self.attn0 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, encoder_hidden_size=encoder_hidden_size, window_size = window_size)
+        self.norm1 = norm_cls(hidden_size)
         # In lucidrian's code the implementation of feedforward is different
-        self.ff0 = FeedForward(hidden_size=intermediate_size, intermediate_size=4*intermediate_size, hidden_dropout=hidden_dropout)
-        self.norm2 = norm_cls(intermediate_size)
-        self.attn1 = MaxVitAttention(hidden_size = intermediate_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, encoder_hidden_size=encoder_hidden_size, window_size = window_size)
-        self.norm3 = norm_cls(intermediate_size)
-        self.ff1 = FeedForward(hidden_size=intermediate_size, intermediate_size=4*intermediate_size, hidden_dropout=hidden_dropout)
+        self.ff0 = FeedForward(hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_dropout=hidden_dropout)
+        self.norm2 = norm_cls(hidden_size)
+        self.attn1 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, encoder_hidden_size=encoder_hidden_size, window_size = window_size)
+        self.norm3 = norm_cls(hidden_size)
+        self.ff1 = FeedForward(hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_dropout=hidden_dropout)
     def forward(self, hidden, encoder_hidden_states=None, encoder_attention_mask=None):
         # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives 
         # our local attention once positional embeddings are added to it
@@ -1989,8 +1989,7 @@ class MBConv(nn.Module):
         self,
         dim_in,
         dim_out,
-        *,
-        downsample,
+        downsample=False,
         expansion_rate = 4,
         shrinkage_rate = 0.25,
         dropout = 0.,
