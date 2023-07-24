@@ -1091,6 +1091,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         cond_dropout_prob=0.0,
+        **kwargs,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
