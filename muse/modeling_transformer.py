@@ -622,14 +622,17 @@ class FeedForward(nn.Module):
         add_cond_embeds=False,
         cond_embed_dim=None,
         use_bias=False,
+        ffn_type="glu", #glu or vanilla
     ):
         super().__init__()
         self.use_normformer = use_normformer
+        self.ffn_type = ffn_type
         self.pre_mlp_layer_norm = LayerNorm(
             hidden_size, eps=layer_norm_eps, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
         )
         self.wi_0 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
-        self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
+        if ffn_type == "glu":
+            self.wi_1 = nn.Linear(hidden_size, intermediate_size, bias=use_bias)
         if use_normformer:
             norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
             self.mid_mlp_layer_norm = norm_cls(
@@ -647,8 +650,11 @@ class FeedForward(nn.Module):
         if cond_embeds is not None:
             hidden_states = self.adaLN_modulation(hidden_states, cond_embeds)
         hidden_gelu = F.gelu(self.wi_0(hidden_states))
-        hidden_linear = self.wi_1(hidden_states)
-        hidden_states = hidden_gelu * hidden_linear
+        if self.ffn_type == "glu":
+            hidden_linear = self.wi_1(hidden_states)
+            hidden_states = hidden_gelu * hidden_linear
+        else:
+            hidden_states = hidden_gelu
         if self.use_normformer:
             hidden_states = self.mid_mlp_layer_norm(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -673,6 +679,7 @@ class TransformerLayer(nn.Module):
         use_normformer=True,
         add_cond_embeds=False,
         cond_embed_dim=None,
+        ffn_type="glu",
         use_bias=False,
     ):
         super().__init__()
@@ -702,6 +709,7 @@ class TransformerLayer(nn.Module):
             add_cond_embeds,
             cond_embed_dim,
             use_bias,
+            ffn_type,
         )
 
         if add_cross_attention:
@@ -1350,6 +1358,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_empty_embeds_for_uncond=False,
         learn_uncond_embeds=False,
         use_vannilla_resblock=False,
+        ffn_type="glu",
         **kwargs,
     ):
         super().__init__()
@@ -1457,6 +1466,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     use_normformer=use_normformer,
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
+                    ffn_type=ffn_type,
                     use_bias=use_bias,
                 )
                 for _ in range(self.num_hidden_layers)
