@@ -622,7 +622,7 @@ class FeedForward(nn.Module):
         add_cond_embeds=False,
         cond_embed_dim=None,
         use_bias=False,
-        ffn_type="glu", #glu or vanilla
+        ffn_type="glu",  # glu or vanilla
     ):
         super().__init__()
         self.use_normformer = use_normformer
@@ -1251,24 +1251,26 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             class_ids += self.config.codebook_size
 
         # initialize with all image tokens masked
-        if input_ids is not None:
+        if input_ids is None:
             input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+
+        # classifier free guidance
+        if encoder_hidden_states is not None and guidance_scale > 0:
+            if negative_embeds is None:
+                uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+            else:
+                uncond_encoder_states = negative_embeds
+            condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+            model_conds = {"encoder_hidden_states": condition}
 
         for step in range(timesteps):
             # prepend class token to input_ids
             if class_ids is not None:
                 input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
 
-            # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                if negative_embeds is None:
-                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
-                else:
-                    uncond_encoder_states = negative_embeds
-
                 model_input = torch.cat([input_ids] * 2)
-                condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
-                cond_logits, uncond_logits = self(model_input, encoder_hidden_states=condition).chunk(2)
+                cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scale * (cond_logits - uncond_logits)
@@ -1282,10 +1284,9 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 logits = logits[:, 1:]
 
             # Samples the ids using categorical sampling: [batch_size, seq_length].
-            # sampled_ids = torch.multinomial(logits.softmax(dim=-1), 1)
-            sampled_ids = torch.stack(
-                [torch.multinomial(l.softmax(dim=-1), 1, generator=generator).squeeze(1) for l in logits]
-            )
+            probs = logits.softmax(dim=-1)
+            sampled = probs.reshape(-1, logits.size(-1))
+            sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
 
             # Just updates the masked tokens.
             unknown_map = input_ids == mask_token_id
@@ -1295,7 +1296,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             ratio = 1.0 * (step + 1) / timesteps
             mask_ratio = noise_schedule(torch.tensor(ratio))
             # Computes the probabilities of each selected tokens.
-            probs = logits.softmax(dim=-1)
             selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
             selected_probs = selected_probs.squeeze(-1)
 
