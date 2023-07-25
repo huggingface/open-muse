@@ -514,7 +514,8 @@ def main():
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
-            path = os.path.join(config.experiment.output_dir, path)
+            if path is not None:
+                path = os.path.join(config.experiment.output_dir, path)
 
         if path is None:
             accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
