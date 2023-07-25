@@ -266,7 +266,6 @@ class AttentionBlock2D(nn.Module):
         # cross attention
         residual = hidden_states
         hidden_states = self.crossattn_layer_norm(hidden_states)
-        print(hidden_states.shape, encoder_hidden_states.shape)
         hidden_states = self.crossattention(hidden_states, encoder_hidden_states, encoder_attention_mask)
         hidden_states = hidden_states + residual
 
