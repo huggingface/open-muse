@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import random
 import time
 from functools import partial
 from pathlib import Path
@@ -143,14 +144,19 @@ def get_loss_weight(t, mask, min_val=0.3):
     return 1 - (1 - mask) * ((1 - t) * (1 - min_val))[:, None]
 
 
-def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule):
+def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, is_train=True):
     batch_size, seq_len = image_tokens.shape
-    # TODO(Patrick) - I don't think that's how the timesteps are sampled in maskgit or MUSE
-    # Sample a random timestep for each image
-    timesteps = torch.rand(batch_size, device=image_tokens.device)
-    # Sample a random mask probability for each image using timestep and cosine schedule
-    mask_prob = mask_schedule(timesteps)
-    mask_prob = mask_prob.clip(config.training.min_masking_rate)
+
+    if not is_train and config.training.get("eval_mask_ratios", None):
+        mask_prob = random.choices(config.training.eval_mask_ratios, k=batch_size)
+        mask_prob = torch.tensor(mask_prob, device=image_tokens.device)
+    else:
+        # Sample a random timestep for each image
+        timesteps = torch.rand(batch_size, device=image_tokens.device)
+        # Sample a random mask probability for each image using timestep and cosine schedule
+        mask_prob = mask_schedule(timesteps)
+        mask_prob = mask_prob.clip(config.training.min_masking_rate)
+
     # creat a random mask for each image
     num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
     batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
@@ -566,7 +572,11 @@ def main():
 
         # create MLM mask and labels
         input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
-            image_tokens, mask_id, config, mask_schedule=mask_schedule
+            image_tokens,
+            mask_id,
+            config,
+            mask_schedule=mask_schedule,
+            is_train=is_train,
         )
         return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds
 
@@ -796,7 +806,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
         input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds = prepare_inputs_and_labels(
-            pixel_values, input_ids
+            pixel_values, input_ids, is_train=False
         )
         _, loss = model(
             input_ids=input_ids,
