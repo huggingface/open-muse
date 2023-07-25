@@ -1498,6 +1498,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_num_heads = [None] * len(block_out_channels)
         elif isinstance(block_num_heads, int):
             block_num_heads = [block_num_heads] * len(block_out_channels)
+        
+        self.register_to_config(block_has_attention=tuple(block_has_attention))
+        self.register_to_config(block_num_heads=tuple(block_num_heads))
 
         self.register_to_config(block_has_attention=tuple(block_has_attention))
         self.register_to_config(block_num_heads=tuple(block_num_heads))
