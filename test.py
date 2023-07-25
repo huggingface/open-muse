@@ -61,18 +61,29 @@ from muse import MaskGitTransformer, MaskGiTUViT, VQGANModel
 # out = vq(image)[0]
 # assert out.shape == (1, 3, 32, 32)
 
+num_vq_tokens = 1024
+codebook_size = 8192
+encoder_hidden_size = 768
+
 model = MaskGiTUViT(
-    vocab_size=8192,
+    vocab_size=codebook_size+1,
     hidden_size=768,
     in_channels=384,
     block_out_channels=(384, 512),
-    num_res_blocks=2,
+    encoder_hidden_size=encoder_hidden_size,
+    add_cross_attention=True,
+    num_res_blocks=1,
+    block_has_attention=(False, True),
+    block_num_heads=8,
     num_hidden_layers=1,
     use_encoder_layernorm=False,
-    codebook_size=8192,
-    num_vq_tokens=256,
-    use_vannilla_resblock=True,
+    codebook_size=codebook_size,
+    num_vq_tokens=num_vq_tokens,
+    use_vannilla_resblock=False,
+    use_codebook_size_for_output=True,
 ).eval()
 
-input_ids = torch.randint(0, 8192, (1, 1024))
-output = model(input_ids)
+input_ids = torch.randint(0, codebook_size, (1, num_vq_tokens))
+enc = torch.randn(1, 4, encoder_hidden_size)
+output = model(input_ids, encoder_hidden_states=enc)
+assert output.shape == (1, num_vq_tokens, codebook_size)

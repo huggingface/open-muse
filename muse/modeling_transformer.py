@@ -128,8 +128,154 @@ class AdaLNModulation(nn.Module):
         return hidden_states * (1 + scale) + shift
 
 
+class Attention(nn.Module):
+    def __init__(self, hidden_size, num_heads, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
+        super().__init__()
+
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        self.head_dim = hidden_size // num_heads
+        self.attention_dropout = attention_dropout
+        if self.head_dim * self.num_heads != self.hidden_size:
+            raise ValueError(
+                f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.hidden_size} and"
+                f" `num_heads`: {self.num_heads})."
+            )
+        self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
+
+        self.query = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
+
+        kv_hidden_size = self.hidden_size if encoder_hidden_size is None else encoder_hidden_size
+        self.key = nn.Linear(kv_hidden_size, self.hidden_size, bias=use_bias)
+        self.value = nn.Linear(kv_hidden_size, self.hidden_size, bias=use_bias)
+
+        self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
+        self.dropout = nn.Dropout(attention_dropout)
+
+        self.use_memory_efficient_attention_xformers = False
+        self.xformers_attention_op = None
+
+    def set_use_memory_efficient_attention_xformers(
+        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
+    ):
+        if use_memory_efficient_attention_xformers and not is_xformers_available:
+            raise ImportError("Please install xformers to use memory efficient attention")
+        self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
+        self.xformers_attention_op = attention_op
+
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
+            raise ValueError("Memory efficient attention does not yet support encoder attention mask")
+
+        context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
+        batch, q_seq_len, _ = hidden_states.shape
+        kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
+
+        query = self.query(hidden_states)
+        key = self.key(context)
+        value = self.value(context)
+
+        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+
+        if self.use_memory_efficient_attention_xformers:
+            attn_output = xops.memory_efficient_attention(
+                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0
+            )
+            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
+        else:
+            attention_mask = None
+            if encoder_attention_mask is not None:
+                src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
+                attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
+            attn_output = self.attention(query, key, value, attention_mask)
+
+        attn_output = self.out(attn_output)
+        return attn_output
+
+    def attention(self, query, key, value, attention_mask=None):
+        batch, seq_len = query.shape[:2]
+        kv_seq_len = key.shape[1]
+        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
+
+        attn_weights = torch.baddbmm(
+            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
+            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            alpha=1 / self.scale_attn,
+        )
+        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
+        # Apply the attention mask
+        if attention_mask is not None:
+            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        attn_weights = self.dropout(attn_weights)
+        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        # re-assemble all head outputs side by side
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
+        return attn_output
+
+
 # U-ViT blocks
 # Adpated from https://github.com/dome272/Paella/blob/main/src_distributed/modules.py
+
+
+class AttentionBlock2D(nn.Module):
+    def __init__(
+        self,
+        hidden_size,
+        num_heads,
+        encoder_hidden_size,
+        attention_dropout=0.0,
+        norm_type="layernorm",
+        layer_norm_eps=1e-6,
+        ln_elementwise_affine=True,
+        use_bias=False,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+
+        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
+        self.attention = Attention(hidden_size, num_heads, attention_dropout=attention_dropout, use_bias=use_bias)
+        self.crossattn_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
+        self.crossattention = Attention(hidden_size, num_heads, attention_dropout=attention_dropout, use_bias=use_bias)
+
+        if encoder_hidden_size != hidden_size:
+            self.kv_mapper = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
+        else:
+            self.kv_mapper = None
+
+    def forward(self, hidden_states, encoder_hidden_states, encoder_attention_mask=None):
+        # hidden_states -> (bs, hidden_size, height, width)
+        # reshape to (bs, height * width, hidden_size)
+        batch_size, channels, height, width = hidden_states.shape
+        hidden_states = hidden_states.view(batch_size, channels, height * width).permute(0, 2, 1)
+
+        # map encoder hidden states to hidden size of current layer
+        if self.kv_mapper is not None:
+            encoder_hidden_states = self.kv_mapper(F.silu(encoder_hidden_states))
+
+        # self attention
+        residual = hidden_states
+        hidden_states = self.attn_layer_norm(hidden_states)
+        hidden_states = self.attention(hidden_states, encoder_hidden_states, encoder_attention_mask)
+        hidden_states = hidden_states + residual
+
+        # cross attention
+        residual = hidden_states
+        hidden_states = self.crossattn_layer_norm(hidden_states)
+        print(hidden_states.shape, encoder_hidden_states.shape)
+        hidden_states = self.crossattention(hidden_states, encoder_hidden_states, encoder_attention_mask)
+        hidden_states = hidden_states + residual
+
+        # reshape back to (bs, hidden_size, height, width)
+        hidden_states = hidden_states.permute(0, 2, 1).view(batch_size, channels, height, width)
+
+        return hidden_states
+
+
 class Norm2D(nn.Module):
     def __init__(self, dim, eps=1e-5, use_bias=False, norm_type="layernorm", elementwise_affine=True):
         super().__init__()
@@ -266,11 +412,15 @@ class DownsampleBlock(nn.Module):
         add_downsample=True,
         add_cond_embeds=False,
         cond_embed_dim=None,
+        has_attention=False,
+        num_heads=None,
+        encoder_hidden_size=None,
         use_bias=False,
         **kwargs,
     ):
         super().__init__()
         self.add_downsample = add_downsample
+        self.has_attention = has_attention
         if add_downsample:
             self.downsample = nn.Sequential(
                 Norm2D(
@@ -303,14 +453,30 @@ class DownsampleBlock(nn.Module):
             ]
         )
 
+        if has_attention:
+            self.attention_blocks = nn.ModuleList(
+                [
+                    AttentionBlock2D(
+                        hidden_size=self.input_channels,
+                        num_heads=num_heads,
+                        encoder_hidden_size=encoder_hidden_size,
+                        attention_dropout=dropout,
+                        norm_type=norm_type,
+                        ln_elementwise_affine=ln_elementwise_affine,
+                        use_bias=use_bias,
+                    )
+                    for _ in range(num_res_blocks)
+                ]
+            )
+
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None, cond_embeds=None, **kwargs):
+    def forward(self, x, x_skip=None, cond_embeds=None, encoder_hidden_states=None, **kwargs):
         if self.add_downsample:
             x = self.downsample(x)
 
         output_states = ()
-        for res_block in self.res_blocks:
+        for i, res_block in enumerate(self.res_blocks):
             if self.training and self.gradient_checkpointing:
 
                 def create_custom_forward(module):
@@ -320,8 +486,14 @@ class DownsampleBlock(nn.Module):
                     return custom_forward
 
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_skip)
+                if self.has_attention:
+                    x = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(self.attention_blocks[i]), x, encoder_hidden_states
+                    )
             else:
                 x = res_block(x, x_skip, cond_embeds=cond_embeds)
+                if self.has_attention:
+                    x = self.attention_blocks[i](x, encoder_hidden_states)
 
             output_states += (x,)
         return x, output_states
@@ -341,11 +513,15 @@ class UpsampleBlock(nn.Module):
         add_upsample=True,
         add_cond_embeds=False,
         cond_embed_dim=None,
+        has_attention=False,
+        num_heads=None,
+        encoder_hidden_size=None,
         use_bias=False,
         **kwargs,
     ):
         super().__init__()
         self.add_upsample = add_upsample
+        self.has_attention = has_attention
         self.input_channels = input_channels
         self.output_channels = output_channels if output_channels is not None else input_channels
 
@@ -366,6 +542,22 @@ class UpsampleBlock(nn.Module):
             ]
         )
 
+        if has_attention:
+            self.attention_blocks = nn.ModuleList(
+                [
+                    AttentionBlock2D(
+                        hidden_size=self.input_channels,
+                        num_heads=num_heads,
+                        encoder_hidden_size=encoder_hidden_size,
+                        attention_dropout=dropout,
+                        norm_type=norm_type,
+                        ln_elementwise_affine=ln_elementwise_affine,
+                        use_bias=use_bias,
+                    )
+                    for _ in range(num_res_blocks)
+                ]
+            )
+
         if add_upsample:
             self.upsample = nn.Sequential(
                 Norm2D(
@@ -380,7 +572,7 @@ class UpsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None, cond_embeds=None, **kwargs):
+    def forward(self, x, x_skip=None, cond_embeds=None, encoder_hidden_states=None, **kwargs):
         for i, res_block in enumerate(self.res_blocks):
             x_res = x_skip[0] if i == 0 and x_skip is not None else None
 
@@ -393,8 +585,14 @@ class UpsampleBlock(nn.Module):
                     return custom_forward
 
                 x = torch.utils.checkpoint.checkpoint(create_custom_forward(res_block), x, x_res)
+                if self.has_attention:
+                    x = torch.utils.checkpoint.checkpoint(
+                        create_custom_forward(self.attention_blocks[i]), x, encoder_hidden_states
+                    )
             else:
                 x = res_block(x, x_res, cond_embeds=cond_embeds)
+                if self.has_attention:
+                    x = self.attention_blocks[i](x, encoder_hidden_states)
 
         if self.add_upsample:
             x = self.upsample(x)
@@ -517,95 +715,6 @@ class UpsampleBlockVanilla(nn.Module):
 
 
 # End U-ViT blocks
-
-
-class Attention(nn.Module):
-    def __init__(self, hidden_size, num_heads, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
-        super().__init__()
-
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.head_dim = hidden_size // num_heads
-        self.attention_dropout = attention_dropout
-        if self.head_dim * self.num_heads != self.hidden_size:
-            raise ValueError(
-                f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.hidden_size} and"
-                f" `num_heads`: {self.num_heads})."
-            )
-        self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
-
-        self.query = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-
-        kv_hidden_size = self.hidden_size if encoder_hidden_size is None else encoder_hidden_size
-        self.key = nn.Linear(kv_hidden_size, self.hidden_size, bias=use_bias)
-        self.value = nn.Linear(kv_hidden_size, self.hidden_size, bias=use_bias)
-
-        self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
-        self.dropout = nn.Dropout(attention_dropout)
-
-        self.use_memory_efficient_attention_xformers = False
-        self.xformers_attention_op = None
-
-    def set_use_memory_efficient_attention_xformers(
-        self, use_memory_efficient_attention_xformers: bool, attention_op: Optional[Callable] = None
-    ):
-        if use_memory_efficient_attention_xformers and not is_xformers_available:
-            raise ImportError("Please install xformers to use memory efficient attention")
-        self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
-        self.xformers_attention_op = attention_op
-
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
-        if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
-            raise ValueError("Memory efficient attention does not yet support encoder attention mask")
-
-        context = hidden_states if encoder_hidden_states is None else encoder_hidden_states
-        batch, q_seq_len, _ = hidden_states.shape
-        kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
-
-        query = self.query(hidden_states)
-        key = self.key(context)
-        value = self.value(context)
-
-        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-
-        if self.use_memory_efficient_attention_xformers:
-            attn_output = xops.memory_efficient_attention(
-                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0
-            )
-            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
-        else:
-            attention_mask = None
-            if encoder_attention_mask is not None:
-                src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
-                attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
-            attn_output = self.attention(query, key, value, attention_mask)
-
-        attn_output = self.out(attn_output)
-        return attn_output
-
-    def attention(self, query, key, value, attention_mask=None):
-        batch, seq_len = query.shape[:2]
-        kv_seq_len = key.shape[1]
-        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
-
-        attn_weights = torch.baddbmm(
-            input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
-            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
-            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
-            alpha=1 / self.scale_attn,
-        )
-        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
-        # Apply the attention mask
-        if attention_mask is not None:
-            attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
-        attn_weights = F.softmax(attn_weights, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-        attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        # re-assemble all head outputs side by side
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
-        return attn_output
 
 
 # Normformer style GLU FeedForward
@@ -1329,6 +1438,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         hidden_size=768,
         in_channels=384,
         block_out_channels=(768, 768),
+        block_has_attention=None,
+        block_num_heads=None,
         num_res_blocks=2,
         num_hidden_layers=12,
         num_attention_heads=12,
@@ -1378,6 +1489,17 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+
+        if block_has_attention is None:
+            block_has_attention = [False] * len(block_out_channels)
+
+        if isinstance(block_has_attention, bool):
+            block_has_attention = [block_has_attention] * len(block_out_channels)
+
+        if block_num_heads is None:
+            block_num_heads = [None] * len(block_out_channels)
+        elif isinstance(block_num_heads, int):
+            block_num_heads = [block_num_heads] * len(block_out_channels)
 
         if learn_uncond_embeds:
             self.uncond_embeds = nn.Parameter(torch.randn(size=(77, encoder_hidden_size), requires_grad=True))
@@ -1441,6 +1563,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     add_downsample=add_downsample,
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
+                    has_attention=block_has_attention[i],
+                    num_heads=block_num_heads[i],
+                    encoder_hidden_size=encoder_hidden_size,
                     use_bias=use_bias,
                 )
             )
@@ -1488,6 +1613,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         # Up sample
         UpBlock = UpsampleBlockVanilla if use_vannilla_resblock else UpsampleBlock
         reversed_block_out_channels = list(reversed(block_out_channels))
+        reversed_block_has_attention = list(reversed(block_has_attention))
+        reversed_block_num_heads = list(reversed(block_num_heads))
         output_channels = reversed_block_out_channels[0]
         self.up_blocks = nn.ModuleList([])
         for i in range(len(reversed_block_out_channels)):
@@ -1515,6 +1642,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     add_upsample=not is_final_block,
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
+                    has_attention=reversed_block_has_attention[i],
+                    num_heads=reversed_block_num_heads[i],
+                    encoder_hidden_size=encoder_hidden_size,
                     use_bias=use_bias,
                 )
             )
@@ -1625,7 +1755,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         down_block_res_samples = (hidden_states,)
         for down_block in self.down_blocks:
-            hidden_states, res_samples = down_block(hidden_states, cond_embeds=cond_embeds)
+            hidden_states, res_samples = down_block(
+                hidden_states, cond_embeds=cond_embeds, encoder_hidden_states=encoder_hidden_states
+            )
             down_block_res_samples += res_samples
 
         batch_size, channels, height, width = hidden_states.shape
@@ -1678,7 +1810,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             else:
                 x_skip = res_samples if i > 0 else None
 
-            hidden_states = up_block(hidden_states, x_skip=x_skip, cond_embeds=cond_embeds)
+            hidden_states = up_block(
+                hidden_states, x_skip=x_skip, cond_embeds=cond_embeds, encoder_hidden_states=encoder_hidden_states
+            )
 
         if self.config.layer_norm_before_mlm:
             hidden_states = self.layer_norm_before_mlm(hidden_states)
