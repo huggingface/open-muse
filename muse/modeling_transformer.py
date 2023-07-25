@@ -1428,11 +1428,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_empty_embeds_for_uncond=False,
         learn_uncond_embeds=False,
         use_vannilla_resblock=False,
-<<<<<<< HEAD
         transformer_type="default",
-=======
         ffn_type="glu",
->>>>>>> 7ac4a0b884cd48ab78bd271d0b35447080255e70
         **kwargs,
     ):
         super().__init__()
