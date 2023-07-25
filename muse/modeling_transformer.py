@@ -1491,14 +1491,16 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if block_has_attention is None:
             block_has_attention = [False] * len(block_out_channels)
-
-        if isinstance(block_has_attention, bool):
+        elif isinstance(block_has_attention, bool):
             block_has_attention = [block_has_attention] * len(block_out_channels)
 
         if block_num_heads is None:
             block_num_heads = [None] * len(block_out_channels)
         elif isinstance(block_num_heads, int):
             block_num_heads = [block_num_heads] * len(block_out_channels)
+
+        self.register_to_config(block_has_attention=tuple(block_has_attention))
+        self.register_to_config(block_num_heads=tuple(block_num_heads))
 
         if learn_uncond_embeds:
             self.uncond_embeds = nn.Parameter(torch.randn(size=(77, encoder_hidden_size), requires_grad=True))
