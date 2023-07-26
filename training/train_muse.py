@@ -30,7 +30,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
-from data import ClassificationDataset, Text2ImageDataset, load_m4_laion_shard_urls
+from data import ClassificationDataset, Text2ImageDataset
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
 from PIL import Image
