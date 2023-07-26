@@ -292,7 +292,18 @@ class Text2ImageDataset:
         vae_checkpoint: Optional[str] = None,
         text_encoder_checkpoint: Optional[str] = None,
         use_filtered_dataset: bool = False,
+        use_m4_laion_text_2_image_dataset: bool = False,
+        s3=None,
     ):
+        if use_m4_laion_text_2_image_dataset:
+            if s3 is not None:
+                raise ValueError(f"m4 laion text 2 image dataset requires an s3 fs instance")
+
+        num_batches = math.ceil(num_train_examples / global_batch_size)
+        num_worker_batches = math.ceil(num_train_examples / (global_batch_size * num_workers))  # per dataloader worker
+        num_batches = num_worker_batches * num_workers
+        num_samples = num_batches * global_batch_size
+
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
         def tokenize(text):
@@ -312,51 +323,81 @@ class Text2ImageDataset:
             # flatten list using itertools
             eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
 
-        if not is_pre_encoded:
-            processing_pipeline = [
-                wds.decode("pil", handler=wds.ignore_and_continue),
-                wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
-                wds.map(filter_keys(set(["image", "input_ids"]))),
-                wds.map_dict(image=transform.train_transform, input_ids=tokenize),
-                wds.to_tuple("image", "input_ids"),
-            ]
-        else:
-            # lowercase and replace / with .
-            vae_checkpoint = vae_checkpoint.lower().replace("/", ".")
-            text_encoder_checkpoint = text_encoder_checkpoint.lower().replace("/", ".")
-            processing_pipeline = [
-                wds.decode(wds.handle_extension("pth", wds.autodecode.torch_loads), handler=wds.ignore_and_continue),
-                wds.rename(
-                    input_ids=f"{vae_checkpoint}.pth",
-                    encoder_hidden_states=f"{text_encoder_checkpoint}.pth",
-                    handler=wds.warn_and_continue,
+        if not use_m4_laion_text_2_image_dataset:
+            if not is_pre_encoded:
+                processing_pipeline = [
+                    wds.decode("pil", handler=wds.ignore_and_continue),
+                    wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
+                    wds.map(filter_keys(set(["image", "input_ids"]))),
+                    wds.map_dict(image=transform.train_transform, input_ids=tokenize),
+                    wds.to_tuple("image", "input_ids"),
+                ]
+            else:
+                # lowercase and replace / with .
+                vae_checkpoint = vae_checkpoint.lower().replace("/", ".")
+                text_encoder_checkpoint = text_encoder_checkpoint.lower().replace("/", ".")
+                processing_pipeline = [
+                    wds.decode(
+                        wds.handle_extension("pth", wds.autodecode.torch_loads), handler=wds.ignore_and_continue
+                    ),
+                    wds.rename(
+                        input_ids=f"{vae_checkpoint}.pth",
+                        encoder_hidden_states=f"{text_encoder_checkpoint}.pth",
+                        handler=wds.warn_and_continue,
+                    ),
+                    wds.map(filter_keys(set(["input_ids", "encoder_hidden_states"]))),
+                    wds.to_tuple("input_ids", "encoder_hidden_states"),
+                ]
+
+            # Create train dataset and loader
+            pipeline = [
+                wds.ResampledShards(train_shards_path_or_url),
+                tarfile_to_samples_nothrow,
+                wds.select(
+                    WebdatasetFilter(min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9)
+                    if use_filtered_dataset
+                    else lambda x: True
                 ),
-                wds.map(filter_keys(set(["input_ids", "encoder_hidden_states"]))),
-                wds.to_tuple("input_ids", "encoder_hidden_states"),
+                wds.shuffle(shuffle_buffer_size),
+                *processing_pipeline,
+                wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
             ]
 
-        # Create train dataset and loader
-        pipeline = [
-            wds.ResampledShards(train_shards_path_or_url),
-            tarfile_to_samples_nothrow,
-            wds.select(
-                WebdatasetFilter(min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9)
-                if use_filtered_dataset
-                else lambda x: True
-            ),
-            wds.shuffle(shuffle_buffer_size),
-            *processing_pipeline,
-            wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
-        ]
+            # each worker is iterating over this
+            train_dataset = wds.DataPipeline(*pipeline).with_epoch(num_worker_batches)
 
-        num_batches = math.ceil(num_train_examples / global_batch_size)
-        num_worker_batches = math.ceil(num_train_examples / (global_batch_size * num_workers))  # per dataloader worker
-        num_batches = num_worker_batches * num_workers
-        num_samples = num_batches * global_batch_size
+            eval_dataset_pipeline = [
+                wds.SimpleShardList(eval_shards_path_or_url),
+                wds.split_by_worker,
+                wds.tarfile_to_samples(handler=wds.ignore_and_continue),
+                *processing_pipeline,
+                wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
+            ]
+            eval_dataset = wds.DataPipeline(*eval_dataset_pipeline)
+        else:
+            train_shards_path_or_url = wds.ResampledShards(train_shards_path_or_url)
 
-        # each worker is iterating over this
-        self._train_dataset = wds.DataPipeline(*pipeline).with_epoch(num_worker_batches)
-        self._train_dataloader = wds.WebLoader(
+            train_dataset = m4_laion_dataset_stream(train_shards_path_or_url, s3)
+
+            if use_filtered_dataset:
+                train_dataset = m4_laion_dataset_filter(train_dataset, min_size=256)
+
+            train_dataset = m4_laion_dataset_shuffle(train_dataset, shuffle_buffer_size)
+            train_dataset = m4_laion_dataset_processing_pipeline(train_dataset, transform, tokenize)
+            train_dataset = m4_laion_dataset_batched(
+                train_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
+            )
+            train_dataset = m4_laion_dataset_with_epoch(train_dataset, num_worker_batches)
+
+            eval_dataset = m4_laion_dataset_stream(eval_shards_path_or_url, s3)
+            eval_dataset = wds.split_by_worker(eval_dataset)
+            eval_dataset = m4_laion_dataset_processing_pipeline(eval_dataset, transform, tokenize)
+            eval_dataset = m4_laion_dataset_batched(
+                eval_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
+            )
+
+        self._train_dataset = train_dataset
+        self._train_dataloader = DataLoader(
             self._train_dataset,
             batch_size=None,
             shuffle=False,
@@ -369,15 +410,8 @@ class Text2ImageDataset:
         self._train_dataloader.num_samples = num_samples
 
         # Create eval dataset and loader
-        pipeline = [
-            wds.SimpleShardList(eval_shards_path_or_url),
-            wds.split_by_worker,
-            wds.tarfile_to_samples(handler=wds.ignore_and_continue),
-            *processing_pipeline,
-            wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
-        ]
-        self._eval_dataset = wds.DataPipeline(*pipeline)
-        self._eval_dataloader = wds.WebLoader(
+        self._eval_dataset = eval_dataset
+        self._eval_dataloader = DataLoader(
             self._eval_dataset,
             batch_size=None,
             shuffle=False,
@@ -403,111 +437,32 @@ class Text2ImageDataset:
         return self._eval_dataloader
 
 
-# "s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}"
+def m4_laion_shard_urls(s3):
+    split_urls = braceexpand("s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}")
+
+    for split_url in split_urls:
+        for shard_url in s3.ls(split_url):
+            yield shard_url
 
 
-class M4LaionText2ImageDataset:
-    def __init__(
-        self,
-        train_shards_path_or_url,
-        tokenizer: PreTrainedTokenizer,
-        max_seq_length: int,
-        num_train_examples: int,
-        per_gpu_batch_size: int,
-        global_batch_size: int,
-        num_workers: int,
-        resolution: int = 256,
-        center_crop: bool = True,
-        random_flip: bool = False,
-        shuffle_buffer_size: int = 1000,
-        pin_memory: bool = False,
-        persistent_workers: bool = False,
-        use_filtered_dataset: bool = False,
-    ):
-        transform = ImageNetTransform(resolution, center_crop, random_flip)
-
-        def tokenize(text):
-            text = replace_person_token(text)
-            input_ids = tokenizer(
-                text, max_length=max_seq_length, padding="max_length", truncation=True, return_tensors="pt"
-            ).input_ids
-            return input_ids[0]
-
-        if not isinstance(train_shards_path_or_url, str):
-            train_shards_path_or_url = [list(braceexpand(urls)) for urls in train_shards_path_or_url]
-            # flatten list using itertools
-            train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
-
-        train_shards_path_or_url = wds.ResampledShards(train_shards_path_or_url)
-
-        dataset = m4_laion_dataset_stream(train_shards_path_or_url)
-
-        if use_filtered_dataset:
-            dataset = m4_laion_dataset_filter(dataset, min_size=256)
-
-        dataset = m4_laion_dataset_shuffle(dataset, shuffle_buffer_size)
-
-        for sample in dataset:
-            image = sample["image"]
-            text = sample["text"]
-
-            image = transform.train_transformer(image)
-            text = tokenize(text)
-
-            yield image, text
-
-        dataset = m4_laion_dataset_processing_pipeline(dataset, transform, tokenize)
-
-        dataset = m4_laion_dataset_batched(dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate)
-
-        num_batches = math.ceil(num_train_examples / global_batch_size)
-        num_worker_batches = math.ceil(num_train_examples / (global_batch_size * num_workers))  # per dataloader worker
-        num_batches = num_worker_batches * num_workers
-        num_samples = num_batches * global_batch_size
-
-        self._train_dataset = m4_laion_dataset_with_epoch(dataset, num_worker_batches)
-        self._train_dataloader = DataLoader(
-            self._train_dataset,
-            batch_size=None,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-            persistent_workers=persistent_workers,
-        )
-        # add meta-data to dataloader instance for convenience
-        self._train_dataloader.num_batches = num_batches
-        self._train_dataloader.num_samples = num_samples
-
-    @property
-    def train_dataset(self):
-        return self._train_dataset
-
-    @property
-    def train_dataloader(self):
-        return self._train_dataloader
-
-
-def m4_laion_dataset_stream(shard_urls):
-    s3 = s3fs.S3FileSystem()
-
+def m4_laion_dataset_stream(shard_urls, s3):
     for shard_url in shard_urls:
-        for file in s3.ls(shard_url):
-            with s3.open(file, "rb") as f:
-                in_memory_stream = pa.input_stream(f)
-                opened_stream = pa.ipc.open_stream(in_memory_stream)
-                pa_table = opened_stream.read_all()
+        with s3.open(shard_url, "rb") as f:
+            in_memory_stream = pa.input_stream(f)
+            opened_stream = pa.ipc.open_stream(in_memory_stream)
+            pa_table = opened_stream.read_all()
 
-            table = pa_table.to_pydict()
+        table = pa_table.to_pydict()
 
-            for i in range(len(table["text"])):
-                image_bytes = table["image"][i]["bytes"]
-                image = Image.open(io.BytesIO(image_bytes))
+        for i in range(len(table["text"])):
+            image_bytes = table["image"][i]["bytes"]
+            image = Image.open(io.BytesIO(image_bytes))
 
-                text = table["text"][i]
+            text = table["text"][i]
 
-                meta = table["meta"][i]
+            meta = table["meta"][i]
 
-                yield {"image": image, "text": text, "meta": meta}
+            yield {"image": image, "text": text, "meta": meta}
 
 
 def m4_laion_dataset_filter(dataset, min_size=256):
