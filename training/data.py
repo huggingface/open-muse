@@ -388,7 +388,7 @@ class Text2ImageDataset:
             train_dataset = M4LaionDatasetWithEpoch(train_dataset, num_worker_batches)
 
             eval_dataset = M4LaionDatasetStream(eval_shards_path_or_url)
-            eval_dataset = wds.split_by_worker(eval_dataset)
+            eval_dataset = M4LaionDatasetSplitByWorker(eval_dataset)
             eval_dataset = M4LaionDatasetProcessingPipeline(eval_dataset, transform.train_transform, tokenize)
             eval_dataset = M4LaionDatasetBatched(
                 eval_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
@@ -590,6 +590,15 @@ class M4LaionDatasetWithEpoch(IterableDataset):
         for _ in range(self.num_epochs):
             for sample in self.iterable:
                 yield sample
+
+
+class M4LaionDatasetSplitByWorker(IterableDataset):
+    def __init__(self, iterable):
+        self.iterable = iterable
+
+    def __iter__(self):
+        for x in wds.split_by_worker(self.iterable):
+            yield x
 
 
 def pick_random(buf, rng):
