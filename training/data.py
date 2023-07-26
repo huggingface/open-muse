@@ -15,16 +15,22 @@
 
 # This file is heavily inspired by https://github.com/mlfoundations/open_clip/blob/main/src/training/data.py
 
+import io
 import itertools
 import json
 import math
+import os
 import random
 import re
+import time
 from typing import List, Optional, Union
 
+import pyarrow as pa
+import s3fs
 import webdataset as wds
 from braceexpand import braceexpand
-from torch.utils.data import default_collate
+from PIL import Image
+from torch.utils.data import DataLoader, default_collate
 from torchvision import transforms
 from transformers import PreTrainedTokenizer
 from webdataset.tariterators import (
@@ -395,3 +401,206 @@ class Text2ImageDataset:
     @property
     def eval_dataloader(self):
         return self._eval_dataloader
+
+
+# "s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}"
+
+
+class M4LaionText2ImageDataset:
+    def __init__(
+        self,
+        train_shards_path_or_url,
+        tokenizer: PreTrainedTokenizer,
+        max_seq_length: int,
+        num_train_examples: int,
+        per_gpu_batch_size: int,
+        global_batch_size: int,
+        num_workers: int,
+        resolution: int = 256,
+        center_crop: bool = True,
+        random_flip: bool = False,
+        shuffle_buffer_size: int = 1000,
+        pin_memory: bool = False,
+        persistent_workers: bool = False,
+        use_filtered_dataset: bool = False,
+    ):
+        transform = ImageNetTransform(resolution, center_crop, random_flip)
+
+        def tokenize(text):
+            text = replace_person_token(text)
+            input_ids = tokenizer(
+                text, max_length=max_seq_length, padding="max_length", truncation=True, return_tensors="pt"
+            ).input_ids
+            return input_ids[0]
+
+        if not isinstance(train_shards_path_or_url, str):
+            train_shards_path_or_url = [list(braceexpand(urls)) for urls in train_shards_path_or_url]
+            # flatten list using itertools
+            train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
+
+        train_shards_path_or_url = wds.ResampledShards(train_shards_path_or_url)
+
+        dataset = m4_laion_dataset_stream(train_shards_path_or_url)
+
+        if use_filtered_dataset:
+            dataset = m4_laion_dataset_filter(dataset, min_size=256)
+
+        dataset = m4_laion_dataset_shuffle(dataset, shuffle_buffer_size)
+
+        for sample in dataset:
+            image = sample["image"]
+            text = sample["text"]
+
+            image = transform.train_transformer(image)
+            text = tokenize(text)
+
+            yield image, text
+
+        dataset = m4_laion_dataset_processing_pipeline(dataset, transform, tokenize)
+
+        dataset = m4_laion_dataset_batched(dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate)
+
+        num_batches = math.ceil(num_train_examples / global_batch_size)
+        num_worker_batches = math.ceil(num_train_examples / (global_batch_size * num_workers))  # per dataloader worker
+        num_batches = num_worker_batches * num_workers
+        num_samples = num_batches * global_batch_size
+
+        self._train_dataset = m4_laion_dataset_with_epoch(dataset, num_worker_batches)
+        self._train_dataloader = DataLoader(
+            self._train_dataset,
+            batch_size=None,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            persistent_workers=persistent_workers,
+        )
+        # add meta-data to dataloader instance for convenience
+        self._train_dataloader.num_batches = num_batches
+        self._train_dataloader.num_samples = num_samples
+
+    @property
+    def train_dataset(self):
+        return self._train_dataset
+
+    @property
+    def train_dataloader(self):
+        return self._train_dataloader
+
+
+def m4_laion_dataset_stream(shard_urls):
+    s3 = s3fs.S3FileSystem()
+
+    for shard_url in shard_urls:
+        for file in s3.ls(shard_url):
+            with s3.open(file, "rb") as f:
+                in_memory_stream = pa.input_stream(f)
+                opened_stream = pa.ipc.open_stream(in_memory_stream)
+                pa_table = opened_stream.read_all()
+
+            table = pa_table.to_pydict()
+
+            for i in range(len(table["text"])):
+                image_bytes = table["image"][i]["bytes"]
+                image = Image.open(io.BytesIO(image_bytes))
+
+                text = table["text"][i]
+
+                meta = table["meta"][i]
+
+                yield {"image": image, "text": text, "meta": meta}
+
+
+def m4_laion_dataset_filter(dataset, min_size=256):
+    for sample in dataset:
+        original_width = sample["meta"].get("original_width", 0.0) or 0.0
+        original_height = sample["meta"].get("original_height", 0.0) or 0.0
+
+        filter_size = original_width >= min_size and original_height >= min_size
+
+        if filter_size:
+            yield sample
+
+
+def m4_laion_dataset_shuffle(data, bufsize=1000, initial=100):
+    """Shuffle the data in the stream.
+
+    This uses a buffer of size `bufsize`. Shuffling at
+    startup is less random; this is traded off against
+    yielding samples quickly.
+
+    data: iterator
+    bufsize: buffer size for shuffling
+    returns: iterator
+    rng: either random module or random.Random instance
+
+    """
+    rng = random.Random(int((os.getpid() + time.time()) * 1e9))
+    initial = min(initial, bufsize)
+    buf = []
+    for sample in data:
+        buf.append(sample)
+        if len(buf) < bufsize:
+            try:
+                buf.append(next(data))  # skipcq: PYL-R1708
+            except StopIteration:
+                pass
+        if len(buf) >= initial:
+            yield pick_random(buf, rng)
+    while len(buf) > 0:
+        yield pick_random(buf, rng)
+
+
+def m4_laion_dataset_processing_pipeline(dataset, transform, tokenize):
+    for sample in dataset:
+        image = sample["image"]
+        text = sample["text"]
+
+        image = transform.train_transformer(image)
+        text = tokenize(text)
+
+        yield image, text
+
+
+def m4_laion_dataset_batched(
+    data,
+    batchsize=20,
+    collation_fn=default_collate,
+    partial=True,
+):
+    """Create batches of the given size.
+
+    :param data: iterator
+    :param batchsize: target batch size
+    :param tensors: automatically batch lists of ndarrays into ndarrays
+    :param partial: return partial batches
+    :returns: iterator
+
+    """
+    batch = []
+    for sample in data:
+        if len(batch) >= batchsize:
+            if collation_fn is not None:
+                batch = collation_fn(batch)
+            yield batch
+            batch = []
+        batch.append(sample)
+    if len(batch) == 0:
+        return
+    elif len(batch) == batchsize or partial:
+        if collation_fn is not None:
+            batch = collation_fn(batch)
+        yield batch
+
+
+def m4_laion_dataset_with_epoch(dataset, num_epochs):
+    for _ in range(num_epochs):
+        for sample in dataset:
+            yield sample
+
+
+def pick_random(buf, rng):
+    k = rng.randint(0, len(buf) - 1)
+    sample = buf[k]
+    buf[k] = buf[-1]
+    buf.pop()
+    return sample
