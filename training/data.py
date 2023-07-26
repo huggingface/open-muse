@@ -18,6 +18,7 @@
 import io
 import itertools
 import json
+import logging
 import math
 import os
 import random
@@ -39,6 +40,8 @@ from webdataset.tariterators import (
     url_opener,
     valid_sample,
 )
+
+logger = logging.Logger(__name__)
 
 person_token = ["a person", "someone", "somebody"]
 
@@ -470,7 +473,11 @@ class M4LaionDatasetStream(IterableDataset):
 
             with s3.open(shard_url, "rb") as f:
                 in_memory_stream = pa.input_stream(f)
-                opened_stream = pa.ipc.open_stream(in_memory_stream)
+                try:
+                    opened_stream = pa.ipc.open_stream(in_memory_stream)
+                except pa.lib.ArrowInvalid as e:
+                    logger.warning(str(e))
+                    continue
                 pa_table = opened_stream.read_all()
 
             table = pa_table.to_pydict()
@@ -478,8 +485,12 @@ class M4LaionDatasetStream(IterableDataset):
             for i in range(len(table["text"])):
                 image_bytes = table["image"][i]["bytes"]
                 image_bytes = io.BytesIO(image_bytes)
-                image = Image.open(image_bytes)
-                image = image.convert("RGB")
+                try:
+                    image = Image.open(image_bytes)
+                    image = image.convert("RGB")
+                except Exception as e:
+                    logger.warning(str(e))
+                    continue
 
                 text = table["text"][i]
 
