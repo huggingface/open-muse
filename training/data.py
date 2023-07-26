@@ -372,26 +372,24 @@ class Text2ImageDataset:
         else:
             train_shards_path_or_url = wds.ResampledShards(train_shards_path_or_url)
 
-            train_dataset = m4_laion_dataset_stream(train_shards_path_or_url)
+            train_dataset = M4LaionDatasetStream(train_shards_path_or_url)
 
             if use_filtered_dataset:
-                train_dataset = m4_laion_dataset_filter(train_dataset, min_size=256)
+                train_dataset = M4LaionDatasetFilter(train_dataset, min_size=256)
 
-            train_dataset = m4_laion_dataset_shuffle(train_dataset, shuffle_buffer_size)
-            train_dataset = m4_laion_dataset_processing_pipeline(train_dataset, transform, tokenize)
-            train_dataset = m4_laion_dataset_batched(
+            train_dataset = M4LaionDatasetShuffle(train_dataset, shuffle_buffer_size)
+            train_dataset = M4LaionDatasetProcessingPipeline(train_dataset, transform.train_transform, tokenize)
+            train_dataset = M4LaionDatasetBatched(
                 train_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
             )
-            train_dataset = m4_laion_dataset_with_epoch(train_dataset, num_worker_batches)
-            train_dataset = M4LaionDataset(train_dataset)
+            train_dataset = M4LaionDatasetWithEpoch(train_dataset, num_worker_batches)
 
-            eval_dataset = m4_laion_dataset_stream(eval_shards_path_or_url)
+            eval_dataset = M4LaionDatasetStream(eval_shards_path_or_url)
             eval_dataset = wds.split_by_worker(eval_dataset)
-            eval_dataset = m4_laion_dataset_processing_pipeline(eval_dataset, transform, tokenize)
-            eval_dataset = m4_laion_dataset_batched(
+            eval_dataset = M4LaionDatasetProcessingPipeline(eval_dataset, transform.train_transform, tokenize)
+            eval_dataset = M4LaionDatasetBatched(
                 eval_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
             )
-            eval_dataset = M4LaionDataset(eval_dataset)
 
         self._train_dataset = train_dataset
         self._train_dataloader = DataLoader(
@@ -434,137 +432,153 @@ class Text2ImageDataset:
         return self._eval_dataloader
 
 
-class M4LaionDataset(IterableDataset):
-    def __init__(self, iterable):
-        self.iterable = iterable
-
-    def __iter__(self):
-        return iter(self.iterable)
-
-
-def m4_laion_shard_urls():
+def write_m4_laion_shard_urls():
     s3 = s3fs.S3FileSystem()
 
     split_urls = braceexpand("s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}")
 
+    shard_urls = []
+
     for split_url in split_urls:
         for shard_url in s3.ls(split_url):
-            yield shard_url
+            shard_urls.append(shard_url)
+
+    shard_urls = "\n".join(shard_urls)
+
+    with open("./configs/m4_laion_shard_urls.txt", "w") as shard_urls_file:
+        shard_urls_file.write(shard_urls)
 
 
-def m4_laion_dataset_stream(shard_urls):
-    # s3 handle is not fork safe, just create a new handle when the stream is created
-    s3 = s3fs.S3FileSystem()
-
-    for shard_url in shard_urls:
-        # HACK dealing with wds.ResampledShards wrapping result in a dict
-        if isinstance(shard_url, dict):
-            shard_url = shard_url["url"]
-
-        with s3.open(shard_url, "rb") as f:
-            in_memory_stream = pa.input_stream(f)
-            opened_stream = pa.ipc.open_stream(in_memory_stream)
-            pa_table = opened_stream.read_all()
-
-        table = pa_table.to_pydict()
-
-        for i in range(len(table["text"])):
-            image_bytes = table["image"][i]["bytes"]
-            image = Image.open(io.BytesIO(image_bytes))
-
-            text = table["text"][i]
-
-            meta = table["meta"][i]
-
-            yield {"image": image, "text": text, "meta": meta}
+def load_m4_laion_shard_urls():
+    with open("./configs/m4_laion_shard_urls.txt", "r") as shard_urls_file:
+        for filename in shard_urls_file.readlines():
+            yield filename.strip()
 
 
-def m4_laion_dataset_filter(dataset, min_size=256):
-    for sample in dataset:
-        original_width = sample["meta"].get("original_width", 0.0) or 0.0
-        original_height = sample["meta"].get("original_height", 0.0) or 0.0
+class M4LaionDatasetStream(IterableDataset):
+    def __init__(self, shard_urls):
+        self.shard_urls = shard_urls
 
-        filter_size = original_width >= min_size and original_height >= min_size
+    def __iter__(self):
+        # s3 handle is not fork safe, just create a new handle when the stream is created
+        s3 = s3fs.S3FileSystem()
 
-        if filter_size:
-            yield sample
+        for shard_url in self.shard_urls:
+            # HACK dealing with wds.ResampledShards wrapping result in a dict
+            if isinstance(shard_url, dict):
+                shard_url = shard_url["url"]
+
+            with s3.open(shard_url, "rb") as f:
+                in_memory_stream = pa.input_stream(f)
+                opened_stream = pa.ipc.open_stream(in_memory_stream)
+                pa_table = opened_stream.read_all()
+
+            table = pa_table.to_pydict()
+
+            for i in range(len(table["text"])):
+                image_bytes = table["image"][i]["bytes"]
+                image_bytes = io.BytesIO(image_bytes)
+                image = Image.open(image_bytes)
+                image = image.convert("RGB")
+
+                text = table["text"][i]
+
+                meta = table["meta"][i]
+
+                yield {"image": image, "text": text, "meta": meta}
 
 
-def m4_laion_dataset_shuffle(data, bufsize=1000, initial=100):
-    """Shuffle the data in the stream.
+class M4LaionDatasetFilter(IterableDataset):
+    def __init__(self, iterable, min_size=256):
+        self.iterable = iterable
+        self.min_size = min_size
 
-    This uses a buffer of size `bufsize`. Shuffling at
-    startup is less random; this is traded off against
-    yielding samples quickly.
+    def __iter__(self):
+        for sample in self.iterable:
+            original_width = sample["meta"].get("original_width", 0.0) or 0.0
+            original_height = sample["meta"].get("original_height", 0.0) or 0.0
 
-    data: iterator
-    bufsize: buffer size for shuffling
-    returns: iterator
-    rng: either random module or random.Random instance
+            filter_size = original_width >= self.min_size and original_height >= self.min_size
 
-    """
-    rng = random.Random(int((os.getpid() + time.time()) * 1e9))
-    initial = min(initial, bufsize)
-    buf = []
-    for sample in data:
-        buf.append(sample)
-        if len(buf) < bufsize:
-            try:
-                buf.append(next(data))  # skipcq: PYL-R1708
-            except StopIteration:
-                pass
-        if len(buf) >= initial:
+            if filter_size:
+                yield sample
+
+
+class M4LaionDatasetShuffle(IterableDataset):
+    def __init__(self, iterable, bufsize=1000, initial=100):
+        self.iterable = iterable
+        self.bufsize = bufsize
+        self.initial = initial
+
+    def __iter__(self):
+        data = iter(self.iterable)
+
+        rng = random.Random(int((os.getpid() + time.time()) * 1e9))
+        initial = min(self.initial, self.bufsize)
+        buf = []
+        for sample in data:
+            buf.append(sample)
+            if len(buf) < self.bufsize:
+                try:
+                    buf.append(next(data))  # skipcq: PYL-R1708
+                except StopIteration:
+                    pass
+            if len(buf) >= initial:
+                yield pick_random(buf, rng)
+        while len(buf) > 0:
             yield pick_random(buf, rng)
-    while len(buf) > 0:
-        yield pick_random(buf, rng)
 
 
-def m4_laion_dataset_processing_pipeline(dataset, transform, tokenize):
-    for sample in dataset:
-        image = sample["image"]
-        text = sample["text"]
+class M4LaionDatasetProcessingPipeline(IterableDataset):
+    def __init__(self, iterable, transform, tokenize):
+        self.iterable = iterable
+        self.transform = transform
+        self.tokenize = tokenize
 
-        image = transform.train_transformer(image)
-        text = tokenize(text)
+    def __iter__(self):
+        for sample in self.iterable:
+            image = sample["image"]
+            text = sample["text"]
 
-        yield image, text
+            image = self.transform(image)
+            text = self.tokenize(text)
+
+            yield image, text
 
 
-def m4_laion_dataset_batched(
-    data,
-    batchsize=20,
-    collation_fn=default_collate,
-    partial=True,
-):
-    """Create batches of the given size.
+class M4LaionDatasetBatched(IterableDataset):
+    def __init__(self, iterable, batchsize=20, collation_fn=default_collate, partial=True):
+        self.iterable = iterable
+        self.batchsize = batchsize
+        self.collation_fn = collation_fn
+        self.partial = partial
 
-    :param data: iterator
-    :param batchsize: target batch size
-    :param tensors: automatically batch lists of ndarrays into ndarrays
-    :param partial: return partial batches
-    :returns: iterator
-
-    """
-    batch = []
-    for sample in data:
-        if len(batch) >= batchsize:
-            if collation_fn is not None:
-                batch = collation_fn(batch)
+    def __iter__(self):
+        batch = []
+        for sample in self.iterable:
+            if len(batch) >= self.batchsize:
+                if self.collation_fn is not None:
+                    batch = self.collation_fn(batch)
+                yield batch
+                batch = []
+            batch.append(sample)
+        if len(batch) == 0:
+            return
+        elif len(batch) == self.batchsize or self.partial:
+            if self.collation_fn is not None:
+                batch = self.collation_fn(batch)
             yield batch
-            batch = []
-        batch.append(sample)
-    if len(batch) == 0:
-        return
-    elif len(batch) == batchsize or partial:
-        if collation_fn is not None:
-            batch = collation_fn(batch)
-        yield batch
 
 
-def m4_laion_dataset_with_epoch(dataset, num_epochs):
-    for _ in range(num_epochs):
-        for sample in dataset:
-            yield sample
+class M4LaionDatasetWithEpoch(IterableDataset):
+    def __init__(self, iterable, num_epochs):
+        self.iterable = iterable
+        self.num_epochs = num_epochs
+
+    def __iter__(self):
+        for _ in range(self.num_epochs):
+            for sample in self.iterable:
+                yield sample
 
 
 def pick_random(buf, rng):

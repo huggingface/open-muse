@@ -30,7 +30,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
-from data import ClassificationDataset, Text2ImageDataset, m4_laion_shard_urls
+from data import ClassificationDataset, Text2ImageDataset, load_m4_laion_shard_urls
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
 from PIL import Image
@@ -438,7 +438,7 @@ def main():
     use_m4_laion_text_2_image_dataset = dataset_config.get("use_m4_laion_text_2_image_dataset", False)
 
     if use_m4_laion_text_2_image_dataset:
-        all_shards = [x for x in m4_laion_shard_urls()]
+        all_shards = [x for x in load_m4_laion_shard_urls()]
         train_shards_path_or_url = all_shards[:-2]
         eval_shards_path_or_url = all_shards[-2:]
     else:
