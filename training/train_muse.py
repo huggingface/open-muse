@@ -25,13 +25,14 @@ from typing import Any, List, Tuple, Union
 
 import numpy as np
 import plotly.express as px
+import s3fs
 import torch
 import torch.nn.functional as F
 import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
-from data import ClassificationDataset, Text2ImageDataset
+from data import ClassificationDataset, Text2ImageDataset, m4_laion_shard_urls
 from omegaconf import DictConfig, ListConfig, OmegaConf
 from optimizer import Lion
 from PIL import Image
@@ -435,9 +436,21 @@ def main():
     else:
         dataset_cls = Text2ImageDataset
 
+    use_m4_laion_text_2_image_dataset = dataset_config.get(use_m4_laion_text_2_image_dataset, False)
+
+    if dataset_config.use_m4_laion_text_2_image_dataset:
+        s3 = s3fs.S3FileSystem()
+        all_shards = m4_laion_shard_urls(s3)
+        train_shards_path_or_url = all_shards[:-2]
+        eval_shards_path_or_url = all_shards[-2:]
+    else:
+        s3 = None
+        train_shards_path_or_url = dataset_config.train_shards_path_or_url
+        eval_shards_path_or_url = dataset_config.eval_shards_path_or_url
+
     dataset = dataset_cls(
-        train_shards_path_or_url=dataset_config.train_shards_path_or_url,
-        eval_shards_path_or_url=dataset_config.eval_shards_path_or_url,
+        train_shards_path_or_url=train_shards_path_or_url,
+        eval_shards_path_or_url=eval_shards_path_or_url,
         tokenizer=tokenizer,
         max_seq_length=preproc_config.max_seq_length,
         num_train_examples=config.experiment.max_train_examples,
@@ -454,6 +467,8 @@ def main():
         vae_checkpoint=config.model.vq_model.pretrained,
         text_encoder_checkpoint=config.model.text_encoder.pretrained,
         use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
+        use_m4_laion_text_2_image_dataset=False,
+        s3=s3,
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
