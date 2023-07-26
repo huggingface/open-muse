@@ -438,10 +438,8 @@ def main():
     use_m4_laion_text_2_image_dataset = dataset_config.get("use_m4_laion_text_2_image_dataset", False)
 
     if use_m4_laion_text_2_image_dataset:
-        all_shards = [x for x in load_m4_laion_shard_urls()]
-        train_shards_path_or_url = all_shards[:-4]
-        # This is really choosing two shards, of the last 4, 2 are misformatted
-        eval_shards_path_or_url = all_shards[-4:]
+        train_shards_path_or_url = None
+        eval_shards_path_or_url = None
     else:
         train_shards_path_or_url = dataset_config.train_shards_path_or_url
         eval_shards_path_or_url = dataset_config.eval_shards_path_or_url

@@ -23,6 +23,7 @@ import math
 import os
 import random
 import re
+import sys
 import time
 from typing import List, Optional, Union
 
@@ -311,15 +312,22 @@ class Text2ImageDataset:
             ).input_ids
             return input_ids[0]
 
-        if not isinstance(train_shards_path_or_url, str):
-            train_shards_path_or_url = [list(braceexpand(urls)) for urls in train_shards_path_or_url]
-            # flatten list using itertools
-            train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
+        if not use_m4_laion_text_2_image_dataset:
+            if not isinstance(train_shards_path_or_url, str):
+                train_shards_path_or_url = [list(braceexpand(urls)) for urls in train_shards_path_or_url]
+                # flatten list using itertools
+                train_shards_path_or_url = list(itertools.chain.from_iterable(train_shards_path_or_url))
 
-        if not isinstance(eval_shards_path_or_url, str):
-            eval_shards_path_or_url = [list(braceexpand(urls)) for urls in eval_shards_path_or_url]
-            # flatten list using itertools
-            eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
+            if not isinstance(eval_shards_path_or_url, str):
+                eval_shards_path_or_url = [list(braceexpand(urls)) for urls in eval_shards_path_or_url]
+                # flatten list using itertools
+                eval_shards_path_or_url = list(itertools.chain.from_iterable(eval_shards_path_or_url))
+        else:
+            if train_shards_path_or_url is not None or eval_shards_path_or_url is not None:
+                raise ValueError(
+                    "`train_shards_path_or_url` and `eval_shards_path_or_url` must both be None when"
+                    " `use_m4_laion_text_2_image_dataset` is set"
+                )
 
         if not use_m4_laion_text_2_image_dataset:
             if not is_pre_encoded:
@@ -373,9 +381,9 @@ class Text2ImageDataset:
             ]
             eval_dataset = wds.DataPipeline(*eval_dataset_pipeline)
         else:
-            train_shards_path_or_url = wds.ResampledShards(train_shards_path_or_url)
-
-            train_dataset = M4LaionDatasetStream(train_shards_path_or_url)
+            train_dataset = M4LaionShards(type="train")
+            train_dataset = M4LaionResampledShards(train_dataset)
+            train_dataset = M4LaionDatasetStream(train_dataset)
 
             if use_filtered_dataset:
                 train_dataset = M4LaionDatasetFilter(train_dataset, min_size=256)
@@ -387,7 +395,8 @@ class Text2ImageDataset:
             )
             train_dataset = M4LaionDatasetWithEpoch(train_dataset, num_worker_batches)
 
-            eval_dataset = M4LaionDatasetStream(eval_shards_path_or_url)
+            eval_dataset = M4LaionShards(type="eval")
+            eval_dataset = M4LaionDatasetStream(eval_dataset)
             eval_dataset = M4LaionDatasetSplitByWorker(eval_dataset)
             eval_dataset = M4LaionDatasetProcessingPipeline(eval_dataset, transform.train_transform, tokenize)
             eval_dataset = M4LaionDatasetBatched(
@@ -435,42 +444,85 @@ class Text2ImageDataset:
         return self._eval_dataloader
 
 
-def write_m4_laion_shard_urls():
-    s3 = s3fs.S3FileSystem()
-
-    split_urls = braceexpand("s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}")
-
-    shard_urls = []
-
-    for split_url in split_urls:
-        for shard_url in s3.ls(split_url):
-            shard_urls.append(shard_url)
-
-    shard_urls = "\n".join(shard_urls)
-
-    with open("./configs/m4_laion_shard_urls.txt", "w") as shard_urls_file:
-        shard_urls_file.write(shard_urls)
-
-
-def load_m4_laion_shard_urls():
-    with open("./configs/m4_laion_shard_urls.txt", "r") as shard_urls_file:
-        for filename in shard_urls_file.readlines():
-            yield filename.strip()
-
-
-class M4LaionDatasetStream(IterableDataset):
-    def __init__(self, shard_urls):
-        self.shard_urls = shard_urls
+# We must run the `s3fs.ls` call in the dataloader subprocess.
+# s3fs requires non-fork based multi processing if we create an instance in the parent process.
+class M4LaionShards(IterableDataset):
+    def __init__(self, type):
+        self.type = type
 
     def __iter__(self):
         # s3 handle is not fork safe, just create a new handle when the stream is created
         s3 = s3fs.S3FileSystem()
 
-        for shard_url in self.shard_urls:
-            # HACK dealing with wds.ResampledShards wrapping result in a dict
-            if isinstance(shard_url, dict):
-                shard_url = shard_url["url"]
+        split_urls = braceexpand("s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}")
 
+        shard_urls = []
+
+        for split_url in split_urls:
+            for shard_url in s3.ls(split_url):
+                shard_urls.append(shard_url)
+
+        if self.type == "train":
+            shard_urls = shard_urls[:-4]
+        elif self.type == "eval":
+            # This is really choosing two shards, of the last 4, 2 are misformatted
+            shard_urls = shard_urls[-4:]
+        else:
+            assert False
+
+        for shard in shard_urls:
+            yield shard
+
+
+class M4LaionResampledShards(IterableDataset):
+    def __init__(
+        self,
+        urls_iterable,
+        nshards=sys.maxsize,
+        worker_seed=None,
+        deterministic=False,
+    ):
+        self.urls = None
+        self.urls_iterable = urls_iterable
+        self.nshards = nshards
+        self.worker_seed = wds.utils.pytorch_worker_seed if worker_seed is None else worker_seed
+        self.deterministic = deterministic
+        self.epoch = -1
+
+    def __iter__(self):
+        if self.urls is None:
+            self.urls = [x for x in self.urls_iterable]
+
+        self.epoch += 1
+
+        if self.deterministic:
+            seed = wds.utils.make_seed(self.worker_seed(), self.epoch)
+        else:
+            seed = wds.utils.make_seed(
+                self.worker_seed(),
+                self.epoch,
+                os.getpid(),
+                time.time_ns(),
+                os.urandom(4),
+            )
+
+        self.rng = random.Random(seed)
+
+        for _ in range(self.nshards):
+            index = self.rng.randint(0, len(self.urls) - 1)
+
+            yield self.urls[index]
+
+
+class M4LaionDatasetStream(IterableDataset):
+    def __init__(self, iterable):
+        self.iterable = iterable
+
+    def __iter__(self):
+        # s3 handle is not fork safe, just create a new handle when the stream is created
+        s3 = s3fs.S3FileSystem()
+
+        for shard_url in self.iterable:
             with s3.open(shard_url, "rb") as f:
                 in_memory_stream = pa.input_stream(f)
                 try:
