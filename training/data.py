@@ -30,7 +30,7 @@ import s3fs
 import webdataset as wds
 from braceexpand import braceexpand
 from PIL import Image
-from torch.utils.data import DataLoader, default_collate
+from torch.utils.data import DataLoader, IterableDataset, default_collate
 from torchvision import transforms
 from transformers import PreTrainedTokenizer
 from webdataset.tariterators import (
@@ -293,12 +293,7 @@ class Text2ImageDataset:
         text_encoder_checkpoint: Optional[str] = None,
         use_filtered_dataset: bool = False,
         use_m4_laion_text_2_image_dataset: bool = False,
-        s3=None,
     ):
-        if use_m4_laion_text_2_image_dataset:
-            if s3 is not None:
-                raise ValueError(f"m4 laion text 2 image dataset requires an s3 fs instance")
-
         num_batches = math.ceil(num_train_examples / global_batch_size)
         num_worker_batches = math.ceil(num_train_examples / (global_batch_size * num_workers))  # per dataloader worker
         num_batches = num_worker_batches * num_workers
@@ -377,7 +372,7 @@ class Text2ImageDataset:
         else:
             train_shards_path_or_url = wds.ResampledShards(train_shards_path_or_url)
 
-            train_dataset = m4_laion_dataset_stream(train_shards_path_or_url, s3)
+            train_dataset = m4_laion_dataset_stream(train_shards_path_or_url)
 
             if use_filtered_dataset:
                 train_dataset = m4_laion_dataset_filter(train_dataset, min_size=256)
@@ -388,13 +383,15 @@ class Text2ImageDataset:
                 train_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
             )
             train_dataset = m4_laion_dataset_with_epoch(train_dataset, num_worker_batches)
+            train_dataset = M4LaionDataset(train_dataset)
 
-            eval_dataset = m4_laion_dataset_stream(eval_shards_path_or_url, s3)
+            eval_dataset = m4_laion_dataset_stream(eval_shards_path_or_url)
             eval_dataset = wds.split_by_worker(eval_dataset)
             eval_dataset = m4_laion_dataset_processing_pipeline(eval_dataset, transform, tokenize)
             eval_dataset = m4_laion_dataset_batched(
                 eval_dataset, per_gpu_batch_size, partial=False, collation_fn=default_collate
             )
+            eval_dataset = M4LaionDataset(eval_dataset)
 
         self._train_dataset = train_dataset
         self._train_dataloader = DataLoader(
@@ -437,7 +434,17 @@ class Text2ImageDataset:
         return self._eval_dataloader
 
 
-def m4_laion_shard_urls(s3):
+class M4LaionDataset(IterableDataset):
+    def __init__(self, iterable):
+        self.iterable = iterable
+
+    def __iter__(self):
+        return iter(self.iterable)
+
+
+def m4_laion_shard_urls():
+    s3 = s3fs.S3FileSystem()
+
     split_urls = braceexpand("s3://m4-datasets/LAION_data/laion_dataset_filtered_dedup/{0..199}")
 
     for split_url in split_urls:
@@ -445,8 +452,15 @@ def m4_laion_shard_urls(s3):
             yield shard_url
 
 
-def m4_laion_dataset_stream(shard_urls, s3):
+def m4_laion_dataset_stream(shard_urls):
+    # s3 handle is not fork safe, just create a new handle when the stream is created
+    s3 = s3fs.S3FileSystem()
+
     for shard_url in shard_urls:
+        # HACK dealing with wds.ResampledShards wrapping result in a dict
+        if isinstance(shard_url, dict):
+            shard_url = shard_url["url"]
+
         with s3.open(shard_url, "rb") as f:
             in_memory_stream = pa.input_stream(f)
             opened_stream = pa.ipc.open_stream(in_memory_stream)

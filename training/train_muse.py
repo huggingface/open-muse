@@ -25,10 +25,8 @@ from typing import Any, List, Tuple, Union
 
 import numpy as np
 import plotly.express as px
-import s3fs
 import torch
 import torch.nn.functional as F
-import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
@@ -47,6 +45,7 @@ from transformers import (
 
 import muse
 import muse.training_utils
+import wandb
 from muse import (
     MOVQ,
     EMAModel,
@@ -436,15 +435,13 @@ def main():
     else:
         dataset_cls = Text2ImageDataset
 
-    use_m4_laion_text_2_image_dataset = dataset_config.get(use_m4_laion_text_2_image_dataset, False)
+    use_m4_laion_text_2_image_dataset = dataset_config.get("use_m4_laion_text_2_image_dataset", False)
 
-    if dataset_config.use_m4_laion_text_2_image_dataset:
-        s3 = s3fs.S3FileSystem()
-        all_shards = m4_laion_shard_urls(s3)
+    if use_m4_laion_text_2_image_dataset:
+        all_shards = [x for x in m4_laion_shard_urls()]
         train_shards_path_or_url = all_shards[:-2]
         eval_shards_path_or_url = all_shards[-2:]
     else:
-        s3 = None
         train_shards_path_or_url = dataset_config.train_shards_path_or_url
         eval_shards_path_or_url = dataset_config.eval_shards_path_or_url
 
@@ -467,8 +464,7 @@ def main():
         vae_checkpoint=config.model.vq_model.pretrained,
         text_encoder_checkpoint=config.model.text_encoder.pretrained,
         use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
-        use_m4_laion_text_2_image_dataset=False,
-        s3=s3,
+        use_m4_laion_text_2_image_dataset=use_m4_laion_text_2_image_dataset,
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
