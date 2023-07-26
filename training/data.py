@@ -92,17 +92,17 @@ class ImageNetTransform:
     def __init__(self, resolution, center_crop=True, random_flip=False):
         self.train_transform = transforms.Compose(
             [
-                transforms.ToTensor(),
                 transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
                 (transforms.CenterCrop(resolution) if center_crop else transforms.RandomCrop(resolution)),
                 transforms.RandomHorizontalFlip() if random_flip else transforms.Lambda(lambda x: x),
+                transforms.ToTensor(),
             ]
         )
         self.eval_transform = transforms.Compose(
             [
-                transforms.ToTensor(),
                 transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR),
                 transforms.CenterCrop(resolution),
+                transforms.ToTensor(),
             ]
         )
 
