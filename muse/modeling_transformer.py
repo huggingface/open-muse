@@ -1498,7 +1498,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_num_heads = [None] * len(block_out_channels)
         elif isinstance(block_num_heads, int):
             block_num_heads = [block_num_heads] * len(block_out_channels)
-        
+
         self.register_to_config(block_has_attention=tuple(block_has_attention))
         self.register_to_config(block_num_heads=tuple(block_num_heads))
 
@@ -1845,8 +1845,128 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if isinstance(module, (DownsampleBlock, UpsampleBlock)):
             module.gradient_checkpointing = value
 
-    def generate(self):
-        pass
+    def generate(
+        self,
+        input_ids: torch.LongTensor = None,
+        class_ids: torch.LongTensor = None,
+        encoder_hidden_states: torch.FloatTensor = None,
+        negative_embeds: torch.FloatTensor = None,
+        empty_embeds: torch.FloatTensor = None,
+        temperature=1.0,
+        topk_filter_thres=0.9,
+        can_remask_prev_masked=False,  # TODO: implement this
+        timesteps=18,  # ideal number of steps is 18 in maskgit paper
+        guidance_scale=8,
+        guidance_schedule=None,
+        noise_schedule: Callable = cosine_schedule,
+        use_tqdm=True,
+        **kwargs,
+    ):
+        # begin with all image token ids masked
+        mask_token_id = self.config.mask_token_id
+        seq_len = self.config.num_vq_tokens
+
+        batch_size = len(class_ids) if class_ids is not None else encoder_hidden_states.shape[0]
+        shape = (batch_size, seq_len)
+
+        # shift the class ids by the codebook size
+        if class_ids is not None:
+            class_ids += self.config.codebook_size
+        # initialize with all image tokens masked
+        if input_ids is not None:
+            input_ids = torch.ones(shape, dtype=torch.long, device=self.device) * mask_token_id
+
+        if isinstance(temperature, tuple):
+            temperatures = torch.linspace(temperature[0], temperature[1], timesteps)
+        else:
+            temperatures = torch.linspace(temperature, 0.01, timesteps)
+        # reverse the temperatures
+        temperatures = temperatures.flip(0)
+
+        if guidance_schedule == "linear":
+            guidance_scales = torch.linspace(0, guidance_scale, timesteps)
+        elif guidance_schedule == "cosine":
+            guidance_scales = []
+            for step in range(timesteps):
+                ratio = 1.0 * (step + 1) / timesteps
+                scale = cosine_schedule(torch.tensor(1 - ratio)) * guidance_scale
+                guidance_scales.append(scale.floor())
+            guidance_scales = torch.tensor(guidance_scales)
+        else:
+            guidance_scales = torch.ones(timesteps) * guidance_scale
+        # reverse the guidance scales
+        guidance_scales = guidance_scales.flip(0)
+
+        # classifier free guidance
+        if encoder_hidden_states is not None and guidance_scale > 0:
+            if negative_embeds is None:
+                if self.config.use_empty_embeds_for_uncond:
+                    uncond_encoder_states = empty_embeds.expand(batch_size, -1, -1)
+                elif self.config.learn_uncond_embeds:
+                    uncond_encoder_states = self.uncond_embeds.unsqueeze(0).expand(batch_size, -1, -1)
+                else:
+                    uncond_encoder_states = torch.zeros_like(encoder_hidden_states)
+            else:
+                uncond_encoder_states = negative_embeds
+            condition = torch.cat([encoder_hidden_states, uncond_encoder_states])
+            model_conds = {"encoder_hidden_states": condition}
+
+            if cond_embeds is not None:
+                uncond_embeds = torch.zeros_like(cond_embeds)
+                cond_embeds = torch.cat([cond_embeds, uncond_embeds])
+                model_conds["cond_embeds"] = cond_embeds
+
+        scores = torch.zeros(shape, dtype=torch.float32, device=self.device)
+
+        starting_temperature = temperature
+
+        iterate_over = zip(torch.linspace(0, 1, timesteps, device=self.device), reversed(range(timesteps)))
+
+        if use_tqdm:
+            iterate_over = tqdm(iterate_over, total=timesteps)
+
+        for timestep, steps_until_x0 in iterate_over:
+            rand_mask_prob = noise_schedule(timestep)
+            num_token_masked = max(int((rand_mask_prob * seq_len).item()), 1)
+
+            masked_indices = scores.topk(num_token_masked, dim=-1).indices
+            input_ids = input_ids.scatter(1, masked_indices, mask_token_id)
+
+            # prepend class token to input_ids
+            if class_ids is not None:
+                input_ids = torch.cat([class_ids[:, None], input_ids], dim=1)
+
+            # classifier free guidance
+            if encoder_hidden_states is not None and guidance_scale > 0:
+                model_input = torch.cat([input_ids] * 2)
+                cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
+                cond_logits = cond_logits[..., : self.config.codebook_size]
+                uncond_logits = uncond_logits[..., : self.config.codebook_size]
+                logits = uncond_logits + guidance_scales[steps_until_x0] * (cond_logits - uncond_logits)
+            else:
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
+                logits = logits[..., : self.config.codebook_size]
+
+            # remove class token
+            if class_ids is not None:
+                input_ids = input_ids[:, 1:]
+                logits = logits[:, 1:]
+
+            filtered_logits = top_k(logits, topk_filter_thres)
+
+            temperature = temperatures[steps_until_x0]
+
+            pred_ids = gumbel_sample(filtered_logits, temperature=temperature, dim=-1)
+
+            is_mask = input_ids == mask_token_id
+
+            input_ids = torch.where(is_mask, pred_ids, input_ids)
+
+            probs_without_temperature = F.softmax(logits, dim=-1)
+
+            scores = 1 - probs_without_temperature.gather(2, pred_ids[..., None])
+            scores = rearrange(scores, "... 1 -> ...")  # TODO: use torch
+        return input_ids
 
     def generate2(
         self,
