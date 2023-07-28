@@ -826,7 +826,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             loss_weight=loss_weight,
             empty_embeds=empty_embeds,
             quant_embeds=quant_embeds,
-            mask=mask,
+            quant_embeds_mask=mask,
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
