@@ -1796,6 +1796,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             # mask is of shape (batch_size, seq_len)
             # quant_embeds is of shape (batch_size, quant_embed_dim, height, width)
             # mask_embeddings is of shape (quant_embed_dim,)
+            print(mask.shape)
             batch_size, seq_len = mask.shape
             mask = mask.view(batch_size, int(seq_len**0.5), int(seq_len**0.5))
             mask_embeddings = self.mask_embeddings.view(1, -1, 1, 1).expand_as(quant_embeds)
