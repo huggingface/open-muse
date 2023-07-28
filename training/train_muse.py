@@ -184,7 +184,7 @@ def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, 
         labels = torch.where(mask, image_tokens, -100)
         loss_weight = None
 
-    return input_ids, labels, loss_weight, mask_prob
+    return input_ids, labels, loss_weight, mask_prob, mask
 
 
 class AverageMeter(object):
@@ -549,6 +549,7 @@ def main():
         if is_pre_encode:
             image_tokens = pixel_values_or_image_ids
             soft_targets = None
+            quant_embeds = None
         else:
             if config.training.use_soft_code_target and is_train:
                 soft_targets, image_tokens = vq_model.get_soft_code(
@@ -556,6 +557,9 @@ def main():
                 )
             else:
                 image_tokens = vq_model.get_code(pixel_values)
+                quant_embeds = None
+                if config.model.transformer.use_quant_embeds:
+                    quant_embeds = vq_model.get_codebook_entry(image_tokens)
                 soft_targets = None
 
         if not is_pre_encode:
@@ -571,14 +575,14 @@ def main():
             clip_embeds = None
 
         # create MLM mask and labels
-        input_ids, labels, loss_weight, mask_prob = mask_or_random_replace_tokens(
+        input_ids, labels, loss_weight, mask_prob, mask = mask_or_random_replace_tokens(
             image_tokens,
             mask_id,
             config,
             mask_schedule=mask_schedule,
             is_train=is_train,
         )
-        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds, quant_embeds, mask
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -603,6 +607,8 @@ def main():
                 mask_prob,
                 loss_weight,
                 clip_embeds,
+                quant_embeds,
+                mask
             ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate)
 
             # log the inputs for the first step of the first epoch
@@ -620,6 +626,7 @@ def main():
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
+                    input_ids = None if quant_embeds is not None else input_ids
                     logits, loss = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
@@ -629,6 +636,8 @@ def main():
                         cond_embeds=clip_embeds,
                         loss_weight=loss_weight,
                         empty_embeds=empty_embeds,
+                        quant_embeds=quant_embeds,
+                        mask=mask,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -805,9 +814,10 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds = prepare_inputs_and_labels(
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds, quant_embeds, mask = prepare_inputs_and_labels(
             pixel_values, input_ids, is_train=False
         )
+        input_ids = None if quant_embeds is not None else input_ids
         _, loss = model(
             input_ids=input_ids,
             encoder_hidden_states=encoder_hidden_states,
@@ -815,6 +825,8 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             cond_embeds=clip_embeds,
             loss_weight=loss_weight,
             empty_embeds=empty_embeds,
+            quant_embeds=quant_embeds,
+            mask=mask,
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
@@ -881,6 +893,11 @@ def generate_images(
 
     if config.training.get("pre_encode", False):
         del text_encoder
+    
+    def get_quant_embeds(code):
+        with torch.no_grad():
+            q = vq_model.quantize.get_codebook_entry(code)
+        return q
 
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
@@ -894,6 +911,7 @@ def generate_images(
             noise_schedule=mask_schedule,
             noise_type=config.training.get("noise_type", "mask"),
             predict_all_tokens=config.training.get("predict_all_tokens", False),
+            get_quant_embeds=get_quant_embeds,
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
