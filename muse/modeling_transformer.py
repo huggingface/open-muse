@@ -1754,8 +1754,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         elif input_ids is not None and quant_embeds is not None:
             raise ValueError("Only one of `input_ids` or `quant_embeds` should be provided.")
 
-        if quant_embeds is not None and mask is None:
-            raise ValueError("If `quant_embeds` is provided, `mask` should be provided.")
+        if quant_embeds is not None and quant_embeds_mask is None:
+            raise ValueError("If `quant_embeds` is provided, `quant_embeds_mask` should be provided.")
 
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
