@@ -896,7 +896,7 @@ def generate_images(
     
     def get_quant_embeds(code):
         with torch.no_grad():
-            q = vq_model.quantize.quantize.get_codebook_entry(code)
+            q = vq_model.quantize.get_codebook_entry(code)
         return q
 
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
