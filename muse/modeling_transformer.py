@@ -969,6 +969,8 @@ class ConvEmbed(nn.Module):
         layer_norm_embedddings=False,
         layer_norm_eps=1e-5,
         use_position_embeddings=True,
+        use_quant_embeds=False,
+        quant_embed_dim=None,
         use_bias=False,
     ):
         super().__init__()
@@ -978,26 +980,41 @@ class ConvEmbed(nn.Module):
         self.use_position_embeddings = use_position_embeddings
         self.layer_norm_embedddings = layer_norm_embedddings
 
-        self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
+
+        if not use_quant_embeds:        
+            self.embeddings = nn.Embedding(vocab_size, embedding_size)
+            self.layer_norm = norm_cls(embedding_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
+        else:
+            self.quant_embeds_proj = nn.Conv2d(quant_embed_dim, embedding_size, kernel_size=1, bias=use_bias)
+            self.layer_norm = Norm2D(
+                embedding_size, eps=layer_norm_eps, norm_type=norm_type, elementwise_affine=ln_elementwise_affine
+            )
+
         if patch_size > 1:
             self.pixel_unshuffle = nn.PixelUnshuffle(patch_size)
+        
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
+        
         if use_position_embeddings:
             self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
+        
         if self.layer_norm_embedddings:
             self.embeddings_ln = Norm2D(
                 hidden_size, eps=layer_norm_eps, norm_type=norm_type, elementwise_affine=ln_elementwise_affine
             )
 
-    def forward(self, input_ids):
-        batch_size, seq_length = input_ids.shape
-        height, width = int(seq_length**0.5), int(seq_length**0.5)
-        input_ids = input_ids.view(-1, height, width)
-        embeddings = self.embeddings(input_ids)
-        embeddings = self.layer_norm(embeddings)
-        embeddings = embeddings.permute(0, 3, 1, 2)
+    def forward(self, input_ids, quant_states=None):
+        if quant_states is None:
+            batch_size, seq_length = input_ids.shape
+            height, width = int(seq_length**0.5), int(seq_length**0.5)
+            input_ids = input_ids.view(-1, height, width)
+            embeddings = self.embeddings(input_ids)
+            embeddings = self.layer_norm(embeddings)
+            embeddings = embeddings.permute(0, 3, 1, 2)
+        else:
+            embeddings = self.quant_embeds_proj(embeddings)
+            embeddings = self.layer_norm(quant_states)
         if self.patch_size > 1:
             embeddings = self.pixel_unshuffle(embeddings)
         embeddings = self.conv(embeddings)
@@ -1471,6 +1488,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         learn_uncond_embeds=False,
         use_vannilla_resblock=False,
         ffn_type="glu",
+        use_quant_embeds=False,
+        quant_embed_dim=None,
         **kwargs,
     ):
         super().__init__()
@@ -1527,8 +1546,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             layer_norm_eps=layer_norm_eps,
             ln_elementwise_affine=ln_elementwise_affine,
             use_position_embeddings=use_position_embeddings,
+            use_quant_embeds=use_quant_embeds,
+            quant_embed_dim=quant_embed_dim,
             use_bias=use_bias,
         )
+
+        if use_quant_embeds:
+            self.mask_embeddings = nn.Parameter(torch.randn(size=(quant_embed_dim,), requires_grad=True))
+            nn.init.normal_(self.mask_embeddings, std=0.02)
 
         # Condition embeddings
         if add_cond_embeds:
@@ -1711,7 +1736,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
     def forward(
         self,
-        input_ids,
+        input_ids=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         labels=None,
@@ -1720,7 +1745,17 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         cond_embeds=None,
         loss_weight=None,
         empty_embeds=None,
+        quant_embeds=None,
+        mask=None,
     ):
+        if input_ids is None and quant_embeds is None:
+            raise ValueError("Either `input_ids` or `quant_embeds` should be provided.")
+        elif input_ids is not None and quant_embeds is not None:
+            raise ValueError("Only one of `input_ids` or `quant_embeds` should be provided.")
+
+        if quant_embeds is not None and mask is None:
+            raise ValueError("If `quant_embeds` is provided, `mask` should be provided.")
+
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
 
@@ -1754,8 +1789,18 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
         if cond_embeds is not None:
             cond_embeds = self.cond_embed(cond_embeds)
+        
+        if quant_embeds is not None:
+            # add mask_embeddings in quant_embeds using mask
+            # mask is of shape (batch_size, seq_len)
+            # quant_embeds is of shape (batch_size, quant_embed_dim, height, width)
+            # mask_embeddings is of shape (quant_embed_dim,)
+            batch_size, seq_len = mask.shape
+            mask = mask.view(batch_size, seq_len**0.5, seq_len**0.5)
+            mask_embeddings = self.mask_embeddings.view(1, -1, 1, 1).expand_as(quant_embeds)
+            quant_embeds = torch.where(mask.unsqueeze(1).bool(), mask_embeddings, quant_embeds)
 
-        hidden_states = self.embed(input_ids)
+        hidden_states = self.embed(input_ids, quant_embeds=quant_embeds)
 
         down_block_res_samples = (hidden_states,)
         for down_block in self.down_blocks:
@@ -1983,6 +2028,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         noise_schedule=cosine_schedule,
         noise_type="mask",  # can be "mask" or "random_replace"
         predict_all_tokens=False,
+        get_quant_embeds: Callable = None,
         generator: torch.Generator = None,
         return_intermediate=False,
         **kwargs,
@@ -2050,6 +2096,17 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 cond_embeds = torch.cat([cond_embeds, uncond_embeds])
                 model_conds["cond_embeds"] = cond_embeds
 
+
+        if self.config.use_quant_embeds:
+            if get_quant_embeds is None:
+                raise ValueError("If `use_quant_embeds` is True, `get_quant_embeds` should be provided.")
+            size = (batch_size, self.config.quant_embed_dim, seq_len ** 0.5, seq_len ** 0.5)
+            quant_embeds = torch.randn(size, device=self.device)
+            input_ids_or_quant_embeds = quant_embeds
+            mask = torch.zeros(batch_size, seq_len ** 0.5, seq_len ** 0.5, device=self.device)
+        else:
+            input_ids_or_quant_embeds = input_ids
+
         for step in range(timesteps):
             # prepend class token to input_ids
             if class_ids is not None:
@@ -2057,8 +2114,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
-                model_input = torch.cat([input_ids] * 2)
-                cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
+                model_input = torch.cat([input_ids_or_quant_embeds] * 2)
+                if self.config.use_quant_embeds:
+                    cond_logits, uncond_logits = self(quant_embeds=model_input, mask=mask, **model_conds).chunk(2)
+                else:
+                    cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
@@ -2086,6 +2146,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
 
                 # Just updates the masked tokens.
                 unknown_map = input_ids == mask_token_id
+                prev_sampled_ids = sampled_ids.clone()
                 sampled_ids = torch.where(unknown_map, sampled_ids, input_ids)
                 # Defines the mask ratio for the next round. The number to mask out is
                 # determined by mask_ratio * unknown_number_in_the_beginning.
@@ -2110,7 +2171,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     temperature = temperatures[step]
                     masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
                     # Masks tokens with lower confidence.
-                    input_ids = torch.where(masking, mask_token_id, sampled_ids)
+                    if self.config.use_quant_embeds:
+                        input_ids_or_quant_embeds = get_quant_embeds(prev_sampled_ids)
+                        mask = masking
+                        input_ids = torch.where(masking, mask_token_id, quant_embeds)
+                        input_ids_or_quant_embeds
+                    else:
+                        input_ids = torch.where(masking, mask_token_id, sampled_ids)
+                        input_ids_or_quant_embeds = input_ids
                 else:
                     batch_size, seq_len = input_ids.shape
                     batch_randperm = torch.rand(batch_size, seq_len, device=input_ids.device).argsort(dim=-1)
