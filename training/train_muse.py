@@ -559,7 +559,7 @@ def main():
                 image_tokens = vq_model.get_code(pixel_values)
                 quant_embeds = None
                 if config.model.transformer.use_quant_embeds:
-                    quant_embeds = vq_model.get_codebook_entry(image_tokens)
+                    quant_embeds = vq_model.quantize.get_codebook_entry(image_tokens)
                 soft_targets = None
 
         if not is_pre_encode:
@@ -896,7 +896,7 @@ def generate_images(
     
     def get_quant_embeds(code):
         with torch.no_grad():
-            q = vq_model.quantize.get_codebook_entry(code)
+            q = vq_model.quantize.quantize.get_codebook_entry(code)
         return q
 
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
