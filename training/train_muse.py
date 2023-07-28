@@ -638,7 +638,7 @@ def main():
                         loss_weight=loss_weight,
                         empty_embeds=empty_embeds,
                         quant_embeds=quant_embeds,
-                        mask=mask,
+                        quant_embeds_mask=mask,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).

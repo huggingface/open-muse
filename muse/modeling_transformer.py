@@ -1747,7 +1747,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         loss_weight=None,
         empty_embeds=None,
         quant_embeds=None,
-        mask=None,
+        quant_embeds_mask=None,
     ):
         if input_ids is None and quant_embeds is None:
             raise ValueError("Either `input_ids` or `quant_embeds` should be provided.")
@@ -1796,11 +1796,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             # mask is of shape (batch_size, seq_len)
             # quant_embeds is of shape (batch_size, quant_embed_dim, height, width)
             # mask_embeddings is of shape (quant_embed_dim,)
-            print(mask.shape)
-            batch_size, seq_len = mask.shape
-            mask = mask.view(batch_size, int(seq_len**0.5), int(seq_len**0.5))
+            batch_size, seq_len = quant_embeds_mask.shape
+            quant_embeds_mask = quant_embeds_mask.view(batch_size, int(seq_len**0.5), int(seq_len**0.5))
             mask_embeddings = self.mask_embeddings.view(1, -1, 1, 1).expand_as(quant_embeds)
-            quant_embeds = torch.where(mask.unsqueeze(1).bool(), mask_embeddings, quant_embeds)
+            quant_embeds = torch.where(quant_embeds_mask.unsqueeze(1).bool(), mask_embeddings, quant_embeds)
 
         hidden_states = self.embed(input_ids, quant_states=quant_embeds)
 
@@ -2117,7 +2116,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             if encoder_hidden_states is not None and guidance_scale > 0:
                 model_input = torch.cat([input_ids_or_quant_embeds] * 2)
                 if self.config.use_quant_embeds:
-                    cond_logits, uncond_logits = self(quant_embeds=model_input, mask=mask, **model_conds).chunk(2)
+                    cond_logits, uncond_logits = self(quant_embeds=model_input, quant_embeds_mask=mask, **model_conds).chunk(2)
                 else:
                     cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
