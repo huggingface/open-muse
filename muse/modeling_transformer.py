@@ -2116,7 +2116,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             if encoder_hidden_states is not None and guidance_scale > 0:
                 model_input = torch.cat([input_ids_or_quant_embeds] * 2)
                 if self.config.use_quant_embeds:
-                    cond_logits, uncond_logits = self(quant_embeds=model_input, quant_embeds_mask=mask, **model_conds).chunk(2)
+                    quant_embeds_mask = torch.cat([mask] * 2)
+                    cond_logits, uncond_logits = self(quant_embeds=model_input, quant_embeds_mask=quant_embeds_mask, **model_conds).chunk(2)
                 else:
                     cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
