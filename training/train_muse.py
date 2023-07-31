@@ -27,7 +27,6 @@ import numpy as np
 import plotly.express as px
 import torch
 import torch.nn.functional as F
-import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
@@ -46,6 +45,7 @@ from transformers import (
 
 import muse
 import muse.training_utils
+import wandb
 from muse import (
     MOVQ,
     EMAModel,
@@ -391,6 +391,7 @@ def main():
             "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
             "weight_decay": 0.0,
         },
+        {"params": text_encoder.parameters(), "lr": optimizer_config.learning_rate // 2},
     ]
 
     optimizer = optimizer_cls(
@@ -467,7 +468,7 @@ def main():
     # Prepare everything with accelerator
     logger.info("Preparing model, optimizer and dataloaders")
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
-    model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
+    model, text_encoder, optimizer, lr_scheduler = accelerator.prepare(model, text_encoder, optimizer, lr_scheduler)
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
@@ -479,7 +480,7 @@ def main():
         weight_dtype = torch.bfloat16
 
     if not is_pre_encode:
-        text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        # text_encoder.to(device=accelerator.device, dtype=weight_dtype)
         vq_model.to(device=accelerator.device)
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
@@ -587,6 +588,7 @@ def main():
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
+        text_encoder.train()
         for batch in train_dataloader:
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
             pixel_values, input_ids = batch
@@ -730,7 +732,7 @@ def main():
 
                 # Save model checkpoint
                 if (global_step + 1) % config.experiment.save_every == 0:
-                    save_checkpoint(model, config, accelerator, global_step + 1)
+                    save_checkpoint(model, text_encoder, config, accelerator, global_step + 1)
 
                 # Evaluate model on main process
                 if (global_step + 1) % config.experiment.eval_every == 0 and accelerator.is_main_process:
@@ -783,7 +785,7 @@ def main():
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
         validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
-    save_checkpoint(model, config, accelerator, global_step)
+    save_checkpoint(model, text_encoder, config, accelerator, global_step)
 
     # Save the final trained checkpoint
     if accelerator.is_main_process:
@@ -917,12 +919,13 @@ def generate_images(
     wandb.log({"generated_images": wandb_images}, step=global_step)
 
 
-def save_checkpoint(model, config, accelerator, global_step):
+def save_checkpoint(model, text_encoder, config, accelerator, global_step):
     save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
 
     # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
     # XXX: could also make this conditional on deepspeed
     state_dict = accelerator.get_state_dict(model)
+    text_encoder_state_dict = accelerator.get_state_dict(text_encoder)
 
     if accelerator.is_main_process:
         unwrapped_model = accelerator.unwrap_model(model)
@@ -931,6 +934,14 @@ def save_checkpoint(model, config, accelerator, global_step):
             save_function=accelerator.save,
             state_dict=state_dict,
         )
+
+        unwrapped_text_encoder = accelerator.unwrap_model(text_encoder)
+        unwrapped_text_encoder.save_pretrained(
+            save_path / "unwrapped_textencoder",
+            save_function=accelerator.save,
+            state_dict=text_encoder_state_dict,
+        )
+
         json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
         logger.info(f"Saved state to {save_path}")
 
