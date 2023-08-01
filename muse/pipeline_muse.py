@@ -55,7 +55,8 @@ class PipelineMuse:
         if not self.is_class_conditioned:
             self.text_encoder.to(device, dtype=dtype)
         self.vae.to(device, dtype=dtype)
-        self.transformer.to(device, dtype=dtype)
+        if self.transformer.config.get("quantization_config", None) is None:  # hacky
+            self.transformer.to(device, dtype=dtype)
         self.device = device
         self.dtype = dtype
         return self
