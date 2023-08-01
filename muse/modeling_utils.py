@@ -37,6 +37,12 @@ from torch import Tensor, device
 
 from . import __version__, logging
 
+try:
+    from accelerate import BnbQuantizationConfig, load_and_quantize_model
+    SUPPORT_8_BIT = True
+except ImportError:
+    SUPPORT_8_BIT = False
+
 logger = logging.get_logger(__name__)
 
 
@@ -536,9 +542,11 @@ class ModelMixin(torch.nn.Module):
                     **kwargs,
                 )
                 model = cls.from_config(config, **unused_kwargs)
-
-            # if device_map is None, load the state dict and move the params from meta device to the cpu
-            if device_map is None:
+            
+            if config.get("quantization_config", None) is not None and SUPPORT_8_BIT:
+                quantization_config = BnbQuantizationConfig(**config["quantization_config"])
+                model = load_and_quantize_model(model, quantization_config, weights_location=model_file, device_map="auto", no_split_module_classes=["MaskGiTUViT"])
+            elif device_map is None: # if device_map is None, load the state dict and move the params from meta device to the cpu
                 param_device = "cpu"
                 state_dict = load_state_dict(model_file)
                 # move the params from meta device to cpu
