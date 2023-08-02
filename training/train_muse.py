@@ -544,6 +544,7 @@ def main():
         pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
         text_input_ids_or_embeds: Union[torch.LongTensor, torch.LongTensor],
         min_masking_rate: float = 0.0,
+        batch: Any = None,
         is_train: bool = True,
     ):
         if is_pre_encode:
@@ -566,6 +567,19 @@ def main():
             else:
                 encoder_hidden_states = text_encoder(text_input_ids_or_embeds)[0]
                 clip_embeds = None
+
+            if config.model.transformer.get("add_micro_cond_embeds", False):
+                original_sizes = list(map(list, zip(*batch["orig_size"])))
+                crop_coords = list(map(list, zip(*batch["crop_coords"])))
+                aesthetic_scores = batch["aesthetic_score"]
+                micro_conds = torch.cat(
+                    [torch.tensor(original_sizes), torch.tensor(crop_coords), aesthetic_scores.unsqueeze(-1)], dim=-1
+                )
+                micro_conds = micro_conds.to(
+                    encoder_hidden_states.device, dtype=encoder_hidden_states.dtype, non_blocking=True
+                )
+            else:
+                micro_conds = None
         else:
             encoder_hidden_states = text_input_ids_or_embeds
             clip_embeds = None
@@ -578,7 +592,7 @@ def main():
             mask_schedule=mask_schedule,
             is_train=is_train,
         )
-        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds
+        return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds, micro_conds
 
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
@@ -589,7 +603,7 @@ def main():
         model.train()
         for batch in train_dataloader:
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
-            pixel_values, input_ids = batch
+            pixel_values, input_ids = batch["image"], batch["input_ids"]
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
@@ -603,7 +617,8 @@ def main():
                 mask_prob,
                 loss_weight,
                 clip_embeds,
-            ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate)
+                micro_conds,
+            ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate, batch=batch)
 
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
@@ -629,6 +644,7 @@ def main():
                         cond_embeds=clip_embeds,
                         loss_weight=loss_weight,
                         empty_embeds=empty_embeds,
+                        micro_conds=micro_conds,
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -802,11 +818,11 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
     eval_loss = 0
     now = time.time()
     for i, batch in enumerate(eval_dataloader):
-        pixel_values, input_ids = batch
+        pixel_values, input_ids = batch["image"], batch["input_ids"]
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds = prepare_inputs_and_labels(
-            pixel_values, input_ids, is_train=False
+        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds, micro_conds = (
+            prepare_inputs_and_labels(pixel_values, input_ids, batch=batch, is_train=False)
         )
         _, loss = model(
             input_ids=input_ids,
@@ -815,6 +831,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             cond_embeds=clip_embeds,
             loss_weight=loss_weight,
             empty_embeds=empty_embeds,
+            micro_conds=micro_conds,
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
@@ -879,6 +896,12 @@ def generate_images(
         encoder_hidden_states = text_encoder(input_ids.to(accelerator.device)).last_hidden_state
         clip_embeds = None
 
+    if config.model.transformer.get("add_micro_cond_embeds", False):
+        micro_conds = torch.tensor(
+            [256, 256, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+        )
+        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
+
     if config.training.get("pre_encode", False):
         del text_encoder
 
@@ -888,6 +911,7 @@ def generate_images(
             encoder_hidden_states=encoder_hidden_states,
             cond_embeds=clip_embeds,
             empty_embeds=empty_embeds,
+            micro_conds=micro_conds,
             guidance_scale=config.training.guidance_scale,
             temperature=config.training.get("generation_temperature", 1.0),
             timesteps=config.training.generation_timesteps,
