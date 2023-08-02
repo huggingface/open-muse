@@ -334,6 +334,7 @@ class ResBlock(nn.Module):
         add_cond_embeds=False,
         cond_embed_dim=None,
         use_bias=False,
+        res_ffn_factor=4,
         **kwargs,
     ):
         super().__init__()
@@ -349,11 +350,11 @@ class ResBlock(nn.Module):
             in_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
         )
         self.channelwise = nn.Sequential(
-            nn.Linear(in_channels, in_channels * 4, bias=use_bias),
+            nn.Linear(in_channels, in_channels * res_ffn_factor, bias=use_bias),
             nn.GELU(),
-            GlobalResponseNorm(in_channels * 4),
+            GlobalResponseNorm(in_channels * res_ffn_factor),
             nn.Dropout(dropout),
-            nn.Linear(in_channels * 4, in_channels, bias=use_bias),
+            nn.Linear(in_channels * res_ffn_factor, in_channels, bias=use_bias),
         )
 
         if add_cond_embeds:
@@ -426,6 +427,7 @@ class DownsampleBlock(nn.Module):
         skip_channels=None,
         num_res_blocks=4,
         kernel_size=3,
+        res_ffn_factor=4,
         dropout=0.0,
         norm_type="layernorm",
         ln_elementwise_affine=True,
@@ -468,6 +470,7 @@ class DownsampleBlock(nn.Module):
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
                 for _ in range(num_res_blocks)
             ]
@@ -527,6 +530,7 @@ class UpsampleBlock(nn.Module):
         skip_channels=None,
         num_res_blocks=4,
         kernel_size=3,
+        res_ffn_factor=4,
         dropout=0.0,
         norm_type="layernorm",
         ln_elementwise_affine=True,
@@ -557,6 +561,7 @@ class UpsampleBlock(nn.Module):
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
                 for i in range(num_res_blocks)
             ]
@@ -1495,6 +1500,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         learn_uncond_embeds=False,
         use_vannilla_resblock=False,
         ffn_type="glu",
+        res_ffn_factor=4,
         **kwargs,
     ):
         super().__init__()
@@ -1605,6 +1611,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     num_heads=block_num_heads[i],
                     encoder_hidden_size=encoder_hidden_size,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
             )
 
@@ -1684,6 +1691,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     num_heads=reversed_block_num_heads[i],
                     encoder_hidden_size=encoder_hidden_size,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
             )
 
