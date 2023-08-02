@@ -486,7 +486,7 @@ def main():
 
     if not is_pre_encode and config.model.transformer.get("use_empty_embeds_for_uncond", False):
         empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
-        outputs = text_encoder(empty_input)
+        outputs = text_encoder(empty_input, output_hidden_states=True)
         if config.model.transformer.get("add_cond_embeds", False):
             empty_embeds = outputs.hidden_states[-2]
             empty_clip_embeds = outputs[0]
