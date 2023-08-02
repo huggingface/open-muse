@@ -1762,6 +1762,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         cond_embeds=None,
         loss_weight=None,
         empty_embeds=None,
+        empty_cond_embeds=None,
         micro_conds=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
@@ -1792,7 +1793,12 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             else:
                 encoder_hidden_states = encoder_hidden_states * mask
             if cond_embeds is not None:
-                cond_embeds = cond_embeds * mask.squeeze(-1)
+                if self.config.use_empty_embeds_for_uncond:
+                    # empty_cond_embeds is of shape (1, hidden_size) expand it to batch size
+                    empty_cond_embeds = empty_cond_embeds.expand(batch_size, -1)
+                    cond_embeds = torch.where((cond_embeds * mask.squeeze(-1)).bool(), cond_embeds, empty_cond_embeds)
+                else:
+                    cond_embeds = cond_embeds * mask.squeeze(-1)
 
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
@@ -2033,6 +2039,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         cond_embeds: torch.FloatTensor = None,
         micro_conds: torch.FloatTensor = None,
         empty_embeds: torch.FloatTensor = None,
+        empty_cond_embeds: torch.FloatTensor = None,
         negative_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
@@ -2109,7 +2116,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             model_conds = {"encoder_hidden_states": condition}
 
             if cond_embeds is not None:
-                uncond_embeds = torch.zeros_like(cond_embeds)
+                if self.config.use_empty_embeds_for_uncond:
+                    uncond_embeds = empty_cond_embeds.expand(batch_size, -1)
+                else:
+                    uncond_embeds = torch.zeros_like(cond_embeds)
                 cond_embeds = torch.cat([cond_embeds, uncond_embeds])
                 model_conds["cond_embeds"] = cond_embeds
 

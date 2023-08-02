@@ -486,9 +486,16 @@ def main():
 
     if not is_pre_encode and config.model.transformer.get("use_empty_embeds_for_uncond", False):
         empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
-        empty_embeds = text_encoder(empty_input).last_hidden_state
+        outputs = text_encoder(empty_input)
+        if config.model.transformer.get("add_cond_embeds", False):
+            empty_embeds = outputs.hidden_states[-2]
+            empty_clip_embeds = outputs[0]
+        else:
+            empty_embeds = outputs.last_hidden_state
+            empty_clip_embeds = None
     else:
         empty_embeds = None
+        empty_clip_embeds = None
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -644,6 +651,7 @@ def main():
                         cond_embeds=clip_embeds,
                         loss_weight=loss_weight,
                         empty_embeds=empty_embeds,
+                        empty_cond_embeds=empty_clip_embeds,
                         micro_conds=micro_conds,
                     )
 
@@ -780,6 +788,7 @@ def main():
                         global_step + 1,
                         mask_schedule=mask_schedule,
                         empty_embeds=empty_embeds,
+                        empty_clip_embeds=empty_clip_embeds,
                     )
 
                     if config.training.get("use_ema", False):
@@ -844,7 +853,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 
 @torch.no_grad()
 def generate_images(
-    model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule, empty_embeds=None
+    model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule, empty_embeds=None, empty_clip_embeds=None
 ):
     logger.info("Generating images...")
     model.eval()
@@ -911,6 +920,7 @@ def generate_images(
             encoder_hidden_states=encoder_hidden_states,
             cond_embeds=clip_embeds,
             empty_embeds=empty_embeds,
+            empty_cond_embeds=empty_clip_embeds,
             micro_conds=micro_conds,
             guidance_scale=config.training.guidance_scale,
             temperature=config.training.get("generation_temperature", 1.0),
