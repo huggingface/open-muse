@@ -350,11 +350,11 @@ class ResBlock(nn.Module):
             in_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
         )
         self.channelwise = nn.Sequential(
-            nn.Linear(in_channels, in_channels * res_ffn_factor, bias=use_bias),
+            nn.Linear(in_channels, int(in_channels * res_ffn_factor), bias=use_bias),
             nn.GELU(),
-            GlobalResponseNorm(in_channels * res_ffn_factor),
+            GlobalResponseNorm(int(in_channels * res_ffn_factor)),
             nn.Dropout(dropout),
-            nn.Linear(in_channels * res_ffn_factor, in_channels, bias=use_bias),
+            nn.Linear(int(in_channels * res_ffn_factor), in_channels, bias=use_bias),
         )
 
         if add_cond_embeds:
