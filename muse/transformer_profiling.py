@@ -3,13 +3,6 @@ import torch.nn.functional as F
 from apex.normalization import FusedRMSNorm as RMSNorm  # noqa
 from torch import nn
 
-try:
-    import xformers.ops as xops
-
-    is_xformers_available = True
-except ImportError:
-    is_xformers_available = False
-
 
 class MaskGitUVit(nn.Module):
     def __init__(
@@ -79,13 +72,6 @@ class MaskGitUVit(nn.Module):
             ],
         )
 
-        self.upsample = nn.ModuleDict(
-            dict(
-                norm=RMSNorm(hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine),
-                conv_transpose=nn.ConvTranspose2d(hidden_size, hidden_size, kernel_size=2, stride=2, bias=use_bias),
-            )
-        )
-
         self.out = nn.ModuleDict(
             dict(
                 conv1=nn.Conv2d(hidden_size, embedding_size, kernel_size=1, bias=use_bias),
@@ -128,11 +114,6 @@ class MaskGitUVit(nn.Module):
         hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
 
         hidden_states = self.up_blocks(hidden_states)
-
-        hidden_states = hidden_states.permute(0, 2, 3, 1)
-        hidden_states = self.upsample["norm"](hidden_states)
-        hidden_states = hidden_states.permute(0, 3, 1, 2)
-        hidden_states = self.upsample["conv_transpose"](hidden_states)
 
         hidden_states = self.out["conv1"](hidden_states)
         hidden_states = hidden_states.permute(0, 2, 3, 1)
@@ -242,7 +223,7 @@ class TransformerLayer(nn.Module):
 
         residual = hidden_states
         normed_hidden_states = self.cross_attention_layer_norm(hidden_states)
-        hidden_states = self.crossattention(
+        hidden_states = self.cross_attention(
             normed_hidden_states,
             encoder_hidden_states,
             encoder_hidden_states,
@@ -294,3 +275,134 @@ class GlobalResponseNorm(nn.Module):
         Gx = torch.norm(x, p=2, dim=(1, 2), keepdim=True)
         Nx = Gx / (Gx.mean(dim=-1, keepdim=True) + 1e-6)
         return self.gamma * (x * Nx) + self.beta + x
+
+
+def convert_state_dict(sd):
+    sd_ = {}
+
+    # embed
+    sd_.update(
+        {
+            "embed.embeddings.weight": sd.pop("embed.embeddings.weight"),
+            "embed.layer_norm.weight": sd.pop("embed.layer_norm.weight"),
+            "embed.conv.weight": sd.pop("embed.conv.weight"),
+        }
+    )
+
+    # in res blocks
+    for res_block_idx in range(3):
+        sd_.update(
+            {
+                f"down_blocks.{res_block_idx}.depthwise.weight": sd.pop(
+                    f"down_blocks.0.res_blocks.{res_block_idx}.depthwise.weight"
+                ),
+                f"down_blocks.{res_block_idx}.norm.weight": sd.pop(
+                    f"down_blocks.0.res_blocks.{res_block_idx}.norm.norm.weight"
+                ),
+                f"down_blocks.{res_block_idx}.channelwise.0.weight": sd.pop(
+                    f"down_blocks.0.res_blocks.{res_block_idx}.channelwise.0.weight"
+                ),
+                f"down_blocks.{res_block_idx}.channelwise.2.gamma": sd.pop(
+                    f"down_blocks.0.res_blocks.{res_block_idx}.channelwise.2.gamma"
+                ),
+                f"down_blocks.{res_block_idx}.channelwise.2.beta": sd.pop(
+                    f"down_blocks.0.res_blocks.{res_block_idx}.channelwise.2.beta"
+                ),
+                f"down_blocks.{res_block_idx}.channelwise.4.weight": sd.pop(
+                    f"down_blocks.0.res_blocks.{res_block_idx}.channelwise.4.weight"
+                ),
+            }
+        )
+
+    for transformer_layer_idx in range(22):
+        in_proj_weight = torch.cat(
+            (
+                sd.pop(f"transformer_layers.{transformer_layer_idx}.attention.query.weight"),
+                sd.pop(f"transformer_layers.{transformer_layer_idx}.attention.key.weight"),
+                sd.pop(f"transformer_layers.{transformer_layer_idx}.attention.value.weight"),
+            ),
+            dim=0,
+        )
+
+        sd_.update(
+            {
+                # self attention
+                f"transformer_layers.{transformer_layer_idx}.self_attention_layer_norm.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.attn_layer_norm.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.self_attention.in_proj_weight": in_proj_weight,
+                f"transformer_layers.{transformer_layer_idx}.self_attention.out_proj.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.attention.out.weight"
+                ),
+                # cross attention
+                f"transformer_layers.{transformer_layer_idx}.cross_attention_layer_norm.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.crossattn_layer_norm.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.cross_attention.q_proj_weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.crossattention.query.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.cross_attention.k_proj_weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.crossattention.key.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.cross_attention.v_proj_weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.crossattention.value.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.cross_attention.out_proj.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.crossattention.out.weight"
+                ),
+                # ffn
+                f"transformer_layers.{transformer_layer_idx}.ffn.ln.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.ffn.pre_mlp_layer_norm.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.ffn.wi_0.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.ffn.wi_0.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.ffn.wi_1.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.ffn.wi_1.weight"
+                ),
+                f"transformer_layers.{transformer_layer_idx}.ffn.wo.weight": sd.pop(
+                    f"transformer_layers.{transformer_layer_idx}.ffn.wo.weight"
+                ),
+            }
+        )
+
+    # encoder layer norm
+    sd_.update({"encoder_layer_norm.weight": sd.pop("encoder_layer_norm.weight")})
+
+    # out res blocks
+    for res_block_idx in range(3):
+        sd_.update(
+            {
+                f"up_blocks.{res_block_idx}.depthwise.weight": sd.pop(
+                    f"up_blocks.0.res_blocks.{res_block_idx}.depthwise.weight"
+                ),
+                f"up_blocks.{res_block_idx}.norm.weight": sd.pop(
+                    f"up_blocks.0.res_blocks.{res_block_idx}.norm.norm.weight"
+                ),
+                f"up_blocks.{res_block_idx}.channelwise.0.weight": sd.pop(
+                    f"up_blocks.0.res_blocks.{res_block_idx}.channelwise.0.weight"
+                ),
+                f"up_blocks.{res_block_idx}.channelwise.2.gamma": sd.pop(
+                    f"up_blocks.0.res_blocks.{res_block_idx}.channelwise.2.gamma"
+                ),
+                f"up_blocks.{res_block_idx}.channelwise.2.beta": sd.pop(
+                    f"up_blocks.0.res_blocks.{res_block_idx}.channelwise.2.beta"
+                ),
+                f"up_blocks.{res_block_idx}.channelwise.4.weight": sd.pop(
+                    f"up_blocks.0.res_blocks.{res_block_idx}.channelwise.4.weight"
+                ),
+            }
+        )
+
+    # mlm_layer -> out
+    sd_.update(
+        {
+            "out.conv1.weight": sd.pop("mlm_layer.conv1.weight"),
+            "out.norm.weight": sd.pop("mlm_layer.layer_norm.norm.weight"),
+            "out.conv2.weight": sd.pop("mlm_layer.conv2.weight"),
+        }
+    )
+
+    assert len(sd) == 0
+
+    return sd_
