@@ -1,7 +1,7 @@
 import torch
 
-from muse import MaskGitTransformer, MaskGiTUViT, VQGANModel, MaskGitUVit
-
+from muse import MaskGitTransformer, MaskGiTUViT, VQGANModel
+from muse.transformer_profiling import MaskGitUVit
 # codebook_size = 1024
 # num_classes = 1000
 # model = MaskGitTransformer(
@@ -110,17 +110,15 @@ dtype = torch.float16
 
 transformer = transformer.to(device=device, dtype=dtype)
 transformer = transformer.to(memory_format=torch.channels_last)
-
-# transformer = torch.compile(transformer, mode="reduce-overhead")
-
+torch.backends.cudnn.benchmark = True
     
 with profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1, skip_first=1),
-            on_trace_ready=tensorboard_trace_handler(profiler_export_path),
-            record_shapes=True,
-            profile_memory=True,
-            with_stack=True,
+            # on_trace_ready=tensorboard_trace_handler(profiler_export_path),
+            # record_shapes=True,
+            # profile_memory=True,
+            # with_stack=True,
         ) as prof:
     
     for _ in range(6):
@@ -133,15 +131,52 @@ with profile(
             # assert output.shape == (batch_size, num_vq_tokens, codebook_size)
 
 print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
-torch.cuda.synchronize()
-start_time = time.time()
-input_ids = torch.randint(0, codebook_size, (batch_size, num_vq_tokens), device=device)
-enc = torch.randn(batch_size, 4, encoder_hidden_size, device=device, dtype=dtype)
-output = transformer(input_ids, encoder_hidden_states=enc)
-torch.cuda.synchronize()
-print("Time taken: ", time.time() - start_time)
 
+# transformer = torch.compile(transformer, mode="reduce-overhead") # For some reason this is slower
+
+for _ in range(3):
+    torch.cuda.synchronize()
+    start_time = time.time()
+    input_ids = torch.randint(0, codebook_size, (batch_size, num_vq_tokens), device=device)
+    enc = torch.randn(batch_size, 4, encoder_hidden_size, device=device, dtype=dtype)
+    output = transformer(input_ids, encoder_hidden_states=enc)
+    torch.cuda.synchronize()
+    print("Time taken: ", time.time() - start_time)
+
+
+# init
+# Self CPU time total: 156.450ms
+# Self CUDA time total: 119.641ms
+
+# Time taken:  0.04397106170654297
+
+# flash-attn
 # Self CPU time total: 143.205ms
 # Self CUDA time total: 100.064ms
 
 # Time taken:  0.033339500427246094
+
+
+# self.ffn.ln -> RMSNorm
+# Self CPU time total: 143.205ms
+# Self CUDA time total: 100.064ms
+
+# Time taken:  0.033339500427246094
+
+# ResBlock scripting
+# Self CPU time total: 147.513ms
+# Self CUDA time total: 88.016ms
+
+# Time taken:  0.03450894355773926
+
+# FusedAddRMSNorm
+# Self CPU time total: 131.784ms
+# Self CUDA time total: 85.430ms
+
+# Time taken:  0.030301809310913086
+
+# FusedMLP (We can't use this because Gated MLP can't be fused yet)
+# Self CPU time total: 106.292ms
+# Self CUDA time total: 67.763ms
+
+# Time taken:  0.02887749671936035

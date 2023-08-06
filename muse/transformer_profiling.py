@@ -274,7 +274,7 @@ class TransformerLayer(nn.Module):
         hidden_states = self.ffn["dropout"](hidden_states)
         hidden_states = self.ffn["wo"](hidden_states)
 
-        hidden_states = hidden_states + residual
+        hidden_states = hidden_states + residual # TODO: we can move this to the top so that it can be merged with LN (31ms -> 30ms)
 
         return hidden_states
 
