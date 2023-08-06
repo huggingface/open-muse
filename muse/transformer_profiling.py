@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 from apex.normalization import FusedRMSNorm as RMSNorm  # noqa
 from torch import nn
-
+from flash_attn.modules.mha import MHA
 
 class MaskGitUVit(nn.Module):
     def __init__(
@@ -178,12 +178,13 @@ class TransformerLayer(nn.Module):
         self.self_attention_layer_norm = RMSNorm(
             hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
         )
-        self.self_attention = nn.MultiheadAttention(
+        self.self_attention = MHA(
             embed_dim=hidden_size,
             num_heads=num_heads,
             dropout=dropout_p,
-            bias=use_bias,
-            batch_first=True,
+            qkv_proj_bias=use_bias,
+            out_proj_bias=use_bias,
+            use_flash_attn=True,
         )
         self.ffn = nn.ModuleDict(
             dict(
@@ -200,34 +201,50 @@ class TransformerLayer(nn.Module):
         self.cross_attention_layer_norm = RMSNorm(
             hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
         )
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            kdim=encoder_hidden_size,
-            vdim=encoder_hidden_size,
-            num_heads=num_heads,
-            dropout=dropout_p,
-            bias=use_bias,
-            batch_first=True,
-        )
+        if encoder_hidden_size != hidden_size:
+            self.cross_attention = nn.MultiheadAttention(
+                embed_dim=hidden_size,
+                kdim=encoder_hidden_size,
+                vdim=encoder_hidden_size,
+                num_heads=num_heads,
+                dropout=dropout_p,
+                bias=use_bias,
+                batch_first=True,
+            )
+            self.use_flash_cross_attention = False
+        else:
+            self.cross_attention = MHA(
+                embed_dim=hidden_size,
+                num_heads=num_heads,
+                dropout=dropout_p,
+                qkv_proj_bias=use_bias,
+                out_proj_bias=use_bias,
+                cross_attn=True,
+                use_flash_attn=True,
+            )
+            self.use_flash_cross_attention = True
 
     def forward(self, hidden_states, encoder_hidden_states, encoder_attention_mask=None):
         residual = hidden_states
         normed_hidden_states = self.self_attention_layer_norm(hidden_states)
-        hidden_states = self.attention(
+        hidden_states = self.self_attention(
             normed_hidden_states,
-            normed_hidden_states,
-            normed_hidden_states,
-            need_weights=False,
         )[0]
         hidden_states = hidden_states + residual
 
         residual = hidden_states
         normed_hidden_states = self.cross_attention_layer_norm(hidden_states)
-        hidden_states = self.cross_attention(
-            normed_hidden_states,
-            encoder_hidden_states,
-            encoder_hidden_states,
-        )[0]
+        if not self.use_flash_cross_attention:
+            hidden_states = self.cross_attention(
+                normed_hidden_states,
+                encoder_hidden_states,
+                encoder_hidden_states,
+            )[0]
+        else:
+            hidden_states = self.cross_attention(
+                normed_hidden_states,
+                encoder_hidden_states,
+            )[0]
         hidden_states = hidden_states + residual
 
         residual = hidden_states
