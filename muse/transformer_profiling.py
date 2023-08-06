@@ -144,13 +144,13 @@ class ResBlock(nn.Module):
             bias=use_bias,
         )
         self.norm = RMSNorm(channels, eps=layer_norm_eps)
-        self.channelwise = torch.jit.script(nn.Sequential(
+        self.channelwise = nn.Sequential(
             nn.Linear(channels, channels * 4, bias=False),
             nn.GELU(),
             GlobalResponseNorm(channels * 4),
-            # nn.Dropout(dropout_p),
+            nn.Dropout(dropout_p),
             nn.Linear(channels * 4, channels, bias=False),
-        ))
+        )
 
     def forward(self, x):
         x_res = x
@@ -248,20 +248,20 @@ class TransformerLayer(nn.Module):
             normed_hidden_states,
         )
 
-        normed_hidden_states = self.cross_attention_residual_layer_norm(hidden_states, residual)
+        normed_hidden_states = self.cross_attention_residual_layer_norm(hidden_states, residual) # (b, s_kv, nh * hd)
         residual = hidden_states
 
         if not self.use_flash_cross_attention:
             hidden_states = self.cross_attention(
                 normed_hidden_states,
-                encoder_hidden_states,
+                encoder_hidden_states, 
                 encoder_hidden_states,
             )[0]
         else:
             hidden_states = self.cross_attention(
                 normed_hidden_states,
-                encoder_hidden_states,
-            )
+                encoder_hidden_states, # (b, 4, nh * hd)
+            ) # (b, s_kv, nh * hd)
 
         hidden_states = self.ffn["res_ln"](hidden_states, residual)
         residual = hidden_states
