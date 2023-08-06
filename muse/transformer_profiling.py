@@ -1,8 +1,9 @@
 import torch
 import torch.nn.functional as F
-from apex.normalization import FusedRMSNorm as RMSNorm  # noqa
+# from apex.normalization import FusedRMSNorm as RMSNorm  # noqa
 from torch import nn
 from flash_attn.modules.mha import MHA
+from flash_attn.ops.rms_norm import RMSNorm, dropout_add_rms_norm
 
 class MaskGitUVit(nn.Module):
     def __init__(
@@ -25,7 +26,7 @@ class MaskGitUVit(nn.Module):
         self.embed = nn.ModuleDict(
             dict(
                 embeddings=nn.Embedding(input_vocab_size, embedding_size),
-                layer_norm=RMSNorm(embedding_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine),
+                layer_norm=RMSNorm(embedding_size, eps=layer_norm_eps),
                 conv=nn.Conv2d(embedding_size, hidden_size, kernel_size=1, bias=use_bias),
             )
         )
@@ -57,7 +58,7 @@ class MaskGitUVit(nn.Module):
                 for _ in range(num_transformer_layers)
             ]
         )
-        self.encoder_layer_norm = RMSNorm(hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
+        self.encoder_layer_norm = RMSNorm(hidden_size, eps=layer_norm_eps)
 
         self.up_blocks = nn.Sequential(
             *[
@@ -75,7 +76,7 @@ class MaskGitUVit(nn.Module):
         self.out = nn.ModuleDict(
             dict(
                 conv1=nn.Conv2d(hidden_size, embedding_size, kernel_size=1, bias=use_bias),
-                norm=RMSNorm(embedding_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine),
+                norm=RMSNorm(embedding_size, eps=layer_norm_eps),
                 conv2=nn.Conv2d(embedding_size, output_vocab_size, kernel_size=1, bias=use_bias),
             )
         )
@@ -142,7 +143,7 @@ class ResBlock(nn.Module):
             groups=channels,
             bias=use_bias,
         )
-        self.norm = RMSNorm(channels, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
+        self.norm = RMSNorm(channels, eps=layer_norm_eps)
         self.channelwise = torch.jit.script(nn.Sequential(
             nn.Linear(channels, channels * 4, bias=False),
             nn.GELU(),
@@ -161,6 +162,21 @@ class ResBlock(nn.Module):
         x = x + x_res
         return x
 
+class FusedAddRMSNorm(nn.Module):
+    def __init__(self, dim, eps, use_bias, elementwise_affine):
+        super().__init__()
+        self.dim = dim
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(dim))
+            self.bias = nn.Parameter(torch.zeros(dim)) if use_bias else None
+        else:
+            self.weight = None
+            self.bias = None
+        self.eps = eps
+
+    def forward(self, x, residual):
+        return dropout_add_rms_norm(x, residual, self.weight, self.bias, dropout_p=0.0, epsilon=self.eps)
+
 
 class TransformerLayer(nn.Module):
     def __init__(
@@ -176,7 +192,7 @@ class TransformerLayer(nn.Module):
         super().__init__()
 
         self.self_attention_layer_norm = RMSNorm(
-            hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+            hidden_size, eps=layer_norm_eps
         )
         self.self_attention = MHA(
             embed_dim=hidden_size,
@@ -188,7 +204,7 @@ class TransformerLayer(nn.Module):
         )
         self.ffn = nn.ModuleDict(
             dict(
-                ln=LayerNormOptionalBias(
+                res_ln=FusedAddRMSNorm(
                     hidden_size, eps=layer_norm_eps, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
                 ),
                 wi_0=nn.Linear(hidden_size, hidden_size * 4, bias=use_bias),
@@ -197,9 +213,10 @@ class TransformerLayer(nn.Module):
                 wo=nn.Linear(hidden_size * 4, hidden_size, bias=use_bias),
             )
         )
+        
 
-        self.cross_attention_layer_norm = RMSNorm(
-            hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
+        self.cross_attention_residual_layer_norm = FusedAddRMSNorm(
+            hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine, use_bias=use_bias
         )
         if encoder_hidden_size != hidden_size:
             self.cross_attention = nn.MultiheadAttention(
@@ -229,11 +246,11 @@ class TransformerLayer(nn.Module):
         normed_hidden_states = self.self_attention_layer_norm(hidden_states)
         hidden_states = self.self_attention(
             normed_hidden_states,
-        )[0]
-        hidden_states = hidden_states + residual
+        )
 
+        normed_hidden_states = self.cross_attention_residual_layer_norm(hidden_states, residual)
         residual = hidden_states
-        normed_hidden_states = self.cross_attention_layer_norm(hidden_states)
+
         if not self.use_flash_cross_attention:
             hidden_states = self.cross_attention(
                 normed_hidden_states,
@@ -244,12 +261,10 @@ class TransformerLayer(nn.Module):
             hidden_states = self.cross_attention(
                 normed_hidden_states,
                 encoder_hidden_states,
-            )[0]
-        hidden_states = hidden_states + residual
+            )
 
+        hidden_states = self.ffn["res_ln"](hidden_states, residual)
         residual = hidden_states
-
-        hidden_states = self.ffn["ln"](hidden_states)
 
         hidden_gelu = F.gelu(self.ffn["wi_0"](hidden_states))
         hidden_linear = self.ffn["wi_1"](hidden_states)
