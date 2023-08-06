@@ -111,3 +111,4 @@ training:
     use_soft_code_target: False
     use_stochastic_code: False
     soft_code_temp: 1.0
+    use_conv_in_out: True
