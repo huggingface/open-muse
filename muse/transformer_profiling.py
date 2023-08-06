@@ -143,13 +143,13 @@ class ResBlock(nn.Module):
             bias=use_bias,
         )
         self.norm = RMSNorm(channels, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
-        self.channelwise = nn.Sequential(
+        self.channelwise = torch.jit.script(nn.Sequential(
             nn.Linear(channels, channels * 4, bias=False),
             nn.GELU(),
             GlobalResponseNorm(channels * 4),
-            nn.Dropout(dropout_p),
+            # nn.Dropout(dropout_p),
             nn.Linear(channels * 4, channels, bias=False),
-        )
+        ))
 
     def forward(self, x):
         x_res = x
