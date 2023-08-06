@@ -793,6 +793,7 @@ class MaxVitTransformerLayer(TransformerLayer):
             **kwargs
         )
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        print("hidden size", hidden_size)
         self.mb_conv = MBConv(
             hidden_size,
             hidden_size,
@@ -815,6 +816,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         # our local attention once positional embeddings are added to it
         # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
         # This helps us make a "global" grid of window_size x window_size
+        print("hidden states", hidden_states.shape)
         hidden_states = self.mb_conv(hidden_states)
         # block like attention(local attention)
         hidden_states = rearrange(hidden_states, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
