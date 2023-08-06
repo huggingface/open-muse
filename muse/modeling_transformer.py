@@ -2013,6 +2013,7 @@ class MBConv(nn.Module):
         shrinkage_rate = 0.25,
         dropout = 0.,
     ):
+        super().__init__()
         # One function of this mbconv layer argued in the paper is to provide conditional position encoding especially with the depthwise convolution
         # so that we do not need explicit positional embeddings
         hidden_dim = int(expansion_rate * dim_out)

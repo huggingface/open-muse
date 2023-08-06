@@ -648,6 +648,8 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
+                accelerator.print(torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
+
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
 
@@ -676,7 +678,6 @@ def main():
                         f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
-
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
                     data_time_m.reset()
