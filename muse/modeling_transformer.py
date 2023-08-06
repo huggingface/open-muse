@@ -1166,13 +1166,14 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
-
+        print("input ids", input_ids.shape)
         hidden_states = self.embed(input_ids)
+        print("hidden states", hidden_states.shape)
 
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
             encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
-
+            print("encoder hidden states", encoder_hidden_states.shape)
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
@@ -1197,6 +1198,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                 )
+                print("hidden states", hidden_states.shape)
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
