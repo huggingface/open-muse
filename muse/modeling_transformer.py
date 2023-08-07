@@ -2241,6 +2241,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     input_ids, low=0, high=self.config.codebook_size, device=input_ids.device
                 )
                 input_ids = torch.where(mask, random_tokens, sampled_ids)
+        
+        self.reset_cache()
 
         if return_intermediate:
             return sampled_ids, intermediate
