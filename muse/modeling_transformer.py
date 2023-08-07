@@ -841,7 +841,12 @@ class MaxVitTransformerLayer(TransformerLayer):
         if cond_embeds is not None:
             hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
         print("Input hidden states", hidden_states.shape)
+        hidden_states = hidden_states.permute(0, 2, 1)
+        b, c, seq_length = hidden_states.shape
+        h, w = int(seq_length**0.5), int(seq_length**0.5)
+        hidden_states = hidden_states.view(b, c, h, w)
         attention_output = self.attention(hidden_states)
+        attention_output = attention_output.view(b, c, seq_length)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         hidden_states = residual + attention_output
