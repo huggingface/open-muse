@@ -50,6 +50,7 @@ model:
         attention_dropout: 0.0
         transformer_type: 'maxvit'
         use_conv_in_out: True
+        use_position_embeddings: False
 
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: True

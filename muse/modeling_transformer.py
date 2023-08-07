@@ -847,7 +847,7 @@ class Embed(nn.Module):
         norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_bias=False,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         use_embeddings_project=False,
     ):
         super().__init__()
@@ -857,14 +857,14 @@ class Embed(nn.Module):
         self.hidden_size = hidden_size
         self.hidden_dropout = hidden_dropout
         self.max_position_embeddings = max_position_embeddings
-        self.layer_norm_embedddings = layer_norm_embedddings
+        self.layer_norm_embeddings = layer_norm_embeddings
         self.use_embeddings_project = use_embeddings_project
 
         self.word_embeddings = nn.Embedding(self.vocab_size, self.embedding_size)
         self.position_embeddings = nn.Embedding(self.max_position_embeddings, self.embedding_size)
         self.dropout = nn.Dropout(self.hidden_dropout)
 
-        if layer_norm_embedddings:
+        if layer_norm_embeddings:
             norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
             self.embeddings_ln = norm_cls(self.embedding_size, eps=layer_norm_eps)
 
@@ -879,7 +879,7 @@ class Embed(nn.Module):
         position_embeddings = self.position_embeddings(position_ids)
         input_embeddings = word_embeddings + position_embeddings
 
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             input_embeddings = self.embeddings_ln(input_embeddings)
 
         if self.use_embeddings_project:
@@ -927,7 +927,7 @@ class ConvEmbed(nn.Module):
         max_position_embeddings=256,
         norm_type="layernorm",
         ln_elementwise_affine=True,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         layer_norm_eps=1e-5,
         use_position_embeddings=True,
         use_bias=False,
@@ -937,7 +937,7 @@ class ConvEmbed(nn.Module):
         self.patch_size = patch_size
         self.max_position_embeddings = max_position_embeddings
         self.use_position_embeddings = use_position_embeddings
-        self.layer_norm_embedddings = layer_norm_embedddings
+        self.layer_norm_embeddings = layer_norm_embeddings
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
@@ -947,7 +947,7 @@ class ConvEmbed(nn.Module):
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
         if use_position_embeddings:
             self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             self.embeddings_ln = Norm2D(
                 hidden_size, eps=layer_norm_eps, norm_type=norm_type, elementwise_affine=ln_elementwise_affine
             )
@@ -967,7 +967,7 @@ class ConvEmbed(nn.Module):
             position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = embeddings + position_embeddings
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             embeddings = self.embeddings_ln(embeddings)
         return embeddings
 
@@ -1041,6 +1041,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
+        use_position_embeddings=False,
         use_codebook_size_for_output=False,
         use_conv_in_out=False,
         patch_size=1,
@@ -1072,6 +1073,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 norm_type=norm_type,
                 layer_norm_eps=layer_norm_eps,
                 use_bias=use_bias,
+                use_position_embeddings=use_position_embeddings
             )
         else:
             self.embed = Embed(
@@ -1427,7 +1429,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_codebook_size_for_output=False,
         patch_size=1,
         layer_norm_before_mlm=False,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         add_cond_embeds=False,
         cond_embed_dim=None,
         xavier_init_embed=True,
@@ -1473,7 +1475,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_out_channels[0],
             patch_size=patch_size,
             norm_type=norm_type,
-            layer_norm_embedddings=layer_norm_embedddings,
+            layer_norm_embeddings=layer_norm_embeddings,
             layer_norm_eps=layer_norm_eps,
             ln_elementwise_affine=ln_elementwise_affine,
             use_position_embeddings=use_position_embeddings,
