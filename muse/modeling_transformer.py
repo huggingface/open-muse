@@ -780,6 +780,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         window_size=7,
         mbconv_expansion_rate=4,
         mbconv_shrinkage_rate=0.25,
+        embedding_size=256,
         **kwargs
     ):
         super().__init__(
@@ -795,8 +796,8 @@ class MaxVitTransformerLayer(TransformerLayer):
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
         print("hidden size", hidden_size)
         self.mb_conv = MBConv(
-            hidden_size,
-            hidden_size,
+            embedding_size,
+            embedding_size,
             expansion_rate = mbconv_expansion_rate,
             shrinkage_rate = mbconv_shrinkage_rate,
             dropout=hidden_dropout
@@ -1065,7 +1066,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         if use_conv_in_out:
             self.embed = ConvEmbed(
                 vocab_size,
-                embedding_size,
+                self.embedding_size,
                 hidden_size,
                 patch_size=patch_size,
                 norm_type=norm_type,
@@ -1103,6 +1104,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
+                    embedding_size=embedding_size
                 )
                 for _ in range(self.num_hidden_layers)
             ]
