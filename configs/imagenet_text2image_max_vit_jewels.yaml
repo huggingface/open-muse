@@ -51,7 +51,7 @@ model:
         transformer_type: 'maxvit'
 
     gradient_checkpointing: True
-    enable_xformers_memory_efficient_attention: True
+    enable_xformers_memory_efficient_attention: False
     offline: True
 
 
