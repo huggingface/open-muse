@@ -2123,6 +2123,8 @@ class MaxVitAttention(Attention):
         bias = self.rel_pos_bias(self.rel_pos_indices)
         # shape is [window_size**2, window_size**2, self.num_heads]
         bias = rearrange(bias, 'i j h -> h i j')
+        print("bias shape")
+        print(bias.shape)
         # shape is [self.num_heads, window_size**2, window_size**2]
         # the bias adds positional embeddings for each window size segment
         out = super().forward(hidden_states, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
