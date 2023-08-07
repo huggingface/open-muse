@@ -353,11 +353,11 @@ class Text2ImageDataset:
             processing_pipeline = [
                 wds.decode(wds.handle_extension("pth", wds.autodecode.torch_loads), handler=wds.ignore_and_continue),
                 wds.rename(
-                    input_ids=f"{vae_checkpoint}.pth",
+                    image_input_ids=f"{vae_checkpoint}.pth",
                     encoder_hidden_states=f"{text_encoder_checkpoint}.pth",
                     handler=wds.warn_and_continue,
                 ),
-                wds.map(filter_keys(set(["input_ids", "encoder_hidden_states"]))),
+                wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
         # Create train dataset and loader

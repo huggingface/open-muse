@@ -610,7 +610,11 @@ def main():
         model.train()
         for batch in train_dataloader:
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
-            pixel_values, input_ids = batch["image"], batch["input_ids"]
+            if is_pre_encode:
+                pixel_values, input_ids = batch["image_input_ids"], batch["encoder_hidden_states"]
+            else:
+                pixel_values, input_ids = batch["image"], batch["input_ids"]
+
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
             data_time_m.update(time.time() - end)
