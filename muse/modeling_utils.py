@@ -289,6 +289,21 @@ class ModelMixin(torch.nn.Module):
         for module in self.children():
             if isinstance(module, torch.nn.Module):
                 fn_recursive_set_mem_eff(module)
+    
+    def reset_cache(self) -> None:
+        # Recursively walk through all the children.
+        # Any children which exposes the _reset_cache method
+        # gets the message
+        def fn_recursive_reset_cache(module: torch.nn.Module):
+            if hasattr(module, "_reset_cache"):
+                module._reset_cache()
+
+            for child in module.children():
+                fn_recursive_reset_cache(child)
+
+        for module in self.children():
+            if isinstance(module, torch.nn.Module):
+                fn_recursive_reset_cache(module)
 
     def enable_xformers_memory_efficient_attention(self, attention_op: Optional[Callable] = None):
         r"""

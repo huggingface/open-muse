@@ -174,8 +174,7 @@ class Attention(nn.Module):
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
-        if is_cross_attention:
-            self._kv_cache = None
+        self._kv_cache = None
 
         self.use_memory_efficient_attention_xformers = False
         self.xformers_attention_op = None
@@ -203,9 +202,10 @@ class Attention(nn.Module):
         else:
             key = self.key(context)
             value = self.value(context)
+           
 
         query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        if self.is_cross_attention and use_cache and self._kv_cache is not None:
+        if self._kv_cache is None:
             key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
             value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
         
@@ -249,6 +249,9 @@ class Attention(nn.Module):
         # re-assemble all head outputs side by side
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         return attn_output
+    
+    def _reset_cache(self):
+        self._kv_cache = None
 
 
 # U-ViT blocks
