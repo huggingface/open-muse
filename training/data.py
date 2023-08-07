@@ -20,6 +20,7 @@ import json
 import math
 import random
 import re
+from functools import partial
 from typing import List, Optional, Union
 
 import webdataset as wds
@@ -88,6 +89,14 @@ def tarfile_to_samples_nothrow(src, handler=wds.warn_and_continue):
     return samples
 
 
+def get_orig_size(json):
+    return (int(json.get("original_width", 0.0)), int(json.get("original_height", 0.0)))
+
+
+def get_aesthetic_score(json):
+    return float(json.get("AESTHETIC_SCORE", 0.0))
+
+
 class ImageNetTransform:
     def __init__(self, resolution, center_crop=True, random_flip=False):
         self.train_transform = transforms.Compose(
@@ -105,6 +114,18 @@ class ImageNetTransform:
                 transforms.ToTensor(),
             ]
         )
+
+
+def image_transform(example, resolution=256):
+    image = example["image"]
+    image = transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR)(image)
+    # get crop coordinates
+    c_top, c_left, _, _ = transforms.RandomCrop.get_params(image, output_size=(resolution, resolution))
+    image = transforms.functional.crop(image, c_top, c_left, resolution, resolution)
+    image = transforms.ToTensor()(image)
+    example["image"] = image
+    example["crop_coords"] = (c_top, c_left)
+    return example
 
 
 class ClassificationDataset:
@@ -309,10 +330,21 @@ class Text2ImageDataset:
         if not is_pre_encoded:
             processing_pipeline = [
                 wds.decode("pil", handler=wds.ignore_and_continue),
-                wds.rename(image="jpg;png;jpeg;webp", input_ids="text;txt;caption", handler=wds.warn_and_continue),
-                wds.map(filter_keys(set(["image", "input_ids"]))),
-                wds.map_dict(image=transform.train_transform, input_ids=tokenize),
-                wds.to_tuple("image", "input_ids"),
+                wds.rename(
+                    image="jpg;png;jpeg;webp",
+                    input_ids="text;txt;caption",
+                    orig_size="json",
+                    aesthetic_score="json",
+                    handler=wds.warn_and_continue,
+                ),
+                wds.map(filter_keys(set(["image", "input_ids", "orig_size", "aesthetic_score"]))),
+                wds.map(partial(image_transform, resolution=resolution), handler=wds.warn_and_continue),
+                wds.map_dict(
+                    input_ids=tokenize,
+                    orig_size=get_orig_size,
+                    aesthetic_score=get_aesthetic_score,
+                    handler=wds.warn_and_continue,
+                ),
             ]
         else:
             # lowercase and replace / with .
@@ -321,12 +353,11 @@ class Text2ImageDataset:
             processing_pipeline = [
                 wds.decode(wds.handle_extension("pth", wds.autodecode.torch_loads), handler=wds.ignore_and_continue),
                 wds.rename(
-                    input_ids=f"{vae_checkpoint}.pth",
+                    image_input_ids=f"{vae_checkpoint}.pth",
                     encoder_hidden_states=f"{text_encoder_checkpoint}.pth",
                     handler=wds.warn_and_continue,
                 ),
-                wds.map(filter_keys(set(["input_ids", "encoder_hidden_states"]))),
-                wds.to_tuple("input_ids", "encoder_hidden_states"),
+                wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
         # Create train dataset and loader

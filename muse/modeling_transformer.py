@@ -15,6 +15,7 @@
 
 # This file is heavily inspired by the original implementation from https://github.com/lucidrains/muse-maskgit-pytorch
 
+import math
 from functools import partial
 from typing import Callable, Optional
 
@@ -94,6 +95,26 @@ except Exception:
                 input = input.to(input_dtype)
 
             return input
+
+
+def sinusoidal_enocde(features, embedding_dim, max_positions=10000):
+    half_dim = embedding_dim // 2
+    emb = math.log(max_positions) / half_dim
+    emb = (
+        torch.arange(
+            0,
+            half_dim,
+            device=features.device,
+            dtype=torch.float32,
+        )
+        .mul(-emb)
+        .exp()
+    )
+    emb = features[:, None] * emb[None, :]
+    emb = torch.cat([emb.cos(), emb.sin()], dim=1)
+    if embedding_dim % 2 == 1:  # zero pad
+        emb = nn.functional.pad(emb, (0, 1), mode="constant")
+    return emb
 
 
 # layer norm without bias
@@ -313,6 +334,7 @@ class ResBlock(nn.Module):
         add_cond_embeds=False,
         cond_embed_dim=None,
         use_bias=False,
+        res_ffn_factor=4,
         **kwargs,
     ):
         super().__init__()
@@ -328,11 +350,11 @@ class ResBlock(nn.Module):
             in_channels, eps=1e-6, norm_type=norm_type, use_bias=use_bias, elementwise_affine=ln_elementwise_affine
         )
         self.channelwise = nn.Sequential(
-            nn.Linear(in_channels, in_channels * 4, bias=use_bias),
+            nn.Linear(in_channels, int(in_channels * res_ffn_factor), bias=use_bias),
             nn.GELU(),
-            GlobalResponseNorm(in_channels * 4),
+            GlobalResponseNorm(int(in_channels * res_ffn_factor)),
             nn.Dropout(dropout),
-            nn.Linear(in_channels * 4, in_channels, bias=use_bias),
+            nn.Linear(int(in_channels * res_ffn_factor), in_channels, bias=use_bias),
         )
 
         if add_cond_embeds:
@@ -405,6 +427,7 @@ class DownsampleBlock(nn.Module):
         skip_channels=None,
         num_res_blocks=4,
         kernel_size=3,
+        res_ffn_factor=4,
         dropout=0.0,
         norm_type="layernorm",
         ln_elementwise_affine=True,
@@ -447,6 +470,7 @@ class DownsampleBlock(nn.Module):
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
                 for _ in range(num_res_blocks)
             ]
@@ -506,6 +530,7 @@ class UpsampleBlock(nn.Module):
         skip_channels=None,
         num_res_blocks=4,
         kernel_size=3,
+        res_ffn_factor=4,
         dropout=0.0,
         norm_type="layernorm",
         ln_elementwise_affine=True,
@@ -536,6 +561,7 @@ class UpsampleBlock(nn.Module):
                     add_cond_embeds=add_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
                 for i in range(num_res_blocks)
             ]
@@ -1466,11 +1492,15 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         layer_norm_embedddings=False,
         add_cond_embeds=False,
         cond_embed_dim=None,
+        add_micro_cond_embeds=False,
+        micro_cond_encode_dim=None,
+        micro_cond_embed_dim=None,
         xavier_init_embed=True,
         use_empty_embeds_for_uncond=False,
         learn_uncond_embeds=False,
         use_vannilla_resblock=False,
         ffn_type="glu",
+        res_ffn_factor=4,
         **kwargs,
     ):
         super().__init__()
@@ -1531,7 +1561,17 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         )
 
         # Condition embeddings
-        if add_cond_embeds:
+        if add_micro_cond_embeds:
+            if add_cond_embeds:
+                micro_cond_embed_dim += cond_embed_dim
+
+            self.cond_embed = nn.Sequential(
+                nn.Linear(micro_cond_embed_dim, hidden_size, bias=use_bias),
+                nn.SiLU(),
+                nn.Linear(hidden_size, hidden_size, bias=use_bias),
+            )
+            cond_embed_dim = hidden_size
+        elif add_cond_embeds:
             self.cond_embed = nn.Sequential(
                 nn.Linear(cond_embed_dim, hidden_size, bias=use_bias),
                 nn.SiLU(),
@@ -1565,12 +1605,13 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_downsample=add_downsample,
-                    add_cond_embeds=add_cond_embeds,
+                    add_cond_embeds=add_cond_embeds or add_micro_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     has_attention=block_has_attention[i],
                     num_heads=block_num_heads[i],
                     encoder_hidden_size=encoder_hidden_size,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
             )
 
@@ -1595,7 +1636,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     ln_elementwise_affine=ln_elementwise_affine,
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
-                    add_cond_embeds=add_cond_embeds,
+                    add_cond_embeds=add_cond_embeds or add_micro_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     ffn_type=ffn_type,
                     use_bias=use_bias,
@@ -1644,12 +1685,13 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
                     add_upsample=not is_final_block,
-                    add_cond_embeds=add_cond_embeds,
+                    add_cond_embeds=add_cond_embeds or add_micro_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     has_attention=reversed_block_has_attention[i],
                     num_heads=reversed_block_num_heads[i],
                     encoder_hidden_size=encoder_hidden_size,
                     use_bias=use_bias,
+                    res_ffn_factor=res_ffn_factor,
                 )
             )
 
@@ -1720,12 +1762,17 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         cond_embeds=None,
         loss_weight=None,
         empty_embeds=None,
+        empty_cond_embeds=None,
+        micro_conds=None,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
 
         if self.training and self.config.use_empty_embeds_for_uncond and empty_embeds is None:
             raise ValueError("If `use_empty_embeds_for_uncond` is True, `empty_embeds` should be provided.")
+
+        if self.config.add_micro_cond_embeds and micro_conds is None:
+            raise ValueError("If `add_micro_cond_embeds` is True, `micro_conds` should be provided.")
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
@@ -1746,16 +1793,32 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             else:
                 encoder_hidden_states = encoder_hidden_states * mask
             if cond_embeds is not None:
-                cond_embeds = cond_embeds * mask.squeeze(-1)
+                if self.config.use_empty_embeds_for_uncond:
+                    # empty_cond_embeds is of shape (1, hidden_size) expand it to batch size
+                    empty_cond_embeds = empty_cond_embeds.expand(batch_size, -1)
+                    cond_embeds = torch.where((cond_embeds * mask.squeeze(-1)).bool(), cond_embeds, empty_cond_embeds)
+                else:
+                    cond_embeds = cond_embeds * mask.squeeze(-1)
 
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
             encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
 
-        if cond_embeds is not None:
+        if self.config.add_micro_cond_embeds:
+            micro_cond_embeds = sinusoidal_enocde(micro_conds.flatten(), self.config.micro_cond_encode_dim)
+            micro_cond_embeds = micro_cond_embeds.reshape((input_ids.shape[0], -1))
+            if cond_embeds is not None:
+                cond_embeds = torch.cat([cond_embeds, micro_cond_embeds], dim=1)
+            else:
+                cond_embeds = micro_cond_embeds
+            cond_embeds = self.cond_embed(cond_embeds)
+        elif self.config.add_cond_embeds:
             cond_embeds = self.cond_embed(cond_embeds)
 
         hidden_states = self.embed(input_ids)
+
+        if cond_embeds is not None:
+            cond_embeds = cond_embeds.to(hidden_states.dtype)
 
         down_block_res_samples = (hidden_states,)
         for down_block in self.down_blocks:
@@ -1974,8 +2037,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         class_ids: torch.LongTensor = None,
         encoder_hidden_states: torch.FloatTensor = None,
         cond_embeds: torch.FloatTensor = None,
+        micro_conds: torch.FloatTensor = None,
         empty_embeds: torch.FloatTensor = None,
+        empty_cond_embeds: torch.FloatTensor = None,
         negative_embeds: torch.FloatTensor = None,
+        negative_cond_embeds: torch.FloatTensor = None,
         temperature=1.0,
         timesteps=18,  # ideal number of steps is 18 in maskgit paper
         guidance_scale=0,
@@ -2031,6 +2097,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         else:
             guidance_scales = torch.ones(timesteps) * guidance_scale
 
+        if micro_conds is not None:
+            micro_conds = micro_conds.repeat(batch_size, 1).to(input_ids.device)
+            if guidance_scale > 0:
+                micro_conds = torch.cat([micro_conds, micro_conds], dim=0)
+
         # classifier free guidance
         if encoder_hidden_states is not None and guidance_scale > 0:
             if negative_embeds is None:
@@ -2046,9 +2117,18 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             model_conds = {"encoder_hidden_states": condition}
 
             if cond_embeds is not None:
-                uncond_embeds = torch.zeros_like(cond_embeds)
+                if negative_cond_embeds is None:
+                    if self.config.use_empty_embeds_for_uncond:
+                        uncond_embeds = empty_cond_embeds.expand(batch_size, -1)
+                    else:
+                        uncond_embeds = torch.zeros_like(cond_embeds)
+                else:
+                    uncond_embeds = negative_cond_embeds
                 cond_embeds = torch.cat([cond_embeds, uncond_embeds])
                 model_conds["cond_embeds"] = cond_embeds
+
+            if micro_conds is not None:
+                model_conds["micro_conds"] = micro_conds
 
         for step in range(timesteps):
             # prepend class token to input_ids
