@@ -849,6 +849,9 @@ class MaxVitTransformerLayer(TransformerLayer):
         attention_output = attention_output.view(b, c, seq_length)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
+        print("residual", residual.shape)
+        print("attention_output", attention_output.shape)
+
         hidden_states = residual + attention_output
 
         if encoder_hidden_states is not None:
