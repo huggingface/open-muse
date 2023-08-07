@@ -777,7 +777,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         attention_dropout=0.0,
         norm_type="layernorm",
         use_bias=False,
-        window_size=7,
+        window_size=8,
         mbconv_expansion_rate=4,
         mbconv_shrinkage_rate=0.25,
         embedding_size=256,
@@ -2079,7 +2079,7 @@ class MBConv(nn.Module):
 
 
 class MaxVitAttention(Attention):
-    def __init__(self, hidden_size, num_heads, window_size=7, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
+    def __init__(self, hidden_size, num_heads, window_size=8, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
         super().__init__(hidden_size, num_heads, encoder_hidden_size=encoder_hidden_size, attention_dropout=attention_dropout, use_bias=use_bias)
         self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.num_heads)
 
