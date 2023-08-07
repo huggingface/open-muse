@@ -1117,7 +1117,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             if use_conv_in_out:
                 self.mlm_layer = ConvMlmLayer(
                     self.output_size,
-                    embedding_size,
+                    self.embedding_size,
                     hidden_size,
                     patch_size=patch_size,
                     norm_type=norm_type,
