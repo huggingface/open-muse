@@ -1104,7 +1104,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
-                    embedding_size=embedding_size
+                    embedding_size=self.embedding_size
                 )
                 for _ in range(self.num_hidden_layers)
             ]
