@@ -853,7 +853,16 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
 
 @torch.no_grad()
 def generate_images(
-    model, vq_model, text_encoder, tokenizer, accelerator, config, global_step, mask_schedule, empty_embeds=None, empty_clip_embeds=None
+    model,
+    vq_model,
+    text_encoder,
+    tokenizer,
+    accelerator,
+    config,
+    global_step,
+    mask_schedule,
+    empty_embeds=None,
+    empty_clip_embeds=None,
 ):
     logger.info("Generating images...")
     model.eval()
