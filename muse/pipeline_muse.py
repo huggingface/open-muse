@@ -83,6 +83,7 @@ class PipelineMuse:
         aesthetic_score=6.0,
         return_intermediate: bool = False,
         use_tqdm=True,
+        use_cache=False,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -192,6 +193,7 @@ class PipelineMuse:
                 predict_all_tokens=predict_all_tokens,
                 return_intermediate=return_intermediate,
                 use_tqdm=use_tqdm,
+                use_cache=use_cache,
             )
 
             if return_intermediate:

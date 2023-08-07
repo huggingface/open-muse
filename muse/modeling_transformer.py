@@ -150,13 +150,14 @@ class AdaLNModulation(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, hidden_size, num_heads, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
+    def __init__(self, hidden_size, num_heads, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False, is_cross_attention=False):
         super().__init__()
 
         self.hidden_size = hidden_size
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.attention_dropout = attention_dropout
+        self.is_cross_attention = is_cross_attention
         if self.head_dim * self.num_heads != self.hidden_size:
             raise ValueError(
                 f"embed_dim must be divisible by num_heads (got `embed_dim`: {self.hidden_size} and"
@@ -173,6 +174,9 @@ class Attention(nn.Module):
         self.out = nn.Linear(self.hidden_size, self.hidden_size, bias=use_bias)
         self.dropout = nn.Dropout(attention_dropout)
 
+        if is_cross_attention:
+            self._kv_cache = None
+
         self.use_memory_efficient_attention_xformers = False
         self.xformers_attention_op = None
 
@@ -184,7 +188,7 @@ class Attention(nn.Module):
         self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
         self.xformers_attention_op = attention_op
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, use_cache=False):
         if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
             raise ValueError("Memory efficient attention does not yet support encoder attention mask")
 
@@ -193,12 +197,21 @@ class Attention(nn.Module):
         kv_seq_len = q_seq_len if encoder_hidden_states is None else encoder_hidden_states.shape[1]
 
         query = self.query(hidden_states)
-        key = self.key(context)
-        value = self.value(context)
+
+        if self.is_cross_attention and use_cache and self._kv_cache is not None:
+            key, value = self._kv_cache
+        else:
+            key = self.key(context)
+            value = self.value(context)
 
         query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        if self.is_cross_attention and use_cache and self._kv_cache is not None:
+            key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+            value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        
+        # cahce key and value for cross attention
+        if self.is_cross_attention and use_cache and self._kv_cache is None:
+            self._kv_cache = (key, value)
 
         if self.use_memory_efficient_attention_xformers:
             attn_output = xops.memory_efficient_attention(
@@ -261,14 +274,14 @@ class AttentionBlock2D(nn.Module):
         self.attn_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
         self.attention = Attention(hidden_size, num_heads, attention_dropout=attention_dropout, use_bias=use_bias)
         self.crossattn_layer_norm = norm_cls(hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine)
-        self.crossattention = Attention(hidden_size, num_heads, attention_dropout=attention_dropout, use_bias=use_bias)
+        self.crossattention = Attention(hidden_size, num_heads, attention_dropout=attention_dropout, use_bias=use_bias, is_cross_attention=True)
 
         if encoder_hidden_size != hidden_size:
             self.kv_mapper = nn.Linear(encoder_hidden_size, hidden_size, bias=use_bias)
         else:
             self.kv_mapper = None
 
-    def forward(self, hidden_states, encoder_hidden_states, encoder_attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states, encoder_attention_mask=None, use_cache=False):
         # hidden_states -> (bs, hidden_size, height, width)
         # reshape to (bs, height * width, hidden_size)
         batch_size, channels, height, width = hidden_states.shape
@@ -287,7 +300,7 @@ class AttentionBlock2D(nn.Module):
         # cross attention
         residual = hidden_states
         hidden_states = self.crossattn_layer_norm(hidden_states)
-        hidden_states = self.crossattention(hidden_states, encoder_hidden_states, encoder_attention_mask)
+        hidden_states = self.crossattention(hidden_states, encoder_hidden_states, encoder_attention_mask, use_cache=use_cache)
         hidden_states = hidden_states + residual
 
         # reshape back to (bs, hidden_size, height, width)
@@ -494,7 +507,7 @@ class DownsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None, cond_embeds=None, encoder_hidden_states=None, **kwargs):
+    def forward(self, x, x_skip=None, cond_embeds=None, encoder_hidden_states=None, use_cache=False, **kwargs):
         if self.add_downsample:
             x = self.downsample(x)
 
@@ -516,7 +529,7 @@ class DownsampleBlock(nn.Module):
             else:
                 x = res_block(x, x_skip, cond_embeds=cond_embeds)
                 if self.has_attention:
-                    x = self.attention_blocks[i](x, encoder_hidden_states)
+                    x = self.attention_blocks[i](x, encoder_hidden_states, use_cache=use_cache)
 
             output_states += (x,)
         return x, output_states
@@ -597,7 +610,7 @@ class UpsampleBlock(nn.Module):
 
         self.gradient_checkpointing = False
 
-    def forward(self, x, x_skip=None, cond_embeds=None, encoder_hidden_states=None, **kwargs):
+    def forward(self, x, x_skip=None, cond_embeds=None, encoder_hidden_states=None, use_cache=False, **kwargs):
         for i, res_block in enumerate(self.res_blocks):
             x_res = x_skip[0] if i == 0 and x_skip is not None else None
 
@@ -617,7 +630,7 @@ class UpsampleBlock(nn.Module):
             else:
                 x = res_block(x, x_res, cond_embeds=cond_embeds)
                 if self.has_attention:
-                    x = self.attention_blocks[i](x, encoder_hidden_states)
+                    x = self.attention_blocks[i](x, encoder_hidden_states, use_cache=use_cache)
 
         if self.add_upsample:
             x = self.upsample(x)
@@ -851,7 +864,7 @@ class TransformerLayer(nn.Module):
                 self.hidden_size, eps=layer_norm_eps, elementwise_affine=ln_elementwise_affine
             )
             self.crossattention = Attention(
-                self.hidden_size, self.num_attention_heads, encoder_hidden_size, attention_dropout, use_bias
+                self.hidden_size, self.num_attention_heads, encoder_hidden_size, attention_dropout, use_bias, is_cross_attention=True
             )
             if use_normformer:
                 self.post_crossattn_layer_norm = norm_cls(
@@ -869,7 +882,7 @@ class TransformerLayer(nn.Module):
                     use_bias=use_bias,
                 )
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None, use_cache=False):
         residual = hidden_states
 
         hidden_states = self.attn_layer_norm(hidden_states)
@@ -890,6 +903,7 @@ class TransformerLayer(nn.Module):
                 hidden_states,
                 encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_attention_mask,
+                use_cache=use_cache,
             )
             if self.use_normformer:
                 attention_output = self.post_crossattn_layer_norm(attention_output)
@@ -1764,6 +1778,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         empty_embeds=None,
         empty_cond_embeds=None,
         micro_conds=None,
+        use_cache=False,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
@@ -1823,7 +1838,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         down_block_res_samples = (hidden_states,)
         for down_block in self.down_blocks:
             hidden_states, res_samples = down_block(
-                hidden_states, cond_embeds=cond_embeds, encoder_hidden_states=encoder_hidden_states
+                hidden_states, cond_embeds=cond_embeds, encoder_hidden_states=encoder_hidden_states, use_cache=use_cache
             )
             down_block_res_samples += res_samples
 
@@ -1856,6 +1871,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                     cond_embeds=cond_embeds,
+                    use_cache=use_cache,
                 )
 
         if self.config.use_encoder_layernorm:
@@ -1878,7 +1894,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 x_skip = res_samples if i > 0 else None
 
             hidden_states = up_block(
-                hidden_states, x_skip=x_skip, cond_embeds=cond_embeds, encoder_hidden_states=encoder_hidden_states
+                hidden_states, x_skip=x_skip, cond_embeds=cond_embeds, encoder_hidden_states=encoder_hidden_states, use_cache=use_cache
             )
 
         if self.config.layer_norm_before_mlm:
@@ -2051,6 +2067,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         predict_all_tokens=False,
         generator: torch.Generator = None,
         return_intermediate=False,
+        use_cache=False,
         **kwargs,
     ):
         """
@@ -2138,7 +2155,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             # classifier free guidance
             if encoder_hidden_states is not None and guidance_scale > 0:
                 model_input = torch.cat([input_ids] * 2)
-                cond_logits, uncond_logits = self(model_input, **model_conds).chunk(2)
+                cond_logits, uncond_logits = self(model_input, use_cache=use_cache, **model_conds).chunk(2)
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
