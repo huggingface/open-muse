@@ -834,7 +834,37 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = self.ff1(hidden_states)
         hidden_states =  rearrange(hidden_states, 'b x y w1 w2 d -> b d (w1 x) (w2 y)')
         return hidden_states
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
+        residual = hidden_states
 
+        hidden_states = self.attn_layer_norm(hidden_states)
+        if cond_embeds is not None:
+            hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
+        print("Input hidden states", hidden_states.shape)
+        attention_output = self.attention(hidden_states)
+        if self.use_normformer:
+            attention_output = self.post_attn_layer_norm(attention_output)
+        hidden_states = residual + attention_output
+
+        if encoder_hidden_states is not None:
+            residual = hidden_states
+            # TODO: should norm be applied to encoder_hidden_states as well?
+            hidden_states = self.crossattn_layer_norm(hidden_states)
+            if cond_embeds is not None:
+                hidden_states = self.cross_attn_adaLN_modulation(hidden_states, cond_embeds)
+            attention_output = self.crossattention(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+            )
+            if self.use_normformer:
+                attention_output = self.post_crossattn_layer_norm(attention_output)
+            hidden_states = residual + attention_output
+
+        residual = hidden_states
+        hidden_states = self.ffn(hidden_states, cond_embeds=cond_embeds)
+        hidden_states = residual + hidden_states
+        return hidden_states
 
 class Embed(nn.Module):
     def __init__(
@@ -1425,7 +1455,6 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
-        use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
         layer_norm_before_mlm=False,
@@ -1478,7 +1507,6 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             layer_norm_embeddings=layer_norm_embeddings,
             layer_norm_eps=layer_norm_eps,
             ln_elementwise_affine=ln_elementwise_affine,
-            use_position_embeddings=use_position_embeddings,
             use_bias=use_bias,
         )
 
