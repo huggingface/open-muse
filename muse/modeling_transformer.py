@@ -2119,13 +2119,13 @@ class MaxVitAttention(Attention):
         batch, height, width, window_height, window_width, _ = hidden_states.shape
         # flatten
         # Here, w1 and w2 are both window size so x will have size (b x y), window_size**2, d
-        x = rearrange(x, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
+        hidden_states = rearrange(hidden_states, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
         bias = self.rel_pos_bias(self.rel_pos_indices)
         # shape is [window_size**2, window_size**2, self.num_heads]
         bias = rearrange(bias, 'i j h -> h i j')
         # shape is [self.num_heads, window_size**2, window_size**2]
         # the bias adds positional embeddings for each window size segment
-        out = super().forward(x, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
+        out = super().forward(hidden_states, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
         out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
 
         # combine heads out
