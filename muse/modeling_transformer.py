@@ -1080,6 +1080,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         use_conv_in_out=False,
         patch_size=1,
         transformer_type="default",
+        window_size=4,
         **kwargs,
     ):
         super().__init__()
@@ -1140,7 +1141,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
-                    embedding_size=self.embedding_size
+                    embedding_size=self.embedding_size,
+                    window_size=window_size
                 )
                 for _ in range(self.num_hidden_layers)
             ]
