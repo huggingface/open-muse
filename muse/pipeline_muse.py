@@ -120,7 +120,7 @@ class PipelineMuse:
 
             if negative_text is not None:
                 if isinstance(negative_text, str):
-                    negative_text = [negative_text]
+                    negative_text = [negative_text] * len(text)
 
                 negative_input_ids = self.tokenizer(
                     negative_text,
