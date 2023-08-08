@@ -794,7 +794,6 @@ class MaxVitTransformerLayer(TransformerLayer):
             **kwargs
         )
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
-        print("hidden size", hidden_size)
         self.mb_conv = MBConv(
             embedding_size,
             embedding_size,
@@ -817,7 +816,6 @@ class MaxVitTransformerLayer(TransformerLayer):
         # our local attention once positional embeddings are added to it
         # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
         # This helps us make a "global" grid of window_size x window_size
-        print("hidden states", hidden_states.shape)
         hidden_states = self.mb_conv(hidden_states)
         # block like attention(local attention)
         hidden_states = rearrange(hidden_states, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
@@ -840,7 +838,6 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = self.attn_layer_norm(hidden_states)
         if cond_embeds is not None:
             hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
-        print("Input hidden states", hidden_states.shape)
         hidden_states = hidden_states.permute(0, 2, 1)
         b, c, seq_length = hidden_states.shape
         h, w = int(seq_length**0.5), int(seq_length**0.5)
@@ -850,8 +847,6 @@ class MaxVitTransformerLayer(TransformerLayer):
         attention_output = attention_output.permute(0, 2, 1)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
-        print("residual", residual.shape)
-        print("attention_output", attention_output.shape)
 
         hidden_states = residual + attention_output
 
@@ -1209,14 +1204,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
-        print("input ids", input_ids.shape)
         hidden_states = self.embed(input_ids)
-        print("hidden states", hidden_states.shape)
 
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
             encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
-            print("encoder hidden states", encoder_hidden_states.shape)
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
@@ -1241,7 +1233,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     encoder_hidden_states=encoder_hidden_states,
                     encoder_attention_mask=encoder_attention_mask,
                 )
-                print("hidden states", hidden_states.shape)
 
         if self.config.use_encoder_layernorm:
             hidden_states = self.encoder_layer_norm(hidden_states)
@@ -2127,8 +2118,6 @@ class MaxVitAttention(Attention):
         bias = self.rel_pos_bias(self.rel_pos_indices)
         # shape is [window_size**2, window_size**2, self.num_heads]
         bias = rearrange(bias, 'i j h -> h i j')
-        print("bias shape")
-        print(bias.shape)
         # shape is [self.num_heads, window_size**2, window_size**2]
         # the bias adds positional embeddings for each window size segment
         out = super().forward(hidden_states, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
