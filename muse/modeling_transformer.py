@@ -847,6 +847,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = hidden_states.view(b, c, h, w)
         attention_output = self.attention(hidden_states)
         attention_output = attention_output.view(b, c, seq_length)
+        attention_output = attention_output.permute(0, 2, 1)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
         print("residual", residual.shape)
