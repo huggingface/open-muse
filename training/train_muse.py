@@ -602,6 +602,7 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
+                accelerator.print(torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
