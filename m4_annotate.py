@@ -29,7 +29,6 @@ import pandas as pd
 import pyarrow as pa
 import s3fs
 from dask.base import tokenize
-from dask.diagnostics import ProgressBar
 from dask.highlevelgraph import HighLevelGraph
 from PIL import Image
 from webdataset import TarWriter
@@ -138,28 +137,28 @@ def cli_args():
 
 
 def main(args):
-    print("loading df 1 of 4")
+    logger.warning("loading stability metadata 1 of 4")
     stability_metadata_dfs_1 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/1/*.parquet",
         index="url",
         calculate_divisions=True,
     )
 
-    print("loading df 2 of 4")
+    logger.warning("loading stability metadata 2 of 4")
     stability_metadata_dfs_2 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/2/*.parquet",
         index="url",
         calculate_divisions=True,
     )
 
-    print("loading df 3 of 4")
+    logger.warning("loading stability metadata 3 of 4")
     stability_metadata_dfs_3 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/3/*.parquet",
         index="url",
         calculate_divisions=True,
     )
 
-    print("loading df 4 of 4")
+    logger.warning("loading stability metadata 4 of 4")
     stability_metadata_dfs_4 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/4/*.parquet",
         index="url",
@@ -174,7 +173,7 @@ def main(args):
     for shard_url_idx in range(args.start_shard, args.end_shard + 1):
         shard_url = shard_urls[shard_url_idx].strip()
 
-        logger.warning(f"shard_url: {shard_url}")
+        logger.warning(f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] - shard_url: {shard_url}")
 
         shard_df = read_shard_and_create_data_frame(s3, shard_url)
 
@@ -184,6 +183,7 @@ def main(args):
         num_workers = 24
 
         t0 = time.perf_counter()
+
         meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_1)
         shard_df = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1, dedup_columns=False)
         shard_df = shard_df.compute(scheduler="processes", num_workers=num_workers)
@@ -200,9 +200,17 @@ def main(args):
         shard_df = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4, dedup_columns=True)
         shard_df = shard_df.compute(scheduler="processes", num_workers=num_workers)
 
-        print(f"time for merge {time.perf_counter() - t0}")
+        logger.warning(
+            f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge {time.perf_counter() - t0}"
+        )
+
+        t0 = time.perf_counter()
 
         write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url)
+
+        logger.warning(
+            f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for write {time.perf_counter() - t0}"
+        )
 
 
 def distribute_shards(start_shard_all, end_shard_all, slurm_ntasks):
