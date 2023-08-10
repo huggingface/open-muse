@@ -317,7 +317,10 @@ def main():
         vq_model = None
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
-    model = model_cls(**config.model.transformer)
+    if config.model.get("pretrained_model_path", None) is not None:
+        model = model_cls.from_pretrained(config.model.pretrained_model_path)
+    else:
+        model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
     output_size = model.output_size
 
