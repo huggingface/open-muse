@@ -228,9 +228,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
-            config.training.batch_size
-        )
+        accelerator.state.deepspeed_plugin.deepspeed_config[
+            "train_micro_batch_size_per_gpu"
+        ] = config.training.batch_size
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -537,12 +537,20 @@ def main():
             accelerator.print(f"Resuming from checkpoint {path}")
 
             resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
+            dont_resume_optimizer = config.experiment.get("dont_resume_optimizer", False)
             if not resume_lr_scheduler:
                 logger.info("Not resuming the lr scheduler.")
                 accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
+            if dont_resume_optimizer:
+                logger.info("Not resuming the optimizer.")
+                optimizer = None
+
             accelerator.load_state(path)
             if not resume_lr_scheduler:
                 accelerator._schedulers = [lr_scheduler]
+            if dont_resume_optimizer:
+                accelerator._optimizers = [optimizer]
+
             global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
 
@@ -834,9 +842,16 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
         pixel_values, input_ids = batch["image"], batch["input_ids"]
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
-        input_ids, encoder_hidden_states, labels, _, _, loss_weight, clip_embeds, micro_conds = (
-            prepare_inputs_and_labels(pixel_values, input_ids, batch=batch, is_train=False)
-        )
+        (
+            input_ids,
+            encoder_hidden_states,
+            labels,
+            _,
+            _,
+            loss_weight,
+            clip_embeds,
+            micro_conds,
+        ) = prepare_inputs_and_labels(pixel_values, input_ids, batch=batch, is_train=False)
         _, loss = model(
             input_ids=input_ids,
             encoder_hidden_states=encoder_hidden_states,
