@@ -543,13 +543,16 @@ def main():
                 accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
             if dont_resume_optimizer:
                 logger.info("Not resuming the optimizer.")
-                optimizer = None
+                accelerator._optimizers = []  # very hacky, but we don't want to resume the optimizer
+                grad_scaler = accelerator.scaler
+                accelerator.scaler = None
 
             accelerator.load_state(path)
             if not resume_lr_scheduler:
                 accelerator._schedulers = [lr_scheduler]
             if dont_resume_optimizer:
                 accelerator._optimizers = [optimizer]
+                accelerator.scaler = grad_scaler
 
             global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
