@@ -940,8 +940,9 @@ def generate_images(
         clip_embeds = None
 
     if config.model.transformer.get("add_micro_cond_embeds", False):
+        resolution = config.dataset.preprocessing.resolution
         micro_conds = torch.tensor(
-            [256, 256, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
         )
         micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
 
