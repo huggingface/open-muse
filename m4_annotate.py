@@ -175,7 +175,7 @@ def main(args):
         for shard_url_idx in range(args.start_shard, args.end_shard + 1):
             shard_url = shard_urls[shard_url_idx].strip()
 
-            logger.warning(f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] - shard_url: {shard_url}")
+            logger.warning(f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] shard_url: {shard_url}")
 
             shard_df = read_shard_and_create_data_frame(s3, shard_url)
 
