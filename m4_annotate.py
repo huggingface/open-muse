@@ -111,24 +111,20 @@ def cli_args():
     parser.add_argument(
         "--start_shard",
         type=int,
-        help="The starting shard to pre-encode.",
         required=True,
     )
     parser.add_argument(
         "--end_shard",
         type=int,
-        help="The ending shard to pre-encode, inclusive. If not given, defaults to `--start_shard`.",
         required=False,
     )
     parser.add_argument(
         "--slurm",
         action="store_true",
-        help=(
-            "If set, this process is running under a batch of slurm tasks."
-            "`--start_shard` and `--end_shard` must be set for the entirety of shards over all slurm tasks."
-            " The shards that will be encoded in each instance of the task will be determined via"
-            " the env vars `$SLURM_NTASKS` and `$SLURM_PROCID`."
-        ),
+    )
+    parser.add_argument(
+        "--skip_upload",
+        action="store_true",
     )
 
     cli_args = parser.parse_args()
@@ -254,23 +250,24 @@ def main(args):
                 f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge {time.perf_counter() - t0}"
             )
 
-            upload_future = uploading_pool.submit(
-                write_joined_data_to_new_s3_bucket_as_wds,
-                shard_df,
-                shard_url,
-                args.start_shard,
-                args.end_shard,
-                shard_url_idx,
-            )
+            if not args.skip_upload:
+                upload_future = uploading_pool.submit(
+                    write_joined_data_to_new_s3_bucket_as_wds,
+                    shard_df,
+                    shard_url,
+                    args.start_shard,
+                    args.end_shard,
+                    shard_url_idx,
+                )
 
-            upload_futures.append(upload_future)
+                upload_futures.append(upload_future)
 
-            for i in range(len(upload_futures) - 1, -1, -1):
-                upload_future = upload_futures[i]
+                for i in range(len(upload_futures) - 1, -1, -1):
+                    upload_future = upload_futures[i]
 
-                if upload_future.done():
-                    upload_future.result()  # To raise exception if occurred
-                    del upload_futures[i]
+                    if upload_future.done():
+                        upload_future.result()  # To raise exception if occurred
+                        del upload_futures[i]
 
         concurrent.futures.wait(upload_futures)
 
