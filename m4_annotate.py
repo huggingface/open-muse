@@ -42,36 +42,6 @@ M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
 
 # We manually add the `_stability_metadata` suffix to make it easier
 # to move them into their own subdict separate from the existing metadata
-COLS_FROM_STABILITY_METADATA = [
-    "SSCD_85_stability_metadata",
-    "SSCD_75_stability_metadata",
-    "SSCD_65_stability_metadata",
-    "SSCD_50_stability_metadata",
-    "is_spawning_stability_metadata",
-    "is_coyo_stability_metadata",
-    "is_laion_stability_metadata",
-    "Id_stability_metadata",
-    "is_getty_stability_metadata",
-    "caption_stability_metadata",
-    "key_stability_metadata",
-    "status_stability_metadata",
-    "error_message_stability_metadata",
-    "width_stability_metadata",
-    "height_stability_metadata",
-    "original_width_stability_metadata",
-    "original_height_stability_metadata",
-    "exif_stability_metadata",
-    "sha256_stability_metadata",
-    "p_watermarkdf_stability_metadata",
-    "p_nsfwdf_stability_metadata",
-    "p_bumble_stability_metadata",
-    "gnt_drawings_stability_metadata",
-    "gnt_hentai_stability_metadata",
-    "gnt_neutral_stability_metadata",
-    "gnt_porn_stability_metadata",
-    "gnt_sexy_stability_metadata",
-]
-
 COLS_FROM_STABILITY_METADATA_RENAMES = {
     "SSCD_85": "SSCD_85_stability_metadata",
     "SSCD_75": "SSCD_75_stability_metadata",
@@ -101,6 +71,8 @@ COLS_FROM_STABILITY_METADATA_RENAMES = {
     "gnt_porn": "gnt_porn_stability_metadata",
     "gnt_sexy": "gnt_sexy_stability_metadata",
 }
+
+COLS_FROM_STABILITY_METADATA = COLS_FROM_STABILITY_METADATA_RENAMES.values()
 
 
 logger = Logger(__name__)
@@ -216,35 +188,37 @@ def main(args):
 
             t00 = time.perf_counter()
             meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_1)
-            shard_df = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1, dedup_columns=False)
-            shard_df = shard_df.compute(scheduler="processes", num_workers=num_workers)
+            shard_df_1 = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1)
+            shard_df_1 = shard_df_1.compute(scheduler="processes", num_workers=num_workers)
             logger.warning(
                 f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1 {time.perf_counter() - t00}"
             )
 
             t00 = time.perf_counter()
             meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_2)
-            shard_df = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2, dedup_columns=True)
-            shard_df = shard_df.compute(scheduler="processes", num_workers=num_workers)
+            shard_df_2 = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2)
+            shard_df_2 = shard_df_2.compute(scheduler="processes", num_workers=num_workers)
             logger.warning(
                 f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2 {time.perf_counter() - t00}"
             )
 
             t00 = time.perf_counter()
             meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_3)
-            shard_df = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3, dedup_columns=True)
-            shard_df = shard_df.compute(scheduler="processes", num_workers=num_workers)
+            shard_df_3 = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3)
+            shard_df_3 = shard_df_3.compute(scheduler="processes", num_workers=num_workers)
             logger.warning(
                 f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3 {time.perf_counter() - t00}"
             )
 
             t00 = time.perf_counter()
             meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_4)
-            shard_df = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4, dedup_columns=True)
-            shard_df = shard_df.compute(scheduler="processes", num_workers=num_workers)
+            shard_df_4 = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4)
+            shard_df_4 = shard_df_4.compute(scheduler="processes", num_workers=num_workers)
             logger.warning(
                 f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4 {time.perf_counter() - t00}"
             )
+
+            shard_df = shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
 
             logger.warning(
                 f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge {time.perf_counter() - t0}"
@@ -338,7 +312,7 @@ def make_optimized_left_join_meta(shard_df, stability_metadata_df):
     )
 
 
-def optimized_left_join(lhs, rhs, meta, stability_metadata_dir_idx, dedup_columns):
+def optimized_left_join(lhs, rhs, meta, stability_metadata_dir_idx):
     name = "optimized-left-join-" + tokenize(lhs, rhs)
 
     dsk = dict()
@@ -382,7 +356,7 @@ def optimized_left_join(lhs, rhs, meta, stability_metadata_dir_idx, dedup_column
         dsk[(name, len(dsk))] = (
             dask.utils.apply,
             optimized_left_join_merge_with_one_partition,
-            [lhs_for_single_rhs_partition, partition_idx, stability_metadata_dir_idx, dedup_columns],
+            [lhs_for_single_rhs_partition, partition_idx, stability_metadata_dir_idx],
         )
 
     divisions.append(lhs.index[-1])
@@ -397,39 +371,17 @@ def optimized_left_join(lhs, rhs, meta, stability_metadata_dir_idx, dedup_column
 
 
 def optimized_left_join_merge_with_one_partition(
-    lhs_for_single_rhs_partition: pd.DataFrame, rhs_partition_idx, stability_metadata_dir_idx, dedup_columns
+    lhs_for_single_rhs_partition: pd.DataFrame, rhs_partition_idx, stability_metadata_dir_idx
 ):
     rhs_partition_idx = format_shard_number(rhs_partition_idx)
+
     rhs_partition = pd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/{stability_metadata_dir_idx}/{rhs_partition_idx}.parquet"
     )
+
     rhs_partition.rename(columns=COLS_FROM_STABILITY_METADATA_RENAMES, inplace=True)
 
-    if dedup_columns:
-        single_partition_merged = lhs_for_single_rhs_partition.join(rhs_partition, rsuffix="_rsuffix")
-
-        mask_where_join_has_not_been_found_yet = single_partition_merged["SSCD_85_stability_metadata"].isna()
-
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                category=DeprecationWarning,
-                message=(
-                    ".*will attempt to set the values inplace instead of always setting a new array. "
-                    "To retain the old behavior, use either.*"
-                ),
-            )
-
-            for col in COLS_FROM_STABILITY_METADATA:
-                single_partition_merged.loc[mask_where_join_has_not_been_found_yet, col] = single_partition_merged.loc[
-                    mask_where_join_has_not_been_found_yet, f"{col}_rsuffix"
-                ]
-                single_partition_merged.mask(mask_where_join_has_not_been_found_yet)
-
-        cols_to_drop = [f"{col}_rsuffix" for col in COLS_FROM_STABILITY_METADATA]
-        single_partition_merged.drop(cols_to_drop, inplace=True, axis="columns")
-    else:
-        single_partition_merged = lhs_for_single_rhs_partition.join(rhs_partition)
+    single_partition_merged = lhs_for_single_rhs_partition.join(rhs_partition)
 
     return single_partition_merged
 
