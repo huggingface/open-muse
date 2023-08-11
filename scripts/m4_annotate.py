@@ -18,7 +18,6 @@ import json
 import os
 import re
 import time
-import warnings
 from logging import Logger
 
 import dask
@@ -98,6 +97,10 @@ def cli_args():
         "--skip_upload",
         action="store_true",
     )
+    parser.add_argument(
+        "--fork_children",
+        action="store_true",
+    )
 
     cli_args = parser.parse_args()
 
@@ -136,6 +139,11 @@ def cli_args():
 
 
 def main(args):
+    os.makedirs(LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR, exist_ok=True)
+    os.system(
+        f"aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
+    )
+
     logger.warning("loading stability metadata 1 of 4")
     stability_metadata_dfs_1 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/1/*.parquet",
@@ -163,6 +171,46 @@ def main(args):
         index="url",
         calculate_divisions=True,
     )
+
+    if args.fork_children:
+        logger.warning("forking children")
+
+        # make three child processes for a total of 4 processes
+
+        distributed_shards = distribute_shards(args.start_shard, args.end_shard, 4)
+
+        child_pid_1 = os.fork()
+
+        if child_pid_1 == 0:
+            # child process 1
+            args.start_shard = distributed_shards[1][0]
+            args.end_shard = distributed_shards[1][1]
+            is_parent_process = False
+            logger.warning(f"child process 1 handling {args.start_shard}-{args.end_shard}")
+        else:
+            child_pid_2 = os.fork()
+
+            if child_pid_2 == 0:
+                # child process 2
+                args.start_shard = distributed_shards[2][0]
+                args.end_shard = distributed_shards[2][1]
+                is_parent_process = False
+                logger.warning(f"child process 2 handling {args.start_shard}-{args.end_shard}")
+            else:
+                child_pid_3 = os.fork()
+
+                if child_pid_3 == 0:
+                    # child process 3
+                    args.start_shard = distributed_shards[3][0]
+                    args.end_shard = distributed_shards[3][1]
+                    is_parent_process = False
+                    logger.warning(f"child process 3 handling {args.start_shard}-{args.end_shard}")
+                else:
+                    # parent process
+                    args.start_shard = distributed_shards[0][0]
+                    args.end_shard = distributed_shards[0][1]
+                    is_parent_process = True
+                    logger.warning(f"parent process handling {args.start_shard}-{args.end_shard}")
 
     s3 = s3fs.S3FileSystem()
 
@@ -245,29 +293,34 @@ def main(args):
 
         concurrent.futures.wait(upload_futures)
 
+        if args.fork_children and is_parent_process:
+            assert os.wait(child_pid_1)[1] == 0
+            assert os.wait(child_pid_2)[1] == 0
+            assert os.wait(child_pid_3)[1] == 0
 
-def distribute_shards(start_shard_all, end_shard_all, slurm_ntasks):
+
+def distribute_shards(start_shard_all, end_shard_all, ntasks):
     total_shards = end_shard_all - start_shard_all + 1
-    shards_per_task = total_shards // slurm_ntasks
-    shards_per_task = [shards_per_task] * slurm_ntasks
+    shards_per_task = total_shards // ntasks
+    shards_per_task = [shards_per_task] * ntasks
 
     # to distribute the remainder of tasks for non-evenly divisible number of shards
-    left_over_shards = total_shards % slurm_ntasks
+    left_over_shards = total_shards % ntasks
 
-    for slurm_procid in range(left_over_shards):
-        shards_per_task[slurm_procid] += 1
+    for task_idx in range(left_over_shards):
+        shards_per_task[task_idx] += 1
 
     assert sum(shards_per_task) == total_shards
 
     distributed_shards = []
 
-    for slurm_procid in range(len(shards_per_task)):
-        if slurm_procid == 0:
+    for task_idx in range(len(shards_per_task)):
+        if task_idx == 0:
             start_shard = start_shard_all
         else:
-            start_shard = distributed_shards[slurm_procid - 1][1] + 1
+            start_shard = distributed_shards[task_idx - 1][1] + 1
 
-        end_shard = start_shard + shards_per_task[slurm_procid] - 1
+        end_shard = start_shard + shards_per_task[task_idx] - 1
         distributed_shards.append((start_shard, end_shard))
 
     assert sum([end_shard - start_shard + 1 for start_shard, end_shard in distributed_shards]) == total_shards
