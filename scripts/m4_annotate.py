@@ -97,10 +97,6 @@ def cli_args():
         "--skip_upload",
         action="store_true",
     )
-    parser.add_argument(
-        "--fork_children",
-        action="store_true",
-    )
 
     cli_args = parser.parse_args()
 
@@ -144,6 +140,21 @@ def main(args):
         f"aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
     )
 
+    n_workers = 4
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
+        for _ in pool.map(single_process_main, [args] * n_workers, range(n_workers), [n_workers] * n_workers):
+            ...
+
+
+def single_process_main(args, process_idx, n_workers):
+    # Not sure how but the process pool executor ends up restricting the cpu affinity for the workers it creates
+    os.sched_setaffinity(os.getpid(), range(os.cpu_count()))
+
+    start_shard, end_shard = distribute_shards(args.start_shard, args.end_shard, n_workers)[process_idx]
+    args.start_shard = start_shard
+    args.end_shard = end_shard
+
     logger.warning("loading stability metadata 1 of 4")
     stability_metadata_dfs_1 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/1/*.parquet",
@@ -171,46 +182,6 @@ def main(args):
         index="url",
         calculate_divisions=True,
     )
-
-    if args.fork_children:
-        logger.warning("forking children")
-
-        # make three child processes for a total of 4 processes
-
-        distributed_shards = distribute_shards(args.start_shard, args.end_shard, 4)
-
-        child_pid_1 = os.fork()
-
-        if child_pid_1 == 0:
-            # child process 1
-            args.start_shard = distributed_shards[1][0]
-            args.end_shard = distributed_shards[1][1]
-            is_parent_process = False
-            logger.warning(f"child process 1 handling {args.start_shard}-{args.end_shard}")
-        else:
-            child_pid_2 = os.fork()
-
-            if child_pid_2 == 0:
-                # child process 2
-                args.start_shard = distributed_shards[2][0]
-                args.end_shard = distributed_shards[2][1]
-                is_parent_process = False
-                logger.warning(f"child process 2 handling {args.start_shard}-{args.end_shard}")
-            else:
-                child_pid_3 = os.fork()
-
-                if child_pid_3 == 0:
-                    # child process 3
-                    args.start_shard = distributed_shards[3][0]
-                    args.end_shard = distributed_shards[3][1]
-                    is_parent_process = False
-                    logger.warning(f"child process 3 handling {args.start_shard}-{args.end_shard}")
-                else:
-                    # parent process
-                    args.start_shard = distributed_shards[0][0]
-                    args.end_shard = distributed_shards[0][1]
-                    is_parent_process = True
-                    logger.warning(f"parent process handling {args.start_shard}-{args.end_shard}")
 
     s3 = s3fs.S3FileSystem()
 
@@ -292,11 +263,6 @@ def main(args):
                         del upload_futures[i]
 
         concurrent.futures.wait(upload_futures)
-
-        if args.fork_children and is_parent_process:
-            assert os.wait(child_pid_1)[1] == 0
-            assert os.wait(child_pid_2)[1] == 0
-            assert os.wait(child_pid_3)[1] == 0
 
 
 def distribute_shards(start_shard_all, end_shard_all, ntasks):
