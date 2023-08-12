@@ -463,8 +463,6 @@ def main():
     logger.info("Preparing model, optimizer and dataloaders")
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
-    print(get_model_size(model), " used for transformer")
-    print(get_model_size(model.transformer_layers), " used for transformer")
 
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
@@ -583,6 +581,7 @@ def main():
         model.train()
         for batch in train_dataloader:
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
+            accelerator.print(torch.cuda.max_memory_allocated()/(1024**3), "gb used")
             pixel_values, input_ids = batch
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
             input_ids = input_ids.to(accelerator.device, non_blocking=True)
