@@ -1155,8 +1155,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 for _ in range(self.num_hidden_layers)
             ]
         )
-        for i in range(len(self.transformer_layers)):
-            print(get_model_size(self.transformer_layers[i]), "memory used for transformer layer")
         if use_encoder_layernorm:
             self.encoder_layer_norm = norm_cls(self.hidden_size, eps=layer_norm_eps)
 
@@ -2137,9 +2135,3 @@ class MaxVitAttention(Attention):
 
         # combine heads out
         return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
-
-def get_model_size(model):
-    mem_params = sum([param.nelement()*param.element_size() for param in model.parameters()])
-    mem_bufs = sum([buf.nelement()*buf.element_size() for buf in model.buffers()])
-    mem = mem_params + mem_bufs # in bytes
-    return mem // (1024**3)
