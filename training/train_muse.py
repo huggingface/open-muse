@@ -622,6 +622,7 @@ def main():
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
+                accelerator.print(torch.cuda.max_memory_allocated()/(1024**3), "gb used")
 
                 accelerator.backward(loss)
 
@@ -630,7 +631,6 @@ def main():
 
                 optimizer.step()
                 lr_scheduler.step()
-
                 # log gradient norm before zeroing it
                 if (
                     accelerator.sync_gradients
