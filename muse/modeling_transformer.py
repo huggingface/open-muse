@@ -816,11 +816,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         # our local attention once positional embeddings are added to it
         # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
         # This helps us make a "global" grid of window_size x window_size
-        print("before mbconv", torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
-
         hidden_states = self.mb_conv(hidden_states)
-        print("after mbconv", torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
-
         # block like attention(local attention)
         hidden_states = rearrange(hidden_states, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
         hidden_states = self.norm0(hidden_states)
@@ -828,8 +824,6 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.ff0(hidden_states)
         hidden_states = rearrange(hidden_states, 'b x y w1 w2 d -> b d (x w1) (y w2)')
-        print("after local attn", torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
-
         # grid-like attention(global attention)
         hidden_states = rearrange(hidden_states, 'b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
         hidden_states = self.norm2(hidden_states)
@@ -837,8 +831,6 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = self.norm3(hidden_states)
         hidden_states = self.ff1(hidden_states)
         hidden_states =  rearrange(hidden_states, 'b x y w1 w2 d -> b d (w1 x) (w2 y)')
-        print("after global attn", torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
-
         return hidden_states
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
         residual = hidden_states

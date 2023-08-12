@@ -463,8 +463,8 @@ def main():
     logger.info("Preparing model, optimizer and dataloaders")
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
-    get_model_size(model)
-    get_model_size(model.transformer_layers)
+    print(get_model_size(model), " used for transformer")
+    print(get_model_size(model.transformer_layers), " used for transformer")
 
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
@@ -606,7 +606,6 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
-                accelerator.print(torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
@@ -653,7 +652,6 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-                accelerator.print(torch.cuda.max_memory_allocated()/(1024 ** 3), " allocated")
 
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
