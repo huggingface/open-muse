@@ -1,16 +1,3 @@
-"""
-setup:
-```sh
-$ cd /scratch
-$ mkdir muse
-$ cd muse
-$ mkdir laion-coyo-dedup-metadata-url-indexed
-$ cd laion-coyo-dedup-metadata-url-indexed
-$ aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/ .
-```
-"""
-
-
 import argparse
 import concurrent.futures
 import io
@@ -143,7 +130,8 @@ def cli_args():
 def main(args):
     os.makedirs(LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR, exist_ok=True)
     os.system(
-        f"aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
+        "aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/"
+        f" {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
     )
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=args.n_workers) as pool:
@@ -222,7 +210,8 @@ def single_process_main(args, process_idx):
                 shard_df_1 = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1)
                 shard_df_1 = shard_df_1.compute()
                 logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1 {time.perf_counter() - t00}"
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1"
+                    f" {time.perf_counter() - t00}"
                 )
 
                 t00 = time.perf_counter()
@@ -230,7 +219,8 @@ def single_process_main(args, process_idx):
                 shard_df_2 = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2)
                 shard_df_2 = shard_df_2.compute()
                 logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2 {time.perf_counter() - t00}"
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2"
+                    f" {time.perf_counter() - t00}"
                 )
 
                 t00 = time.perf_counter()
@@ -238,7 +228,8 @@ def single_process_main(args, process_idx):
                 shard_df_3 = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3)
                 shard_df_3 = shard_df_3.compute()
                 logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3 {time.perf_counter() - t00}"
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3"
+                    f" {time.perf_counter() - t00}"
                 )
 
                 t00 = time.perf_counter()
@@ -246,13 +237,15 @@ def single_process_main(args, process_idx):
                 shard_df_4 = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4)
                 shard_df_4 = shard_df_4.compute()
                 logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4 {time.perf_counter() - t00}"
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4"
+                    f" {time.perf_counter() - t00}"
                 )
 
                 shard_df = shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
 
                 logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge {time.perf_counter() - t0}"
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge"
+                    f" {time.perf_counter() - t0}"
                 )
 
                 if not args.skip_upload:
@@ -437,6 +430,14 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
     tar_writer = TarWriter(f"pipe:aws s3 cp - {write_to}")
 
     for count, (url, row) in enumerate(shard_df.iterrows()):
+        image = row["image"]["bytes"]
+        image = io.BytesIO(image)
+        image = Image.open(image)
+        try:
+            image.load()
+        except OSError:
+            continue
+
         __key__ = format_shard_number(count)
 
         txt = row["text"]
@@ -458,10 +459,6 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
             row_stability_metadata[col_] = val
 
         json_["stability_metadata"] = row_stability_metadata
-
-        image = row["image"]["bytes"]
-        image = io.BytesIO(image)
-        image = Image.open(image)
 
         tar_writer.write({"__key__": __key__, "json": json_, "txt": txt, "jpg": image})
 
