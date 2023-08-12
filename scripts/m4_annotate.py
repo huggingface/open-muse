@@ -35,20 +35,7 @@ COLS_FROM_STABILITY_METADATA_RENAMES = {
     "SSCD_65": "SSCD_65_stability_metadata",
     "SSCD_50": "SSCD_50_stability_metadata",
     "is_spawning": "is_spawning_stability_metadata",
-    "is_coyo": "is_coyo_stability_metadata",
-    "is_laion": "is_laion_stability_metadata",
-    "Id": "Id_stability_metadata",
     "is_getty": "is_getty_stability_metadata",
-    "caption": "caption_stability_metadata",
-    "key": "key_stability_metadata",
-    "status": "status_stability_metadata",
-    "error_message": "error_message_stability_metadata",
-    "width": "width_stability_metadata",
-    "height": "height_stability_metadata",
-    "original_width": "original_width_stability_metadata",
-    "original_height": "original_height_stability_metadata",
-    "exif": "exif_stability_metadata",
-    "sha256": "sha256_stability_metadata",
     "p_watermarkdf": "p_watermarkdf_stability_metadata",
     "p_nsfwdf": "p_nsfwdf_stability_metadata",
     "p_bumble": "p_bumble_stability_metadata",
@@ -58,6 +45,22 @@ COLS_FROM_STABILITY_METADATA_RENAMES = {
     "gnt_porn": "gnt_porn_stability_metadata",
     "gnt_sexy": "gnt_sexy_stability_metadata",
 }
+
+COLS_FROM_STABILITY_METADATA_DROPS = [
+    "is_coyo",
+    "is_laion",
+    "Id",
+    "caption",
+    "key",
+    "status",
+    "error_message",
+    "width",
+    "height",
+    "original_width",
+    "original_height",
+    "exif",
+    "sha256",
+]
 
 COLS_FROM_STABILITY_METADATA = COLS_FROM_STABILITY_METADATA_RENAMES.values()
 
@@ -411,6 +414,8 @@ def optimized_left_join_merge_with_one_partition(
     rhs_partition = pd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/{stability_metadata_dir_idx}/{rhs_partition_idx}.parquet"
     )
+
+    rhs_partition.drop(labels=COLS_FROM_STABILITY_METADATA_DROPS, axis="columns", inplace=True)
 
     rhs_partition.rename(columns=COLS_FROM_STABILITY_METADATA_RENAMES, inplace=True)
 
