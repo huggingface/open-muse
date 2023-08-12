@@ -1,11 +1,13 @@
 """
 Step 1: 
-$ mkdir -p /scratch/muse/laicov2
-$ mkdir -p /scratch/muse/laicov2-splitted
-$ cd /scratch/muse/laicov2
+$ mkdir -p /scratch/muse/laiocov2
+$ mkdir -p /scratch/muse/laiocov2-splitted/{1,2,3,4}
+$ cd /scratch/muse/laiocov2
 $ aws s3 sync s3://muse-datasets/laiocov2/ .
+$ rm _SUCCESS
 
 Step 2:
+$ cd /fsx/william/open-muse
 $ time python -u scripts/m4_annotate/split_dedup_metadata.py --mode dryrun
 $ time python -u scripts/m4_annotate/split_dedup_metadata.py --mode move_files
 """
@@ -40,7 +42,7 @@ if __name__ == "__main__":
     else:
         assert False
 
-    filepaths = os.listdir(f"{initial_dedup_metadata_downloaded_to}/*.parquet")
+    filepaths = os.listdir(initial_dedup_metadata_downloaded_to)
     total_num_files = len(filepaths)
     num_files_per_split = total_num_files // 4
 
@@ -48,7 +50,7 @@ if __name__ == "__main__":
     current_split_count = 0
 
     for filepath in filepaths:
-        from_ = f"/scratch/muse/laicov2/{filepath}"
+        from_ = f"{initial_dedup_metadata_downloaded_to}/{filepath}"
         to = f"{splitted_dedup_metadata_subdirs[current_split_index]}/{filepath}"
 
         if args.mode == "dryrun":

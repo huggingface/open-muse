@@ -1,11 +1,11 @@
 """
 Step 3:
-$ mkdir -p /scratch/muse/laicov2-url-indexed
+$ mkdir -p /scratch/muse/laiocov2-url-indexed
 
-$ time python -u scripts/m4_annotate/index_dedup_metadata --sub_dir_name 1
-$ time python -u scripts/m4_annotate/index_dedup_metadata --sub_dir_name 2
-$ time python -u scripts/m4_annotate/index_dedup_metadata --sub_dir_name 3
-$ time python -u scripts/m4_annotate/index_dedup_metadata --sub_dir_name 4
+$ time python -u scripts/m4_annotate/index_dedup_metadata.py --sub_dir_name 1
+$ time python -u scripts/m4_annotate/index_dedup_metadata.py --sub_dir_name 2
+$ time python -u scripts/m4_annotate/index_dedup_metadata.py --sub_dir_name 3
+$ time python -u scripts/m4_annotate/index_dedup_metadata.py --sub_dir_name 4
 
 $ aws s3 sync /scratch/muse/laiocov2-url-indexed s3://muse-datasets/laiocov2-url-indexed/
 """
@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("--sub_dir_name", choices=["1", "2", "3", "4"], required=True, type=str)
     args = parser.parse_args()
 
-    splitted_dedup_metadata_dir = "/scratch/muse/laiocov2-url-splitted"
+    splitted_dedup_metadata_dir = "/scratch/muse/laiocov2-splitted"
     url_indexed_dedup_metadata_dir = "/scratch/muse/laiocov2-url-indexed"
 
     read_from = f"{splitted_dedup_metadata_dir}/{args.sub_dir_name}/*.parquet"
