@@ -134,9 +134,12 @@ def main(args):
         f" {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
     )
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=args.n_workers) as pool:
-        for _ in pool.map(single_process_main, [args] * args.n_workers, range(args.n_workers)):
-            ...
+    if args.n_workers == 1:
+        single_process_main(args, 0)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=args.n_workers) as pool:
+            for _ in pool.map(single_process_main, [args] * args.n_workers, range(args.n_workers)):
+                ...
 
 
 def single_process_main(args, process_idx):
@@ -209,6 +212,7 @@ def single_process_main(args, process_idx):
                 meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_1)
                 shard_df_1 = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1)
                 shard_df_1 = shard_df_1.compute()
+                shard_df_1 = shard_df_1[~shard_df_1.index.duplicated(keep="first")]
                 logger.warning(
                     f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1"
                     f" {time.perf_counter() - t00}"
@@ -218,6 +222,7 @@ def single_process_main(args, process_idx):
                 meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_2)
                 shard_df_2 = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2)
                 shard_df_2 = shard_df_2.compute()
+                shard_df_2 = shard_df_2[~shard_df_2.index.duplicated(keep="first")]
                 logger.warning(
                     f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2"
                     f" {time.perf_counter() - t00}"
@@ -227,6 +232,7 @@ def single_process_main(args, process_idx):
                 meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_3)
                 shard_df_3 = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3)
                 shard_df_3 = shard_df_3.compute()
+                shard_df_3 = shard_df_3[~shard_df_3.index.duplicated(keep="first")]
                 logger.warning(
                     f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3"
                     f" {time.perf_counter() - t00}"
@@ -236,12 +242,15 @@ def single_process_main(args, process_idx):
                 meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_4)
                 shard_df_4 = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4)
                 shard_df_4 = shard_df_4.compute()
+                shard_df_4 = shard_df_4[~shard_df_4.index.duplicated(keep="first")]
                 logger.warning(
                     f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4"
                     f" {time.perf_counter() - t00}"
                 )
 
-                shard_df = shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
+                shard_df_joined = (
+                    shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
+                )
 
                 logger.warning(
                     f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge"
@@ -251,7 +260,7 @@ def single_process_main(args, process_idx):
                 if not args.skip_upload:
                     upload_future = process_pool.submit(
                         write_joined_data_to_new_s3_bucket_as_wds,
-                        shard_df,
+                        shard_df_joined,
                         shard_url,
                         args.start_shard,
                         args.end_shard,
