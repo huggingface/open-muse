@@ -22,8 +22,6 @@ from PIL import Image
 from webdataset import TarWriter
 from webdataset.writer import add_handlers, make_handlers
 
-dask.config.set({"temporary_directory": "/scratch/dask_tmp"})
-
 LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laion-coyo-dedup-metadata-url-indexed"
 
 M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
@@ -132,6 +130,10 @@ def cli_args():
 
 
 def main(args):
+    temp_dir = "/scratch/dask_tmp"
+    os.makedirs(temp_dir, exist_ok=True)
+    dask.config.set({"temporary_directory": temp_dir})
+
     os.makedirs(LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR, exist_ok=True)
     os.system(
         "aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/"

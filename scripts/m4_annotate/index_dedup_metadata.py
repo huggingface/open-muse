@@ -12,6 +12,7 @@ $ aws s3 sync /scratch/muse/laiocov2-url-indexed s3://muse-datasets/laiocov2-url
 
 import argparse
 import logging
+import os
 from time import perf_counter
 
 import dask
@@ -20,7 +21,9 @@ from dask import dataframe
 logger = logging.Logger(__name__)
 
 if __name__ == "__main__":
-    dask.config.set({"temporary_directory": "/scratch/dask_tmp"})
+    temp_dir = "/scratch/dask_tmp"
+    os.makedirs(temp_dir, exist_ok=True)
+    dask.config.set({"temporary_directory": temp_dir})
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--sub_dir_name", choices=["1", "2", "3", "4"], required=True, type=str)
