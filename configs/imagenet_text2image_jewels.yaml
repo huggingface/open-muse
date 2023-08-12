@@ -48,7 +48,6 @@ model:
         use_bias: False
         hidden_dropout: 0.0
         attention_dropout: 0.0
-        window_size: 4
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: False
     offline: True

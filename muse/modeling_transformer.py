@@ -806,11 +806,11 @@ class MaxVitTransformerLayer(TransformerLayer):
         self.attn0 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, window_size = window_size)
         self.norm1 = norm_cls(hidden_size)
         # In lucidrian's code the implementation of feedforward is different
-        self.ff0 = FeedForward(hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_dropout=hidden_dropout)
+        self.ff0 = FeedForward(hidden_size=hidden_size, intermediate_size=hidden_size, hidden_dropout=hidden_dropout)
         self.norm2 = norm_cls(hidden_size)
         self.attn1 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, window_size = window_size)
         self.norm3 = norm_cls(hidden_size)
-        self.ff1 = FeedForward(hidden_size=hidden_size, intermediate_size=intermediate_size, hidden_dropout=hidden_dropout)
+        self.ff1 = FeedForward(hidden_size=hidden_size, intermediate_size=hidden_size, hidden_dropout=hidden_dropout)
     def attention(self, hidden_states):
         # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives 
         # our local attention once positional embeddings are added to it
