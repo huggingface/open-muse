@@ -15,6 +15,7 @@ import argparse
 import concurrent.futures
 import io
 import json
+import multiprocessing as mp
 import os
 import re
 import time
@@ -97,6 +98,11 @@ def cli_args():
         "--skip_upload",
         action="store_true",
     )
+    parser.add_argument(
+        "--n_workers",
+        type=int,
+        default=4,
+    )
 
     cli_args = parser.parse_args()
 
@@ -140,43 +146,41 @@ def main(args):
         f"aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
     )
 
-    n_workers = 4
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
-        for _ in pool.map(single_process_main, [args] * n_workers, range(n_workers), [n_workers] * n_workers):
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.n_workers) as pool:
+        for _ in pool.map(single_process_main, [args] * args.n_workers, range(args.n_workers)):
             ...
 
 
-def single_process_main(args, process_idx, n_workers):
-    # Not sure how but the process pool executor ends up restricting the cpu affinity for the workers it creates
+def single_process_main(args, process_idx):
+    # process pool executor restricts the cpu affinity for workers
     os.sched_setaffinity(os.getpid(), range(os.cpu_count()))
 
-    start_shard, end_shard = distribute_shards(args.start_shard, args.end_shard, n_workers)[process_idx]
+    start_shard, end_shard = distribute_shards(args.start_shard, args.end_shard, args.n_workers)[process_idx]
     args.start_shard = start_shard
     args.end_shard = end_shard
 
-    logger.warning("loading stability metadata 1 of 4")
+    logger.warning(f"worker process: {process_idx} loading stability metadata 1 of 4")
     stability_metadata_dfs_1 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/1/*.parquet",
         index="url",
         calculate_divisions=True,
     )
 
-    logger.warning("loading stability metadata 2 of 4")
+    logger.warning(f"worker process: {process_idx} loading stability metadata 2 of 4")
     stability_metadata_dfs_2 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/2/*.parquet",
         index="url",
         calculate_divisions=True,
     )
 
-    logger.warning("loading stability metadata 3 of 4")
+    logger.warning(f"worker process: {process_idx} loading stability metadata 3 of 4")
     stability_metadata_dfs_3 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/3/*.parquet",
         index="url",
         calculate_divisions=True,
     )
 
-    logger.warning("loading stability metadata 4 of 4")
+    logger.warning(f"worker process: {process_idx} loading stability metadata 4 of 4")
     stability_metadata_dfs_4 = dd.read_parquet(
         f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/4/*.parquet",
         index="url",
@@ -188,79 +192,87 @@ def single_process_main(args, process_idx, n_workers):
     with open("/fsx/william/open-muse/shards.txt", "r") as f:
         shard_urls = f.readlines()
 
-    upload_futures = []
+    # Runs with 97 total processes (one more than total processors) -
+    #
+    # 1 launcher + 4 "main" subprocesses + 88 worker subsubprocesses + 4 additional processes that I assume are being launched by
+    # the dask runtime to manage the worker pool.
+    #
+    # It's likely those additional processes aren't doing heavy work and it would be ok to have a slightly larger pool,
+    # but I'm just being safe because I worry there's some additional process switching that would occur.
+    # I also took some very rough measurements on writing a total of 2 shards per worker process and
+    # it was marginally faster.
+    with concurrent.futures.ProcessPoolExecutor(max_workers=22, mp_context=mp.get_context("spawn")) as process_pool:
+        upload_futures = []
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=3) as uploading_pool:
-        for shard_url_idx in range(args.start_shard, args.end_shard + 1):
-            shard_url = shard_urls[shard_url_idx].strip()
+        with dask.config.set(pool=process_pool):
+            for shard_url_idx in range(args.start_shard, args.end_shard + 1):
+                shard_url = shard_urls[shard_url_idx].strip()
 
-            logger.warning(f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] shard_url: {shard_url}")
+                logger.warning(f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] shard_url: {shard_url}")
 
-            shard_df = read_shard_and_create_data_frame(s3, shard_url)
+                shard_df = read_shard_and_create_data_frame(s3, shard_url)
 
-            if shard_df is None:
-                continue
+                if shard_df is None:
+                    continue
 
-            num_workers = 24
+                t0 = time.perf_counter()
 
-            t0 = time.perf_counter()
-
-            t00 = time.perf_counter()
-            meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_1)
-            shard_df_1 = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1)
-            shard_df_1 = shard_df_1.compute(scheduler="processes", num_workers=num_workers)
-            logger.warning(
-                f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1 {time.perf_counter() - t00}"
-            )
-
-            t00 = time.perf_counter()
-            meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_2)
-            shard_df_2 = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2)
-            shard_df_2 = shard_df_2.compute(scheduler="processes", num_workers=num_workers)
-            logger.warning(
-                f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2 {time.perf_counter() - t00}"
-            )
-
-            t00 = time.perf_counter()
-            meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_3)
-            shard_df_3 = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3)
-            shard_df_3 = shard_df_3.compute(scheduler="processes", num_workers=num_workers)
-            logger.warning(
-                f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3 {time.perf_counter() - t00}"
-            )
-
-            t00 = time.perf_counter()
-            meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_4)
-            shard_df_4 = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4)
-            shard_df_4 = shard_df_4.compute(scheduler="processes", num_workers=num_workers)
-            logger.warning(
-                f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4 {time.perf_counter() - t00}"
-            )
-
-            shard_df = shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
-
-            logger.warning(
-                f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge {time.perf_counter() - t0}"
-            )
-
-            if not args.skip_upload:
-                upload_future = uploading_pool.submit(
-                    write_joined_data_to_new_s3_bucket_as_wds,
-                    shard_df,
-                    shard_url,
-                    args.start_shard,
-                    args.end_shard,
-                    shard_url_idx,
+                t00 = time.perf_counter()
+                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_1)
+                shard_df_1 = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1)
+                shard_df_1 = shard_df_1.compute()
+                logger.warning(
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1 {time.perf_counter() - t00}"
                 )
 
-                upload_futures.append(upload_future)
+                t00 = time.perf_counter()
+                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_2)
+                shard_df_2 = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2)
+                shard_df_2 = shard_df_2.compute()
+                logger.warning(
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2 {time.perf_counter() - t00}"
+                )
 
-                for i in range(len(upload_futures) - 1, -1, -1):
-                    upload_future = upload_futures[i]
+                t00 = time.perf_counter()
+                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_3)
+                shard_df_3 = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3)
+                shard_df_3 = shard_df_3.compute()
+                logger.warning(
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3 {time.perf_counter() - t00}"
+                )
 
-                    if upload_future.done():
-                        upload_future.result()  # To raise exception if occurred
-                        del upload_futures[i]
+                t00 = time.perf_counter()
+                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_4)
+                shard_df_4 = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4)
+                shard_df_4 = shard_df_4.compute()
+                logger.warning(
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4 {time.perf_counter() - t00}"
+                )
+
+                shard_df = shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
+
+                logger.warning(
+                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge {time.perf_counter() - t0}"
+                )
+
+                if not args.skip_upload:
+                    upload_future = process_pool.submit(
+                        write_joined_data_to_new_s3_bucket_as_wds,
+                        shard_df,
+                        shard_url,
+                        args.start_shard,
+                        args.end_shard,
+                        shard_url_idx,
+                    )
+
+                    upload_futures.append(upload_future)
+
+                    for i in range(len(upload_futures) - 1, -1, -1):
+                        upload_future = upload_futures[i]
+
+                        if upload_future.done():
+                            upload_future.result()  # To raise exception if occurred
+                            del upload_futures[i]
 
         concurrent.futures.wait(upload_futures)
 
@@ -406,6 +418,9 @@ def optimized_left_join_merge_with_one_partition(
 
 
 def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, end_shard, shard_url_idx):
+    # process pool executor restricts the cpu affinity for workers
+    os.sched_setaffinity(os.getpid(), range(os.cpu_count()))
+
     t0 = time.perf_counter()
 
     file_n_match = re.search(M4_FILE_N_REGEX, shard_url)
