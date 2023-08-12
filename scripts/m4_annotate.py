@@ -20,6 +20,7 @@ from dask.base import tokenize
 from dask.highlevelgraph import HighLevelGraph
 from PIL import Image
 from webdataset import TarWriter
+from webdataset.writer import add_handlers, make_handlers
 
 dask.config.set({"temporary_directory": "/scratch/dask_tmp"})
 
@@ -441,7 +442,7 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
 
     logger.warning(f"[{start_shard}..{shard_url_idx}..{end_shard}] write_to: {write_to}")
 
-    tar_writer = TarWriter(f"pipe:aws s3 cp - {write_to}")
+    tar_writer = TarWriter(f"pipe:aws s3 cp - {write_to}", encoder=TAR_WRITER_ENCODER)
 
     for count, (url, row) in enumerate(shard_df.iterrows()):
         image = row["image"]["bytes"]
@@ -483,6 +484,18 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
 
 def format_shard_number(shard_n: int):
     return "{:0>{}}".format(shard_n, 5)
+
+
+# default webdatasets jpeg encoder sets quality to 100 which makes the archives
+# twice as large as the m4 arrows
+def jpeg_encoder(image: Image.Image):
+    with io.BytesIO() as result:
+        image.save(result, format="JPEG")
+        return result.getvalue()
+
+
+TAR_WRITER_ENCODER = make_handlers()
+add_handlers(TAR_WRITER_ENCODER, "jpg jpeg img image", jpeg_encoder)
 
 
 if __name__ == "__main__":
