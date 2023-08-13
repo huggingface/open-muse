@@ -149,7 +149,6 @@ class AdaLNModulation(nn.Module):
         return hidden_states * (1 + scale) + shift
 
 
-
 class Attention(nn.Module):
     def __init__(self, hidden_size, num_heads, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
         super().__init__()
@@ -203,7 +202,12 @@ class Attention(nn.Module):
 
         if self.use_memory_efficient_attention_xformers:
             attn_output = xops.memory_efficient_attention(
-                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0, attn_bias=bias
+                query,
+                key,
+                value,
+                op=self.xformers_attention_op,
+                p=self.attention_dropout if self.training else 0.0,
+                attn_bias=bias,
             )
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
@@ -744,6 +748,7 @@ class UpsampleBlockVanilla(nn.Module):
 
 # End U-ViT blocks
 
+
 # Normformer style GLU FeedForward
 class FeedForward(nn.Module):
     def __init__(
@@ -817,7 +822,7 @@ class TransformerLayer(nn.Module):
         cond_embed_dim=None,
         ffn_type="glu",
         use_bias=False,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
 
@@ -903,8 +908,10 @@ class TransformerLayer(nn.Module):
         hidden_states = residual + hidden_states
         return hidden_states
 
+
 class MaxVitTransformerLayer(TransformerLayer):
-    def __init__(self,
+    def __init__(
+        self,
         hidden_size,
         intermediate_size,
         num_attention_heads,
@@ -916,7 +923,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         mbconv_expansion_rate=4,
         mbconv_shrinkage_rate=0.25,
         embedding_size=256,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(
             hidden_size,
@@ -926,47 +933,63 @@ class MaxVitTransformerLayer(TransformerLayer):
             attention_dropout=attention_dropout,
             norm_type=norm_type,
             use_bias=use_bias,
-            **kwargs
+            **kwargs,
         )
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
         self.mb_conv = MBConv(
             embedding_size,
             embedding_size,
-            expansion_rate = mbconv_expansion_rate,
-            shrinkage_rate = mbconv_shrinkage_rate,
-            dropout=hidden_dropout
+            expansion_rate=mbconv_expansion_rate,
+            shrinkage_rate=mbconv_shrinkage_rate,
+            dropout=hidden_dropout,
         )
         self.window_size = window_size
         self.norm0 = norm_cls(hidden_size)
-        self.attn0 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, window_size = window_size)
+        self.attn0 = MaxVitAttention(
+            hidden_size=hidden_size,
+            num_heads=num_attention_heads,
+            attention_dropout=attention_dropout,
+            window_size=window_size,
+        )
         self.norm1 = norm_cls(hidden_size)
         # In lucidrian's code the implementation of feedforward is different
         self.ff0 = FeedForward(hidden_size=hidden_size, intermediate_size=hidden_size, hidden_dropout=hidden_dropout)
         self.norm2 = norm_cls(hidden_size)
-        self.attn1 = MaxVitAttention(hidden_size = hidden_size, num_heads = num_attention_heads, attention_dropout = attention_dropout, window_size = window_size)
+        self.attn1 = MaxVitAttention(
+            hidden_size=hidden_size,
+            num_heads=num_attention_heads,
+            attention_dropout=attention_dropout,
+            window_size=window_size,
+        )
         self.norm3 = norm_cls(hidden_size)
         self.ff1 = FeedForward(hidden_size=hidden_size, intermediate_size=hidden_size, hidden_dropout=hidden_dropout)
+
     def attention(self, hidden_states):
-        # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives 
+        # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives
         # our local attention once positional embeddings are added to it
         # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
         # This helps us make a "global" grid of window_size x window_size
         hidden_states = self.mb_conv(hidden_states)
         # block like attention(local attention)
-        hidden_states = rearrange(hidden_states, 'b d (x w1) (y w2) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden_states = rearrange(
+            hidden_states, "b d (x w1) (y w2) -> b x y w1 w2 d", w1=self.window_size, w2=self.window_size
+        )
         hidden_states = self.norm0(hidden_states)
         hidden_states = self.attn0(hidden_states)
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.ff0(hidden_states)
-        hidden_states = rearrange(hidden_states, 'b x y w1 w2 d -> b d (x w1) (y w2)')
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (x w1) (y w2)")
         # grid-like attention(global attention)
-        hidden_states = rearrange(hidden_states, 'b d (w1 x) (w2 y) -> b x y w1 w2 d', w1 = self.window_size, w2 = self.window_size)
+        hidden_states = rearrange(
+            hidden_states, "b d (w1 x) (w2 y) -> b x y w1 w2 d", w1=self.window_size, w2=self.window_size
+        )
         hidden_states = self.norm2(hidden_states)
         hidden_states = self.attn1(hidden_states)
         hidden_states = self.norm3(hidden_states)
         hidden_states = self.ff1(hidden_states)
-        hidden_states =  rearrange(hidden_states, 'b x y w1 w2 d -> b d (w1 x) (w2 y)')
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (w1 x) (w2 y)")
         return hidden_states
+
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
         residual = hidden_states
 
@@ -1004,6 +1027,7 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = self.ffn(hidden_states, cond_embeds=cond_embeds)
         hidden_states = residual + hidden_states
         return hidden_states
+
 
 class Embed(nn.Module):
     def __init__(
@@ -1243,7 +1267,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 norm_type=norm_type,
                 layer_norm_eps=layer_norm_eps,
                 use_bias=use_bias,
-                use_position_embeddings=use_position_embeddings
+                use_position_embeddings=use_position_embeddings,
             )
         else:
             self.embed = Embed(
@@ -1277,7 +1301,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     use_normformer=use_normformer,
                     use_bias=use_bias,
                     embedding_size=self.embedding_size,
-                    window_size=window_size
+                    window_size=window_size,
                 )
                 for _ in range(self.num_hidden_layers)
             ]
@@ -2335,29 +2359,31 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             return sampled_ids, intermediate
         return sampled_ids
 
+
 # Taken and slightly adapted from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/max_vit.py
 # Originally proposed https://arxiv.org/abs/1709.01507
 # The main idea is without changing the size of the input, choose to prioritize some channels over others
 class SqueezeExcitation(nn.Module):
-    def __init__(self, dim, shrinkage_rate = 0.25):
+    def __init__(self, dim, shrinkage_rate=0.25):
         super().__init__()
         hidden_dim = int(dim * shrinkage_rate)
 
         self.gate = nn.Sequential(
-            nn.Linear(dim, hidden_dim, bias = False),
+            nn.Linear(dim, hidden_dim, bias=False),
             nn.SiLU(),
-            nn.Linear(hidden_dim, dim, bias = False),
+            nn.Linear(hidden_dim, dim, bias=False),
             nn.Sigmoid(),
         )
 
     def forward(self, x):
-        hidden = reduce(x, 'b c h w -> b c', 'mean')
+        hidden = reduce(x, "b c h w -> b c", "mean")
         hidden = self.gate(hidden)
-        hidden = rearrange(hidden, 'b c -> b c 1 1')
+        hidden = rearrange(hidden, "b c -> b c 1 1")
         return x * hidden
 
+
 class MBConvResidual(nn.Module):
-    def __init__(self, fn, dropout = 0.):
+    def __init__(self, fn, dropout=0.0):
         super().__init__()
         self.fn = fn
         self.dropsample = Dropsample(dropout)
@@ -2367,18 +2393,21 @@ class MBConvResidual(nn.Module):
         out = self.dropsample(out)
         return out + x
 
+
 class Dropsample(nn.Module):
-    def __init__(self, prob = 0):
+    def __init__(self, prob=0):
         super().__init__()
         self.prob = prob
+
     def forward(self, x):
         device = x.device
 
-        if self.prob == 0. or (not self.training):
+        if self.prob == 0.0 or (not self.training):
             return x
 
-        keep_mask = torch.FloatTensor((x.shape[0], 1, 1, 1), device = device).uniform_() > self.prob
+        keep_mask = torch.FloatTensor((x.shape[0], 1, 1, 1), device=device).uniform_() > self.prob
         return x * keep_mask / (1 - self.prob)
+
 
 class MBConv(nn.Module):
     def __init__(
@@ -2386,9 +2415,9 @@ class MBConv(nn.Module):
         dim_in,
         dim_out,
         downsample=False,
-        expansion_rate = 4,
-        shrinkage_rate = 0.25,
-        dropout = 0.,
+        expansion_rate=4,
+        shrinkage_rate=0.25,
+        dropout=0.0,
     ):
         super().__init__()
         # One function of this mbconv layer argued in the paper is to provide conditional position encoding especially with the depthwise convolution
@@ -2400,29 +2429,38 @@ class MBConv(nn.Module):
             nn.Conv2d(dim_in, hidden_dim, 1),
             nn.BatchNorm2d(hidden_dim),
             nn.GELU(),
-            nn.Conv2d(hidden_dim, hidden_dim, 3, stride = stride, padding = 1, groups = hidden_dim),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, stride=stride, padding=1, groups=hidden_dim),
             nn.BatchNorm2d(hidden_dim),
             nn.GELU(),
-            SqueezeExcitation(hidden_dim, shrinkage_rate = shrinkage_rate),
+            SqueezeExcitation(hidden_dim, shrinkage_rate=shrinkage_rate),
             nn.Conv2d(hidden_dim, dim_out, 1),
-            nn.BatchNorm2d(dim_out)
+            nn.BatchNorm2d(dim_out),
         )
 
         if dim_in == dim_out and not downsample:
-            self.net = MBConvResidual(self.net, dropout = dropout)
+            self.net = MBConvResidual(self.net, dropout=dropout)
+
     def forward(self, x):
         return self.net(x)
 
 
 class MaxVitAttention(Attention):
-    def __init__(self, hidden_size, num_heads, window_size=8, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False):
-        super().__init__(hidden_size, num_heads, encoder_hidden_size=encoder_hidden_size, attention_dropout=attention_dropout, use_bias=use_bias)
+    def __init__(
+        self, hidden_size, num_heads, window_size=8, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False
+    ):
+        super().__init__(
+            hidden_size,
+            num_heads,
+            encoder_hidden_size=encoder_hidden_size,
+            attention_dropout=attention_dropout,
+            use_bias=use_bias,
+        )
         self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.num_heads)
 
         # TODO: Maybe make this more comprehensible. This is basically positional embeddings for our grid
         pos = torch.arange(window_size)
-        grid = torch.stack(torch.meshgrid(pos, pos, indexing = 'ij'))
-        grid = rearrange(grid, 'c i j -> (i j) c')
+        grid = torch.stack(torch.meshgrid(pos, pos, indexing="ij"))
+        grid = rearrange(grid, "c i j -> (i j) c")
         """
         grid is
         tensor([[ 0,  0],
@@ -2433,7 +2471,7 @@ class MaxVitAttention(Attention):
         with shape [window_size**2, 2]
         This is essentially 2d coordinates for window_size x window_size grid
         """
-        rel_pos = rearrange(grid, 'i ... -> i 1 ...') - rearrange(grid, 'j ... -> 1 j ...')
+        rel_pos = rearrange(grid, "i ... -> i 1 ...") - rearrange(grid, "j ... -> 1 j ...")
         rel_pos += window_size - 1
         """
         rel_pos has shape [window_size**2, window_wize**2, 2]
@@ -2445,24 +2483,30 @@ class MaxVitAttention(Attention):
         [ (i // window_size),  1+(i % window_size)],
         [ (i // window_size),  (i % window_size)]])
         """
-        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim = -1)
+        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim=-1)
         """
         rel_pos_indices has shape (625, 625)
         rel_pos_indices[i] = [i, i+1, i+2...i+window_size-1, i+2*window_size-1, i+2*window_size....]
         """
-        self.register_buffer('rel_pos_indices', rel_pos_indices, persistent = False)
+        self.register_buffer("rel_pos_indices", rel_pos_indices, persistent=False)
+
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
         batch, height, width, window_height, window_width, _ = hidden_states.shape
         # flatten
         # Here, w1 and w2 are both window size so x will have size (b x y), window_size**2, d
-        hidden_states = rearrange(hidden_states, 'b x y w1 w2 d -> (b x y) (w1 w2) d')
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> (b x y) (w1 w2) d")
         bias = self.rel_pos_bias(self.rel_pos_indices)
         # shape is [window_size**2, window_size**2, self.num_heads]
-        bias = rearrange(bias, 'i j h -> h i j')
+        bias = rearrange(bias, "i j h -> h i j")
         # shape is [self.num_heads, window_size**2, window_size**2]
         # the bias adds positional embeddings for each window size segment
-        out = super().forward(hidden_states, encoder_hidden_states=encoder_hidden_states, encoder_attention_mask=encoder_attention_mask, bias=bias)
-        out = rearrange(out, 'b (w1 w2) d -> b w1 w2 d', w1 = window_height, w2 = window_width)
+        out = super().forward(
+            hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            bias=bias,
+        )
+        out = rearrange(out, "b (w1 w2) d -> b w1 w2 d", w1=window_height, w2=window_width)
 
         # combine heads out
-        return rearrange(out, '(b x y) ... -> b x y ...', x = height, y = width)
+        return rearrange(out, "(b x y) ... -> b x y ...", x=height, y=width)

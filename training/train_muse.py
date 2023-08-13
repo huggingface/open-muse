@@ -228,9 +228,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -472,7 +472,6 @@ def main():
     # The dataloader are already aware of distributed training, so we don't need to prepare them.
     model, optimizer, lr_scheduler = accelerator.prepare(model, optimizer, lr_scheduler)
 
-
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
     # TODO: make this configurable
@@ -700,7 +699,6 @@ def main():
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
 
@@ -1078,6 +1076,6 @@ def log_token_probability_distributions(logits, input_ids, mask_id, accelerator,
 
     accelerator.log({"token_probability_distributions/stats": token_probability_distributions_fig}, step=global_step)
 
+
 if __name__ == "__main__":
     main()
-
