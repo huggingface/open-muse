@@ -224,9 +224,12 @@ def single_process_main(args, process_idx):
                     shard_df_1.combine_first(shard_df_2).combine_first(shard_df_3).combine_first(shard_df_4)
                 )
 
+                proportion = (~shard_df_joined["SSCD_85_stability_metadata"].isna()).sum() / len(shard_df_joined)
+
                 logger.warning(
                     f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for total merge"
                     f" {time.perf_counter() - t0}"
+                    f" proportion found {proportion}"
                 )
 
                 if not args.skip_upload:
