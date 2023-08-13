@@ -228,9 +228,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
-            config.training.batch_size
-        )
+        accelerator.state.deepspeed_plugin.deepspeed_config[
+            "train_micro_batch_size_per_gpu"
+        ] = config.training.batch_size
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -684,6 +684,7 @@ def main():
 
                 optimizer.step()
                 lr_scheduler.step()
+
                 # log gradient norm before zeroing it
                 if (
                     accelerator.sync_gradients
@@ -727,6 +728,7 @@ def main():
                         f"Batch (t): {batch_time_m.val:0.4f} "
                         f"LR: {lr_scheduler.get_last_lr()[0]:0.6f}"
                     )
+
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
                     data_time_m.reset()
