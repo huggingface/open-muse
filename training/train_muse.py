@@ -646,6 +646,11 @@ def main():
                 micro_conds,
             ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate, batch=batch)
 
+            # log the inputs for the first step of the first epoch
+            if global_step == 0 and epoch == 0:
+                logger.info("Input ids: {}".format(input_ids))
+                logger.info("Labels: {}".format(labels))
+
             # Train Step
             with accelerator.accumulate(model):
                 if config.training.use_soft_code_target:
