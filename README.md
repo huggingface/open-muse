@@ -14,6 +14,7 @@ Project stages:
 
 All the artifacts of this project will be uploaded to the [openMUSE](https://huggingface.co/openMUSE) organization on the huggingface hub.
 
+## Usage
 
 ### Installation
 
