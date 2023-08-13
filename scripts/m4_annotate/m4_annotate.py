@@ -213,44 +213,20 @@ def single_process_main(args, process_idx):
 
                 t0 = time.perf_counter()
 
-                t00 = time.perf_counter()
-                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_1)
-                shard_df_1 = optimized_left_join(shard_df, stability_metadata_dfs_1, meta, 1)
-                shard_df_1 = shard_df_1.compute()
-                shard_df_1 = shard_df_1[~shard_df_1.index.duplicated(keep="first")]
-                logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 1"
-                    f" {time.perf_counter() - t00}"
+                shard_df_1 = left_join_against_single_group_of_indexed_metadata(
+                    shard_df, stability_metadata_dfs_1, 1, args.start_shard, shard_url_idx, args.end_shard
                 )
 
-                t00 = time.perf_counter()
-                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_2)
-                shard_df_2 = optimized_left_join(shard_df, stability_metadata_dfs_2, meta, 2)
-                shard_df_2 = shard_df_2.compute()
-                shard_df_2 = shard_df_2[~shard_df_2.index.duplicated(keep="first")]
-                logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 2"
-                    f" {time.perf_counter() - t00}"
+                shard_df_2 = left_join_against_single_group_of_indexed_metadata(
+                    shard_df, stability_metadata_dfs_2, 2, args.start_shard, shard_url_idx, args.end_shard
                 )
 
-                t00 = time.perf_counter()
-                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_3)
-                shard_df_3 = optimized_left_join(shard_df, stability_metadata_dfs_3, meta, 3)
-                shard_df_3 = shard_df_3.compute()
-                shard_df_3 = shard_df_3[~shard_df_3.index.duplicated(keep="first")]
-                logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 3"
-                    f" {time.perf_counter() - t00}"
+                shard_df_3 = left_join_against_single_group_of_indexed_metadata(
+                    shard_df, stability_metadata_dfs_3, 3, args.start_shard, shard_url_idx, args.end_shard
                 )
 
-                t00 = time.perf_counter()
-                meta = make_optimized_left_join_meta(shard_df, stability_metadata_dfs_4)
-                shard_df_4 = optimized_left_join(shard_df, stability_metadata_dfs_4, meta, 4)
-                shard_df_4 = shard_df_4.compute()
-                shard_df_4 = shard_df_4[~shard_df_4.index.duplicated(keep="first")]
-                logger.warning(
-                    f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] time for merge 4"
-                    f" {time.perf_counter() - t00}"
+                shard_df_4 = left_join_against_single_group_of_indexed_metadata(
+                    shard_df, stability_metadata_dfs_4, 4, args.start_shard, shard_url_idx, args.end_shard
                 )
 
                 shard_df_joined = (
@@ -342,12 +318,27 @@ def read_shard_and_create_data_frame(s3, shard_url):
     return shard_df
 
 
-def make_optimized_left_join_meta(shard_df, stability_metadata_df):
-    return dd.from_pandas(shard_df, npartitions=1)._meta_nonempty.merge(
+def left_join_against_single_group_of_indexed_metadata(
+    shard_df, stability_metadata_df, stability_metadata_dir_index, start_shard, shard_url_idx, end_shard
+):
+    t0 = time.perf_counter()
+
+    meta = dd.from_pandas(shard_df, npartitions=1)._meta_nonempty.merge(
         stability_metadata_df._meta_nonempty,
         left_index=True,
         right_index=True,
     )
+
+    shard_df_joined = optimized_left_join(shard_df, stability_metadata_df, meta, stability_metadata_dir_index)
+
+    shard_df_joined = shard_df_joined.compute()
+
+    # remove duplicates
+    shard_df_joined = shard_df_joined[~shard_df_joined.index.duplicated(keep="first")]
+
+    logger.warning(f"[{start_shard}..{shard_url_idx}..{end_shard}] time for merge 1 {time.perf_counter() - t0}")
+
+    return shard_df_joined
 
 
 def optimized_left_join(lhs, rhs, meta, stability_metadata_dir_idx):
