@@ -128,12 +128,16 @@ def main(args):
     os.makedirs(LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR, exist_ok=True)
     os.system(f"aws s3 sync s3://muse-datasets/laiocov2-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}")
 
+    t0 = time.perf_counter()
+
     if args.n_workers == 1:
         single_process_main(args, 0)
     else:
         with concurrent.futures.ProcessPoolExecutor(max_workers=args.n_workers) as pool:
             for _ in pool.map(single_process_main, [args] * args.n_workers, range(args.n_workers)):
                 ...
+
+    logger.warning(f"time for pure processing (not including initial metadata download) {time.perf_counter() - t0}")
 
 
 def single_process_main(args, process_idx):
