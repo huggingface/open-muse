@@ -48,34 +48,11 @@ COLS_FROM_STABILITY_METADATA = [
     "SSCD_CID",
 ]
 
+COLS_TO_READ_FROM_STABILITY_METADATA = ["url"] + COLS_FROM_STABILITY_METADATA
+
 # We manually add the `_stability_metadata` suffix to make it easier
 # to move them into their own subdict separate from the existing metadata
 COLS_FROM_STABILITY_METADATA_RENAMES = {col: f"{col}_stability_metadata" for col in COLS_FROM_STABILITY_METADATA}
-
-
-# These are the columns we are going to drop from the stability metadata
-COLS_FROM_STABILITY_METADATA_DROPS = [
-    "ID_New",
-    "image_path",
-    "is_coyo",
-    "is_laion",
-    "Id",
-    "caption",
-    "key",
-    "status",
-    "error_message",
-    "width",
-    "height",
-    "original_width",
-    "original_height",
-    "exif",
-    "sha256",
-    "__index_level_0__",
-    "SSCD_AES_50_DEL",
-    "SSCD_AES_65_DEL",
-    "SSCD_AES_75_DEL",
-    "SSCD_AES_85_DEL",
-]
 
 
 logger = Logger(__name__)
@@ -419,10 +396,9 @@ def optimized_left_join_merge_with_one_partition(
     rhs_partition_idx = format_shard_number(rhs_partition_idx)
 
     rhs_partition = pd.read_parquet(
-        f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/{stability_metadata_dir_idx}/{rhs_partition_idx}.parquet"
+        f"{LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}/{stability_metadata_dir_idx}/{rhs_partition_idx}.parquet",
+        columns=COLS_TO_READ_FROM_STABILITY_METADATA,
     )
-
-    rhs_partition.drop(labels=COLS_FROM_STABILITY_METADATA_DROPS, axis="columns", inplace=True)
 
     rhs_partition.rename(columns=COLS_FROM_STABILITY_METADATA_RENAMES, inplace=True)
 
