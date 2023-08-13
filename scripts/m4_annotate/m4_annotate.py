@@ -451,7 +451,7 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
 
         row_stability_metadata = {}
 
-        for unsuffixed_col, suffixed_col in COLS_FROM_STABILITY_METADATA_RENAMES.values():
+        for unsuffixed_col, suffixed_col in COLS_FROM_STABILITY_METADATA_RENAMES.items():
             val = row[suffixed_col]
 
             if pd.isna(val):
