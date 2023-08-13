@@ -22,7 +22,7 @@ from PIL import Image
 from webdataset import TarWriter
 from webdataset.writer import add_handlers, make_handlers
 
-LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laicov2-url-indexed"
+LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laiocov2-url-indexed"
 
 M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
 
@@ -50,7 +50,7 @@ COLS_FROM_STABILITY_METADATA = [
 
 # We manually add the `_stability_metadata` suffix to make it easier
 # to move them into their own subdict separate from the existing metadata
-COLS_FROM_STABILITY_METADATA_RENAMES = {k: f"{v}_stability_metadata" for k, v in COLS_FROM_STABILITY_METADATA.items()}
+COLS_FROM_STABILITY_METADATA_RENAMES = {col: f"{col}_stability_metadata" for col in COLS_FROM_STABILITY_METADATA}
 
 
 # These are the columns we are going to drop from the stability metadata
