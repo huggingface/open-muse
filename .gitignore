@@ -1,11 +1,7 @@
 generated
 real
 # Byte-compiled / optimized / DLL files
-generated
-real
 output.jpg
-wandb
-imagenet-text2image
 segmented.jpg
 
 __pycache__/
