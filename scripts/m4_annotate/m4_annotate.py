@@ -330,7 +330,10 @@ def left_join_against_single_group_of_indexed_metadata(
     # remove duplicates
     shard_df_joined = shard_df_joined[~shard_df_joined.index.duplicated(keep="first")]
 
-    logger.warning(f"[{start_shard}..{shard_url_idx}..{end_shard}] time for merge 1 {time.perf_counter() - t0}")
+    logger.warning(
+        f"[{start_shard}..{shard_url_idx}..{end_shard}] time for merge"
+        f" {stability_metadata_dir_index} {time.perf_counter() - t0}"
+    )
 
     return shard_df_joined
 
