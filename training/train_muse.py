@@ -677,7 +677,6 @@ def main():
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
-                accelerator.print(torch.cuda.max_memory_allocated()/(1024**3), "gb used")
 
                 accelerator.backward(loss)
 
@@ -1078,12 +1077,6 @@ def log_token_probability_distributions(logits, input_ids, mask_id, accelerator,
     )
 
     accelerator.log({"token_probability_distributions/stats": token_probability_distributions_fig}, step=global_step)
-
-def get_model_size(model):
-    mem_params = sum([param.nelement()*param.element_size() for param in model.parameters()])
-    mem_bufs = sum([buf.nelement()*buf.element_size() for buf in model.buffers()])
-    mem = mem_params + mem_bufs # in bytes
-    return mem / (1024**3)
 
 if __name__ == "__main__":
     main()
