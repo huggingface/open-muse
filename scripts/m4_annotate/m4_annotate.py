@@ -22,7 +22,7 @@ from PIL import Image
 from webdataset import TarWriter
 from webdataset.writer import add_handlers, make_handlers
 
-LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laion-coyo-dedup-metadata-url-indexed"
+LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laicov2-url-indexed"
 
 M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
 
@@ -135,10 +135,7 @@ def main(args):
     dask.config.set({"temporary_directory": temp_dir})
 
     os.makedirs(LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR, exist_ok=True)
-    os.system(
-        "aws s3 sync s3://muse-datasets/laion-coyo-dedup-metadata-url-indexed/"
-        f" {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}"
-    )
+    os.system(f"aws s3 sync s3://muse-datasets/laiocov2-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}")
 
     if args.n_workers == 1:
         single_process_main(args, 0)
@@ -440,7 +437,7 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
     split_n = file_n_match.group(1)
     file_n = file_n_match.group(2)
 
-    write_to = f"s3://muse-datasets/m4-datasets-laion-dataset-filtered-dedup-stability-metadata/{split_n}/{file_n}.tar"
+    write_to = f"s3://muse-datasets/m4-datasets-laion-dataset-filtered-dedup-joined-with-stability-metadata-laicov2/{split_n}/{file_n}.tar"
 
     logger.warning(f"[{start_shard}..{shard_url_idx}..{end_shard}] write_to: {write_to}")
 
