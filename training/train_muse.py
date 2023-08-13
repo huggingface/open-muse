@@ -623,7 +623,6 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
-            print(torch.cuda.max_memory_allocated()/(1024**3), "gb allocated at beginning of training")
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
             if is_pre_encode:
                 pixel_values, input_ids = batch["image_input_ids"], batch["encoder_hidden_states"]
@@ -677,7 +676,6 @@ def main():
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
-                print(torch.cuda.max_memory_allocated()/(1024**3), "gb allocated after forward pass")
 
                 accelerator.backward(loss)
 
@@ -686,7 +684,6 @@ def main():
 
                 optimizer.step()
                 lr_scheduler.step()
-                print(torch.cuda.max_memory_allocated()/(1024**3), "gb allocated after optimizer step")
 
                 # log gradient norm before zeroing it
                 if (
