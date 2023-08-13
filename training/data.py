@@ -179,7 +179,6 @@ class ClassificationDataset:
                     input_ids=tokenize,
                     text_raw=lambda class_idx: self.class_mapping[str(class_idx)],
                 ),
-                wds.to_tuple("image", "input_ids"),
             ]
         else:
             processing_pipeline = [
