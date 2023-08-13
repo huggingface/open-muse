@@ -183,6 +183,8 @@ def single_process_main(args, process_idx):
 
     s3 = s3fs.S3FileSystem()
 
+    # Pre-written to disk list of shards from the original m4 dataset.
+    # NOTE - does it make sense to just read this from s3 at runtime?
     with open("/fsx/william/open-muse/shards.txt", "r") as f:
         shard_urls = f.readlines()
 
