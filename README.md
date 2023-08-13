@@ -14,12 +14,6 @@ Project stages:
 
 All the artifacts of this project will be uploaded to the [openMUSE](https://huggingface.co/openMUSE) organization on the huggingface hub.
 
-## Usage
-from muse.modeling_transformer import MaskGitTransformer
-from omegaconf import DictConfig, ListConfig, OmegaConf
-conf = OmegaConf.load("configs/imagenet_text2image_max_vit_jewels.yaml")
-model = MaskGitTransformer(**conf.model.transformer)
-model = model.to("cuda")
 
 ### Installation
 
