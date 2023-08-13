@@ -26,26 +26,37 @@ LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laicov2-url-inde
 
 M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
 
+# These are the columns that we add to our data from the joined against
+# stability metadata
+COLS_FROM_STABILITY_METADATA = [
+    "SSCD_85",
+    "SSCD_75",
+    "SSCD_65",
+    "SSCD_50",
+    "is_spawning",
+    "is_getty",
+    "p_watermarkdf",
+    "p_nsfwdf",
+    "p_bumble",
+    "gnt_drawings",
+    "gnt_hentai",
+    "gnt_neutral",
+    "gnt_porn",
+    "gnt_sexy",
+    "aes_scorelv2",
+    "clip_sim",
+    "SSCD_CID",
+]
+
 # We manually add the `_stability_metadata` suffix to make it easier
 # to move them into their own subdict separate from the existing metadata
-COLS_FROM_STABILITY_METADATA_RENAMES = {
-    "SSCD_85": "SSCD_85_stability_metadata",
-    "SSCD_75": "SSCD_75_stability_metadata",
-    "SSCD_65": "SSCD_65_stability_metadata",
-    "SSCD_50": "SSCD_50_stability_metadata",
-    "is_spawning": "is_spawning_stability_metadata",
-    "is_getty": "is_getty_stability_metadata",
-    "p_watermarkdf": "p_watermarkdf_stability_metadata",
-    "p_nsfwdf": "p_nsfwdf_stability_metadata",
-    "p_bumble": "p_bumble_stability_metadata",
-    "gnt_drawings": "gnt_drawings_stability_metadata",
-    "gnt_hentai": "gnt_hentai_stability_metadata",
-    "gnt_neutral": "gnt_neutral_stability_metadata",
-    "gnt_porn": "gnt_porn_stability_metadata",
-    "gnt_sexy": "gnt_sexy_stability_metadata",
-}
+COLS_FROM_STABILITY_METADATA_RENAMES = {k: f"{v}_stability_metadata" for k, v in COLS_FROM_STABILITY_METADATA.items()}
 
+
+# These are the columns we are going to drop from the stability metadata
 COLS_FROM_STABILITY_METADATA_DROPS = [
+    "ID_New",
+    "image_path",
     "is_coyo",
     "is_laion",
     "Id",
@@ -59,9 +70,12 @@ COLS_FROM_STABILITY_METADATA_DROPS = [
     "original_height",
     "exif",
     "sha256",
+    "__index_level_0__",
+    "SSCD_AES_50_DEL",
+    "SSCD_AES_65_DEL",
+    "SSCD_AES_75_DEL",
+    "SSCD_AES_85_DEL",
 ]
-
-COLS_FROM_STABILITY_METADATA = COLS_FROM_STABILITY_METADATA_RENAMES.values()
 
 
 logger = Logger(__name__)
@@ -191,7 +205,7 @@ def single_process_main(args, process_idx):
     # Runs with 97 total processes (one more than total processors) -
     #
     # 1 launcher + 4 "main" subprocesses + 88 worker subsubprocesses + 4 additional processes that I assume are being launched by
-    # the dask runtime to manage the worker pool.
+    # the either the worker pool itself or the dask runtime to manage the worker pool.
     #
     # It's likely those additional processes aren't doing heavy work and it would be ok to have a slightly larger pool,
     # but I'm just being safe because I worry there's some additional process switching that would occur.
@@ -455,15 +469,13 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
 
         row_stability_metadata = {}
 
-        for col in COLS_FROM_STABILITY_METADATA:
-            val = row[col]
+        for unsuffixed_col, suffixed_col in COLS_FROM_STABILITY_METADATA_RENAMES.values():
+            val = row[suffixed_col]
 
             if pd.isna(val):
                 continue
 
-            col_ = col.replace("_stability_metadata", "")
-
-            row_stability_metadata[col_] = val
+            row_stability_metadata[unsuffixed_col] = val
 
         json_["stability_metadata"] = row_stability_metadata
 
