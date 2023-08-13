@@ -78,6 +78,9 @@ class PipelineMuse:
         use_fp16: bool = False,
         noise_type="mask",  # can be "mask" or "random_replace"
         predict_all_tokens=False,
+        orig_size=(256, 256),
+        crop_coords=(0, 0),
+        aesthetic_score=6.0,
         return_intermediate: bool = False,
         use_tqdm=True,
     ):
@@ -117,7 +120,7 @@ class PipelineMuse:
 
             if negative_text is not None:
                 if isinstance(negative_text, str):
-                    negative_text = [negative_text]
+                    negative_text = [negative_text] * len(text)
 
                 negative_input_ids = self.tokenizer(
                     negative_text,
@@ -127,9 +130,17 @@ class PipelineMuse:
                     max_length=self.tokenizer.model_max_length,
                 ).input_ids
                 negative_input_ids = negative_input_ids.to(self.device)
-                negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
+
+                if self.transformer.config.add_cond_embeds:
+                    outputs = self.text_encoder(negative_input_ids, return_dict=True, output_hidden_states=True)
+                    negative_pooled_embeds = outputs.text_embeds
+                    negative_encoder_hidden_states = outputs.hidden_states[-2]
+                else:
+                    negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
+                    negative_pooled_embeds = None
             else:
                 negative_encoder_hidden_states = None
+                negative_pooled_embeds = None
 
             # duplicate text embeddings for each generation per prompt, using mps friendly method
             bs_embed, seq_len, _ = encoder_hidden_states.shape
@@ -139,6 +150,10 @@ class PipelineMuse:
                 bs_embed, _ = pooled_embeds.shape
                 pooled_embeds = pooled_embeds.repeat(1, num_images_per_prompt)
                 pooled_embeds = pooled_embeds.view(bs_embed * num_images_per_prompt, -1)
+                if negative_pooled_embeds is not None:
+                    bs_embed, _ = negative_pooled_embeds.shape
+                    negative_pooled_embeds = negative_pooled_embeds.repeat(1, num_images_per_prompt)
+                    negative_pooled_embeds = negative_pooled_embeds.view(bs_embed * num_images_per_prompt, -1)
             if negative_encoder_hidden_states is not None:
                 bs_embed, seq_len, _ = negative_encoder_hidden_states.shape
                 negative_encoder_hidden_states = negative_encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
@@ -150,7 +165,14 @@ class PipelineMuse:
                 "encoder_hidden_states": encoder_hidden_states,
                 "negative_embeds": negative_encoder_hidden_states,
                 "cond_embeds": pooled_embeds,
+                "negative_cond_embeds": negative_pooled_embeds,
             }
+
+        if self.transformer.config.add_micro_cond_embeds:
+            micro_conds = list(orig_size) + list(crop_coords) + [aesthetic_score]
+            micro_conds = torch.tensor(micro_conds, device=self.device, dtype=encoder_hidden_states.dtype)
+            micro_conds = micro_conds.unsqueeze(0)
+            model_inputs["micro_conds"] = micro_conds
 
         generate = self.transformer.generate
         if use_maskgit_generate:
