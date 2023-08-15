@@ -305,9 +305,9 @@ class WebdatasetSelect:
         original_width = x_json["original_width"]
         original_height = x_json["original_height"]
 
-        is_at_least_min_size = original_width >= self.min_size and original_height >= self.min_size
+        is_less_than_min_size = original_width < self.min_size or original_height < self.min_size
 
-        if not is_at_least_min_size:
+        if is_less_than_min_size:
             return False
 
         # watermark
