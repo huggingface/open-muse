@@ -281,10 +281,8 @@ class WebdatasetSelect:
             return False
 
         # For all requirements, if the necessary key(s) are not present, we assume
-        # the requirement does not hold.
-
-        # First we check all required checks. The required checks include different keys
-        # that may be used to check the same thing depending on which dataset we're using.
+        # the requirement does not hold. Note that many checks are done on different keys
+        # which is due to different datasets being used with different metadata dicts.
 
         # size
 
@@ -363,9 +361,6 @@ class WebdatasetSelect:
 
             if is_under_min_aesthetic_threshold_stability_metadata:
                 return False
-
-        # the rest are the optional requirements to checked in the training data. In order to check them,
-        # they require setting flags in the constructor of this class
 
         # spawning
 
