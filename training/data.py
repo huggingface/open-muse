@@ -95,7 +95,20 @@ def get_orig_size(json):
 
 
 def get_aesthetic_score(json):
-    return float(json.get("AESTHETIC_SCORE", 0.0))
+    if "aesthetic" in json:
+        a = json["aesthetic"]
+    elif "AESTHETIC_SCORE" in json:
+        a = json["AESTHETIC_SCORE"]
+    elif "aesthetic_score_laion_v2" in json:
+        a = json["aesthetic_score_laion_v2"]
+    elif "stability_metadata" in json and "aes_scorelv2" in json["stability_metadata"]:
+        a = json["stability_metadata"]["aes_scorelv2"]
+    else:
+        a = 0.0
+
+    a = float(a)
+
+    return a
 
 
 class ImageNetTransform:
