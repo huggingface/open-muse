@@ -315,8 +315,7 @@ class WebdatasetSelect:
         if (
             "pwatermark" not in x_json
             and "watermark_score" not in x_json
-            and "stability_metadata" not in x_json
-            and "p_watermarkdf" not in x_json["stability_metadata"]
+            and ("stability_metadata" not in x_json or "p_watermarkdf" not in x_json["stability_metadata"])
         ):
             return False
 
@@ -344,8 +343,7 @@ class WebdatasetSelect:
             "aesthetic" not in x_json
             and "AESTHETIC_SCORE" not in x_json
             and "aesthetic_score_laion_v2" not in x_json
-            and "stability_metadata" not in x_json
-            and "aes_scorelv2" not in x_json["stability_metadata"]
+            and ("stability_metadata" not in x_json or "aes_scorelv2" not in x_json["stability_metadata"])
         ):
             return False
 
@@ -378,7 +376,7 @@ class WebdatasetSelect:
         # spawning
 
         if self.require_marked_as_ok_by_spawning:
-            if "stability_metadata" not in x_json and "is_spawning" not in x_json["stability_metadata"]:
+            if "stability_metadata" not in x_json or "is_spawning" not in x_json["stability_metadata"]:
                 return False
 
             is_marked_as_not_ok_by_spawning = x_json["stability_metadata"]["is_spawning"]
@@ -389,7 +387,7 @@ class WebdatasetSelect:
         # getty
 
         if self.require_marked_as_not_getty:
-            if "stability_metadata" not in x_json and "is_getty" not in x_json["stability_metadata"]:
+            if "stability_metadata" not in x_json or "is_getty" not in x_json["stability_metadata"]:
                 return False
 
             is_marked_as_getty = x_json["stability_metadata"]["is_getty"]
@@ -400,7 +398,7 @@ class WebdatasetSelect:
         # nsfw
 
         if self.max_pnsfw is not None:
-            if "stability_metadata" not in x_json and "p_nsfwdf" not in x_json["stability_metadata"]:
+            if "stability_metadata" not in x_json or "p_nsfwdf" not in x_json["stability_metadata"]:
                 return False
 
             is_above_max_nsfw = x_json["stability_metadata"]["p_nsfwdf"] > self.max_pnsfw
@@ -437,7 +435,8 @@ class Text2ImageDataset:
         max_pnsfw: Optional[float] = None,
     ):
         if train_shards_path_or_url == "m4_data":
-            train_shards_path_or_url = yaml.safe_load("./configs/m4_shards.yaml")
+            with open("./configs/m4_shards.yaml") as f:
+                train_shards_path_or_url = yaml.safe_load(f)
 
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
