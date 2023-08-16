@@ -5,6 +5,7 @@ import json
 import multiprocessing as mp
 import os
 import re
+import tarfile
 import time
 from logging import Logger
 
@@ -22,9 +23,19 @@ from PIL import Image
 from webdataset import TarWriter
 from webdataset.writer import add_handlers, make_handlers
 
+# the metadata is downloaded from
+LAION_COYO_DEDUP_METADATA_S3_URL = "s3://muse-datasets/laiocov2-url-indexed"
+
+# the metadata is written to locally
 LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR = "/scratch/muse/laiocov2-url-indexed"
 
-M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
+# the augmented data is written to
+M4_LAION_UPDATED_WITH_STABILITY_METADATA_S3_URL = (
+    "s3://muse-datasets/m4-datasets-laion-dataset-filtered-dedup-joined-with-stability-metadata-laicov2"
+)
+LAION_475_WITH_STABILITY_METADATA_S3_URL = (
+    "s3://muse-datasets/laion-aesthetic-475-min-1024-joined-with-stability-metadata-laicov2"
+)
 
 # These are the columns that we add to our data from the joined against
 # stability metadata
@@ -83,6 +94,7 @@ def cli_args():
         type=int,
         default=4,
     )
+    parser.add_argument("--update_orig_dataset", choices=["m4", "laion_475"], default="m4", required=False)
 
     cli_args = parser.parse_args()
 
@@ -126,7 +138,7 @@ def main(args):
     dask.config.set({"temporary_directory": temp_dir})
 
     os.makedirs(LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR, exist_ok=True)
-    os.system(f"aws s3 sync s3://muse-datasets/laiocov2-url-indexed/ {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}")
+    os.system(f"aws s3 sync {LAION_COYO_DEDUP_METADATA_S3_URL} {LAION_COYO_DEDUP_METADATA_URL_INDEXED_ROOT_DIR}")
 
     t0 = time.perf_counter()
 
@@ -178,9 +190,20 @@ def single_process_main(args, process_idx):
 
     s3 = s3fs.S3FileSystem()
 
-    # Pre-written to disk list of shards from the original m4 dataset.
-    # NOTE - does it make sense to just read this from s3 at runtime?
-    with open("/fsx/william/open-muse/shards.txt", "r") as f:
+    # Read a pre-written list of shards from disk because I'm paranoid about
+    # if s3 ls is deterministic + this just gives us more control over
+    # what we process
+
+    if args.update_orig_dataset == "m4":
+        # NOTE: this filename is from when there was previously no second dataset to update,
+        # hence, no suffix. Change if we need to run this more in the future.
+        read_shards_from = "/fsx/william/open-muse/shards.txt"
+    elif args.update_orig_dataset == "laion_475":
+        read_shards_from = "/fsx/william/open-muse/shards_laion_475.txt"
+    else:
+        assert False
+
+    with open(read_shards_from, "r") as f:
         shard_urls = f.readlines()
 
     # Runs with 97 total processes (one more than total processors) -
@@ -199,9 +222,17 @@ def single_process_main(args, process_idx):
             for shard_url_idx in range(args.start_shard, args.end_shard + 1):
                 shard_url = shard_urls[shard_url_idx].strip()
 
+                if shard_url == "":
+                    continue
+
                 logger.warning(f"[{args.start_shard}..{shard_url_idx}..{args.end_shard}] shard_url: {shard_url}")
 
-                shard_df = read_shard_and_create_data_frame(s3, shard_url)
+                if args.update_orig_dataset == "m4":
+                    shard_df = read_shard_and_create_data_frame_m4(s3, shard_url)
+                elif args.update_orig_dataset == "laion_475":
+                    shard_df = read_shard_and_create_data_frame_laion_475(s3, shard_url)
+                else:
+                    assert False
 
                 if shard_df is None:
                     continue
@@ -241,6 +272,7 @@ def single_process_main(args, process_idx):
                         write_joined_data_to_new_s3_bucket_as_wds,
                         shard_df_joined,
                         shard_url,
+                        args.update_orig_dataset,
                         args.start_shard,
                         args.end_shard,
                         shard_url_idx,
@@ -287,7 +319,7 @@ def distribute_shards(start_shard_all, end_shard_all, ntasks):
     return distributed_shards
 
 
-def read_shard_and_create_data_frame(s3, shard_url):
+def read_shard_and_create_data_frame_m4(s3, shard_url):
     with s3.open(shard_url, "rb") as f:
         in_memory_stream = pa.input_stream(f)
         try:
@@ -308,6 +340,43 @@ def read_shard_and_create_data_frame(s3, shard_url):
         return x["url"]
 
     shard_df["url"] = shard_df["meta"].apply(parse_url)
+
+    shard_df = shard_df.set_index("url")
+
+    shard_df.sort_index(inplace=True)
+
+    return shard_df
+
+
+def read_shard_and_create_data_frame_laion_475(s3, shard_url):
+    with s3.open(shard_url, "rb") as f:
+        with tarfile.open(fileobj=f, mode="r") as tar:
+            # Create a dataframe with same columns as in the m4 dataset.
+            # This both lets us re-use the code and the columns are quite
+            # minimal/generic so it works well
+
+            text = []
+            meta = []
+            image = []
+            url = []
+
+            for member in tar.getmembers():
+                file = tar.extractfile(member)
+                file_as_bytes = file.read()
+
+                if member.name.endswith(".txt"):
+                    file_as_str = file_as_bytes.decode("utf-8")
+                    text.append(file_as_str)
+                elif member.name.endswith(".json"):
+                    file_as_str = file_as_bytes.decode("utf-8")
+                    meta.append(file_as_str)
+                    url.append(json.loads(file_as_str)["url"])
+                elif member.name.endswith(".jpg"):
+                    image.append({"bytes": file_as_bytes})
+                else:
+                    raise ValueError(f"unknown file extension while reading laion tarfile {member.name}")
+
+    shard_df = pd.DataFrame({"text": text, "meta": meta, "image": image, "url": url})
 
     shard_df = shard_df.set_index("url")
 
@@ -417,24 +486,50 @@ def optimized_left_join_merge_with_one_partition(
     return single_partition_merged
 
 
-def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, end_shard, shard_url_idx):
+M4_FILE_N_REGEX = r"/(\d+)/data-(\d+)-of-\d+\.arrow"
+LAION_475_FILE_N_REGEX = r"/(\d+)/(\d+).tar"
+
+
+def write_joined_data_to_new_s3_bucket_as_wds(
+    shard_df, shard_url, update_orig_dataset, start_shard, end_shard, shard_url_idx
+):
     # process pool executor restricts the cpu affinity for workers
     os.sched_setaffinity(os.getpid(), range(os.cpu_count()))
 
     t0 = time.perf_counter()
 
-    file_n_match = re.search(M4_FILE_N_REGEX, shard_url)
+    if update_orig_dataset == "m4":
+        file_n_match = re.search(M4_FILE_N_REGEX, shard_url)
 
-    assert file_n_match
+        assert file_n_match
 
-    split_n = file_n_match.group(1)
-    file_n = file_n_match.group(2)
+        split_n = file_n_match.group(1)
+        file_n = file_n_match.group(2)
 
-    write_to = f"s3://muse-datasets/m4-datasets-laion-dataset-filtered-dedup-joined-with-stability-metadata-laicov2/{split_n}/{file_n}.tar"
+        write_to = f"{M4_LAION_UPDATED_WITH_STABILITY_METADATA_S3_URL}/{split_n}/{file_n}.tar"
+
+        jpeg_encoder_ = jpeg_encoder
+    elif update_orig_dataset == "laion_475":
+        file_n_match = re.search(LAION_475_FILE_N_REGEX, shard_url)
+
+        assert file_n_match
+
+        split_n = file_n_match.group(1)
+        file_n = file_n_match.group(2)
+
+        write_to = f"{LAION_475_WITH_STABILITY_METADATA_S3_URL}/{split_n}/{file_n}.tar"
+
+        jpeg_encoder_ = lambda image: jpeg_encoder(image, quality=95)
+    else:
+        assert False
 
     logger.warning(f"[{start_shard}..{shard_url_idx}..{end_shard}] write_to: {write_to}")
 
-    tar_writer = TarWriter(f"pipe:aws s3 cp - {write_to}", encoder=TAR_WRITER_ENCODER)
+    encoder = make_handlers()
+
+    add_handlers(encoder, "jpg jpeg img image", jpeg_encoder_)
+
+    tar_writer = TarWriter(f"pipe:aws s3 cp - {write_to}", encoder=encoder)
 
     for count, (url, row) in enumerate(shard_df.iterrows()):
         image = row["image"]["bytes"]
@@ -450,8 +545,10 @@ def write_joined_data_to_new_s3_bucket_as_wds(shard_df, shard_url, start_shard, 
         txt = row["text"]
 
         json_ = json.loads(row["meta"])
-        # put `source` in the metadata dict so it doesn't have to be saved as an additional file
-        json_["source"] = row["source"]
+
+        if update_orig_dataset == "m4":
+            # put `source` in the metadata dict so it doesn't have to be saved as an additional file
+            json_["source"] = row["source"]
 
         row_stability_metadata = {}
 
@@ -477,15 +574,22 @@ def format_shard_number(shard_n: int):
 
 
 # default webdatasets jpeg encoder sets quality to 100 which makes the archives
-# twice as large as the m4 arrows
-def jpeg_encoder(image: Image.Image):
+# for m4 twice as large as the m4 arrows.
+#
+# TODO - I currently set a different quality for m4 vs laion_475 that gets closest
+# to the expected output size of the archive. This is really bad and I should more
+# concretely understand why we have to compress the input image different amounts
+# depending on the dataset we're compressing.
+def jpeg_encoder(image: Image.Image, quality=None):
     with io.BytesIO() as result:
-        image.save(result, format="JPEG")
+        kwargs = {}
+
+        if quality is not None:
+            kwargs["quality"] = quality
+
+        image.save(result, format="JPEG", **kwargs)
+
         return result.getvalue()
-
-
-TAR_WRITER_ENCODER = make_handlers()
-add_handlers(TAR_WRITER_ENCODER, "jpg jpeg img image", jpeg_encoder)
 
 
 if __name__ == "__main__":
