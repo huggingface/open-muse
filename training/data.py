@@ -24,6 +24,7 @@ from functools import partial
 from typing import List, Optional, Union
 
 import webdataset as wds
+import yaml
 from braceexpand import braceexpand
 from torch.utils.data import default_collate
 from torchvision import transforms
@@ -94,7 +95,20 @@ def get_orig_size(json):
 
 
 def get_aesthetic_score(json):
-    return float(json.get("AESTHETIC_SCORE", 0.0))
+    if "aesthetic" in json:
+        a = json["aesthetic"]
+    elif "AESTHETIC_SCORE" in json:
+        a = json["AESTHETIC_SCORE"]
+    elif "aesthetic_score_laion_v2" in json:
+        a = json["aesthetic_score_laion_v2"]
+    elif "stability_metadata" in json and "aes_scorelv2" in json["stability_metadata"]:
+        a = json["stability_metadata"]["aes_scorelv2"]
+    else:
+        a = 0.0
+
+    a = float(a)
+
+    return a
 
 
 class ImageNetTransform:
@@ -254,36 +268,145 @@ class ClassificationDataset:
         return self._eval_dataloader
 
 
-# taken from https://github.com/dome272/Paella/blob/main/src_distributed/utils.py#L20
-class WebdatasetFilter:
-    def __init__(self, min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9):
+class WebdatasetSelect:
+    def __init__(
+        self,
+        min_size=256,
+        max_pwatermark=0.5,
+        min_aesthetic_score=4.9,
+        require_marked_as_ok_by_spawning=False,
+        require_marked_as_not_getty=False,
+        max_pnsfw=None,
+    ):
         self.min_size = min_size
         self.max_pwatermark = max_pwatermark
-        self.aesthetic_threshold = aesthetic_threshold
+        self.min_aesthetic_score = min_aesthetic_score
+        self.require_marked_as_ok_by_spawning = require_marked_as_ok_by_spawning
+        self.require_marked_as_not_getty = require_marked_as_not_getty
+        self.max_pnsfw = max_pnsfw
 
     def __call__(self, x):
+        if "json" not in x:
+            return False
         try:
-            if "json" in x:
-                x_json = json.loads(x["json"])
-                filter_size = (x_json.get("original_width", 0.0) or 0.0) >= self.min_size and x_json.get(
-                    "original_height", 0
-                ) >= self.min_size
-                filter_watermark = (x_json.get("pwatermark", 1.0) or 1.0) <= self.max_pwatermark
-                filter_watermark_coyo = (x_json.get("watermark_score", 1.0) or 1.0) <= self.max_pwatermark
-                filter_aesthetic_a = (x_json.get("aesthetic", 0.0) or 0.0) >= self.aesthetic_threshold
-                filter_aesthetic_b = (x_json.get("AESTHETIC_SCORE", 0.0) or 0.0) >= self.aesthetic_threshold
-                filter_aesthetic_coyo = (
-                    x_json.get("aesthetic_score_laion_v2", 0.0) or 0.0
-                ) >= self.aesthetic_threshold
-                return (
-                    filter_size
-                    and (filter_watermark or filter_watermark_coyo)
-                    and (filter_aesthetic_a or filter_aesthetic_b or filter_aesthetic_coyo)
-                )
-            else:
-                return False
+            x_json = json.loads(x["json"])
         except:
             return False
+
+        # For all requirements, if the necessary key(s) are not present, we assume
+        # the requirement does not hold. Note that many checks are done on different keys
+        # which is due to different datasets being used with different metadata dicts.
+
+        # size
+
+        if "original_width" not in x_json or "original_height" not in x_json:
+            return False
+
+        original_width = x_json["original_width"]
+        original_height = x_json["original_height"]
+
+        is_less_than_min_size = original_width < self.min_size or original_height < self.min_size
+
+        if is_less_than_min_size:
+            return False
+
+        # watermark
+
+        if (
+            "pwatermark" not in x_json
+            and "watermark_score" not in x_json
+            and ("stability_metadata" not in x_json or "p_watermarkdf" not in x_json["stability_metadata"])
+        ):
+            return False
+
+        if "pwatermark" in x_json:
+            is_watermarked = x_json["pwatermark"] > self.max_pwatermark
+
+            if is_watermarked:
+                return False
+
+        if "watermark_score" in x_json:
+            is_watermarked_coyo = x_json["watermark_score"] > self.max_pwatermark
+
+            if is_watermarked_coyo:
+                return False
+
+        if "stability_metadata" in x_json and "p_watermarkdf" in x_json["stability_metadata"]:
+            is_watermarked_stability_metadata = x_json["stability_metadata"]["p_watermarkdf"] > self.max_pwatermark
+
+            if is_watermarked_stability_metadata:
+                return False
+
+        # aesthetic
+
+        if (
+            "aesthetic" not in x_json
+            and "AESTHETIC_SCORE" not in x_json
+            and "aesthetic_score_laion_v2" not in x_json
+            and ("stability_metadata" not in x_json or "aes_scorelv2" not in x_json["stability_metadata"])
+        ):
+            return False
+
+        if "aesthetic" in x_json:
+            is_under_min_aesthetic_threshold = x_json["aesthetic"] < self.min_aesthetic_score
+
+            if is_under_min_aesthetic_threshold:
+                return False
+
+        if "AESTHETIC_SCORE" in x_json:
+            is_under_min_aesthetic_threshold_b = x_json["AESTHETIC_SCORE"] < self.min_aesthetic_score
+
+            if is_under_min_aesthetic_threshold_b:
+                return False
+
+        if "aesthetic_score_laion_v2" in x_json:
+            is_under_min_aesthetic_threshold_coyo = x_json["aesthetic_score_laion_v2"] < self.min_aesthetic_score
+
+            if is_under_min_aesthetic_threshold_coyo:
+                return False
+
+        if "stability_metadata" in x_json and "aes_scorelv2" in x_json["stability_metadata"]:
+            is_under_min_aesthetic_threshold_stability_metadata = (
+                x_json["stability_metadata"]["aes_scorelv2"] < self.min_aesthetic_score
+            )
+
+            if is_under_min_aesthetic_threshold_stability_metadata:
+                return False
+
+        # spawning
+
+        if self.require_marked_as_ok_by_spawning:
+            if "stability_metadata" not in x_json or "is_spawning" not in x_json["stability_metadata"]:
+                return False
+
+            is_marked_as_not_ok_by_spawning = x_json["stability_metadata"]["is_spawning"]
+
+            if is_marked_as_not_ok_by_spawning:
+                return False
+
+        # getty
+
+        if self.require_marked_as_not_getty:
+            if "stability_metadata" not in x_json or "is_getty" not in x_json["stability_metadata"]:
+                return False
+
+            is_marked_as_getty = x_json["stability_metadata"]["is_getty"]
+
+            if is_marked_as_getty:
+                return False
+
+        # nsfw
+
+        if self.max_pnsfw is not None:
+            if "stability_metadata" not in x_json or "p_nsfwdf" not in x_json["stability_metadata"]:
+                return False
+
+            is_above_max_nsfw = x_json["stability_metadata"]["p_nsfwdf"] > self.max_pnsfw
+
+            if is_above_max_nsfw:
+                return False
+
+        return True
 
 
 class Text2ImageDataset:
@@ -307,7 +430,14 @@ class Text2ImageDataset:
         vae_checkpoint: Optional[str] = None,
         text_encoder_checkpoint: Optional[str] = None,
         use_filtered_dataset: bool = False,
+        require_marked_as_ok_by_spawning: bool = False,
+        require_marked_as_not_getty: bool = False,
+        max_pnsfw: Optional[float] = None,
     ):
+        if train_shards_path_or_url == "m4_shards":
+            with open("./configs/m4_shards.yaml") as f:
+                train_shards_path_or_url = yaml.safe_load(f)
+
         transform = ImageNetTransform(resolution, center_crop, random_flip)
 
         def tokenize(text):
@@ -360,15 +490,22 @@ class Text2ImageDataset:
                 wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
+        if use_filtered_dataset:
+            select = wds.select(
+                WebdatasetSelect(
+                    require_marked_as_ok_by_spawning=require_marked_as_ok_by_spawning,
+                    require_marked_as_not_getty=require_marked_as_not_getty,
+                    max_pnsfw=max_pnsfw,
+                )
+            )
+        else:
+            select = None
+
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
             tarfile_to_samples_nothrow,
-            wds.select(
-                WebdatasetFilter(min_size=256, max_pwatermark=0.5, aesthetic_threshold=4.9)
-                if use_filtered_dataset
-                else lambda x: True
-            ),
+            *([select] if select is not None else []),
             wds.shuffle(shuffle_buffer_size),
             *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),

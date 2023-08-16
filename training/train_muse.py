@@ -457,6 +457,9 @@ def main():
         vae_checkpoint=config.model.vq_model.pretrained,
         text_encoder_checkpoint=config.model.text_encoder.pretrained,
         use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
+        require_marked_as_ok_by_spawning=dataset_config.get("require_marked_as_ok_by_spawning", False),
+        require_marked_as_not_getty=dataset_config.get("require_marked_as_not_getty", False),
+        max_pnsfw=dataset_config.get("max_pnsfw", None),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
