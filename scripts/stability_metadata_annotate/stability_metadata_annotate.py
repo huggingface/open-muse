@@ -541,7 +541,18 @@ def write_joined_data_to_new_s3_bucket_as_wds(
 
         write_to = f"{write_to}/{split_n}/{file_n}.tar"
 
-        jpeg_encoder_ = lambda image: jpeg_encoder(image, quality=95)
+        if update_orig_dataset == "laion_475":
+            quality = 95
+        elif update_orig_dataset == "laion_475_resized_to_max_1024":
+            # TODO: REALLY BAD - I fiddled with quality until I got a final archive
+            # size slightly larger than the original archive. There is no reason why
+            # we shouldn't be able to use the original image in 100% quality or at
+            # least be able to use the same quality for "laion_475"
+            quality = 93
+        else:
+            assert False
+
+        jpeg_encoder_ = lambda image: jpeg_encoder(image, quality=quality)
     else:
         assert False
 
