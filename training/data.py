@@ -433,6 +433,8 @@ class Text2ImageDataset:
         require_marked_as_ok_by_spawning: bool = False,
         require_marked_as_not_getty: bool = False,
         max_pnsfw: Optional[float] = None,
+        min_aesthetic_score: Optional[float] = 4.5,
+        max_pwatermark: Optional[float] = 0.5,
     ):
         if train_shards_path_or_url == "m4_shards":
             with open("./configs/m4_shards.yaml") as f:
@@ -496,6 +498,8 @@ class Text2ImageDataset:
                     require_marked_as_ok_by_spawning=require_marked_as_ok_by_spawning,
                     require_marked_as_not_getty=require_marked_as_not_getty,
                     max_pnsfw=max_pnsfw,
+                    min_aesthetic_score=min_aesthetic_score,
+                    max_pwatermark=max_pwatermark,
                 )
             )
         else:

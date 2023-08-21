@@ -460,6 +460,8 @@ def main():
         require_marked_as_ok_by_spawning=dataset_config.get("require_marked_as_ok_by_spawning", False),
         require_marked_as_not_getty=dataset_config.get("require_marked_as_not_getty", False),
         max_pnsfw=dataset_config.get("max_pnsfw", None),
+        min_aesthetic_score=dataset_config.get("min_aesthetic_score", None),
+        max_pwatermark=dataset_config.get("max_pwatermark", None),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
