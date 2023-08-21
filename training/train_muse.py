@@ -949,7 +949,7 @@ def generate_images(
         micro_conds = torch.tensor(
             [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
         )
-        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
+        micro_conds = micro_conds.unsqueeze(0)
 
     if config.training.get("pre_encode", False):
         del text_encoder
