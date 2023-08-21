@@ -36,6 +36,9 @@ M4_LAION_UPDATED_WITH_STABILITY_METADATA_S3_URL = (
 LAION_475_WITH_STABILITY_METADATA_S3_URL = (
     "s3://muse-datasets/laion-aesthetic-475-min-1024-joined-with-stability-metadata-laicov2"
 )
+LAION_475_RESIZED_TO_MAX_1024_WITH_STABILITY_METADATA_S3_URL = (
+    "s3://muse-datasets/laion-aesthetic-475-max-1024-joined-with-stability-metadata-laicov2"
+)
 
 # These are the columns that we add to our data from the joined against
 # stability metadata
@@ -94,7 +97,12 @@ def cli_args():
         type=int,
         default=4,
     )
-    parser.add_argument("--update_orig_dataset", choices=["m4", "laion_475"], default="m4", required=False)
+    parser.add_argument(
+        "--update_orig_dataset",
+        choices=["m4", "laion_475", "laion_475_resized_to_max_1024"],
+        default="m4",
+        required=False,
+    )
 
     cli_args = parser.parse_args()
 
@@ -200,6 +208,8 @@ def single_process_main(args, process_idx):
         read_shards_from = "/fsx/william/open-muse/shards.txt"
     elif args.update_orig_dataset == "laion_475":
         read_shards_from = "/fsx/william/open-muse/shards_laion_475.txt"
+    elif args.update_orig_dataset == "laion_475_resized_to_max_1024":
+        read_shards_from = "/fsx/william/open-muse/shards_laion_475_resized_to_max_1024.txt"
     else:
         assert False
 
@@ -229,7 +239,12 @@ def single_process_main(args, process_idx):
 
                 if args.update_orig_dataset == "m4":
                     shard_df = read_shard_and_create_data_frame_m4(s3, shard_url)
-                elif args.update_orig_dataset == "laion_475":
+                elif (
+                    args.update_orig_dataset == "laion_475"
+                    or args.update_orig_dataset == "laion_475_resized_to_max_1024"
+                ):
+                    # both are standard wds downloads with the same file structure and metadata
+                    # so can use the same function to create the dataframe
                     shard_df = read_shard_and_create_data_frame_laion_475(s3, shard_url)
                 else:
                     assert False
@@ -509,7 +524,7 @@ def write_joined_data_to_new_s3_bucket_as_wds(
         write_to = f"{M4_LAION_UPDATED_WITH_STABILITY_METADATA_S3_URL}/{split_n}/{file_n}.tar"
 
         jpeg_encoder_ = jpeg_encoder
-    elif update_orig_dataset == "laion_475":
+    elif update_orig_dataset == "laion_475" or update_orig_dataset == "laion_475_resized_to_max_1024":
         file_n_match = re.search(LAION_475_FILE_N_REGEX, shard_url)
 
         assert file_n_match
@@ -517,7 +532,14 @@ def write_joined_data_to_new_s3_bucket_as_wds(
         split_n = file_n_match.group(1)
         file_n = file_n_match.group(2)
 
-        write_to = f"{LAION_475_WITH_STABILITY_METADATA_S3_URL}/{split_n}/{file_n}.tar"
+        if update_orig_dataset == "laion_475":
+            write_to = LAION_475_WITH_STABILITY_METADATA_S3_URL
+        elif update_orig_dataset == "laion_475_resized_to_max_1024":
+            write_to = LAION_475_RESIZED_TO_MAX_1024_WITH_STABILITY_METADATA_S3_URL
+        else:
+            assert False
+
+        write_to = f"{write_to}/{split_n}/{file_n}.tar"
 
         jpeg_encoder_ = lambda image: jpeg_encoder(image, quality=95)
     else:
