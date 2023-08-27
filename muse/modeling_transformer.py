@@ -1076,8 +1076,13 @@ class ConvMlmLayer(nn.Module):
         logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
         return logits
 
+class TransformerAdapterMixin:
+    def __init__(self):
+        self.adapter = None
+    def add_adapter(self, adapter):
+        self.adapter = adapter
 
-class MaskGitTransformer(ModelMixin, ConfigMixin):
+class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
     _supports_gradient_checkpointing = True
 
     @register_to_config
@@ -1226,6 +1231,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         cond_dropout_prob=0.0,
+        low_res_input_ids=None,
         **kwargs,
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
@@ -1236,6 +1242,10 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
             encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
+            if low_res_input_ids is not None:
+                assert self.adapter is not None
+                low_res_hidden_states = self.adapter(low_res_input_ids)
+                encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=-1)
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
@@ -1453,7 +1463,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         return sampled_ids
 
 
-class MaskGiTUViT(ModelMixin, ConfigMixin):
+class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
     _supports_gradient_checkpointing = True
 
     @register_to_config
@@ -1764,6 +1774,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         empty_embeds=None,
         empty_cond_embeds=None,
         micro_conds=None,
+        low_res_input_ids=None
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
@@ -1803,6 +1814,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
             encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
+            if low_res_input_ids is not None:
+                assert self.adapter is not None
+                low_res_hidden_states = self.adapter(low_res_input_ids)
+                encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=-1)
 
         if self.config.add_micro_cond_embeds:
             micro_cond_embeds = sinusoidal_enocde(micro_conds.flatten(), self.config.micro_cond_encode_dim)

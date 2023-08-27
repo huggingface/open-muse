@@ -324,6 +324,14 @@ def main():
         model = model_cls.from_pretrained(config.model.pretrained_model_path)
     else:
         model = model_cls(**config.model.transformer)
+
+    if config.training.is_second_stage_training:
+        adapter_model_cls = MaskGitTransformer if config.adapter_model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+        if config.adapter_model.get("pretrained_model_path", None) is not None:
+            adapter_model = adapter_model_cls.from_pretrained(config.adapter_model.pretrained_model_path)
+        else:
+            adapter_model = adapter_model_cls(**config.adapter_model.transformer)
+        model.add_adapter(adapter_model)
     mask_id = model.config.mask_token_id
     output_size = model.output_size
 
