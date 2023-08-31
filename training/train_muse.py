@@ -693,13 +693,30 @@ def main():
                 logger.info("Input ids: {}".format(input_ids))
                 logger.info("Labels: {}".format(labels))
 
+            if config.training.cond_dropout_prob > 0.0:
+                assert encoder_hidden_states is not None
+
+                batch_size = encoder_hidden_states.shape[0]
+
+                mask = (
+                    torch.zeros((batch_size, 1, 1), device=encoder_hidden_states.device).float().uniform_(0, 1)
+                    < config.training.cond_dropout_prob
+                )
+
+                empty_embeds_ = empty_embeds.expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds_
+                )
+
+                empty_clip_embeds_ = empty_clip_embeds.expand(batch_size, -1)
+                cond_embeds = torch.where((clip_embeds * mask.squeeze(-1)).bool(), clip_embeds, empty_clip_embeds_)
+
             # Train Step
             with accelerator.accumulate(model):
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
-                        cond_dropout_prob=config.training.cond_dropout_prob,
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
@@ -708,11 +725,8 @@ def main():
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
                         label_smoothing=config.training.label_smoothing,
-                        cond_dropout_prob=config.training.cond_dropout_prob,
-                        cond_embeds=clip_embeds,
+                        cond_embeds=cond_embeds,
                         loss_weight=loss_weight,
-                        empty_embeds=empty_embeds,
-                        empty_cond_embeds=empty_clip_embeds,
                         micro_conds=micro_conds,
                     )
 

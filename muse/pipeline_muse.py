@@ -83,6 +83,7 @@ class PipelineMuse:
         aesthetic_score=6.0,
         return_intermediate: bool = False,
         use_tqdm=True,
+        transformer_seq_len=None,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -161,11 +162,20 @@ class PipelineMuse:
                     bs_embed * num_images_per_prompt, seq_len, -1
                 )
 
+            empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
+                self.text_encoder.device
+            )
+            outputs = self.text_encoder(empty_input, output_hidden_states=True)
+            empty_embeds = outputs.hidden_states[-2]
+            empty_cond_embeds = outputs[0]
+
             model_inputs = {
                 "encoder_hidden_states": encoder_hidden_states,
                 "negative_embeds": negative_encoder_hidden_states,
                 "cond_embeds": pooled_embeds,
                 "negative_cond_embeds": negative_pooled_embeds,
+                "empty_embeds": empty_embeds,
+                "empty_cond_embeds": empty_cond_embeds,
             }
 
         if self.transformer.config.add_micro_cond_embeds:
@@ -192,6 +202,7 @@ class PipelineMuse:
                 predict_all_tokens=predict_all_tokens,
                 return_intermediate=return_intermediate,
                 use_tqdm=use_tqdm,
+                seq_len=transformer_seq_len,
             )
 
             if return_intermediate:
