@@ -67,11 +67,9 @@ skip = [
 
 def main():
     args = ArgumentParser()
-    args.add_argument("--device", options=["4090", "a100", "t4", "cpu"], required=True)
+    args.add_argument("--device", choices=["4090", "a100", "t4", "cpu"], required=True)
 
     args = args.parse_args()
-
-    assert args.device in all_devices
 
     if args.device in ["4090", "a100", "t4"]:
         dtype = torch.float16
@@ -168,7 +166,12 @@ def muse_benchmark_transformer_backbone(in_queue, out_queue, timeout):
 
 
 def _muse_benchmark_transformer_backbone(device, dtype, compiled, batch_size, model, label, description, timesteps):
-    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(device)
+    if "text_model_cls" in model_config[model]:
+        text_model_cls = model_config[model]["text_model_cls"]
+    else:
+        text_model_cls = CLIPTextModel
+
+    text_encoder = text_model_cls.from_pretrained(model, subfolder="text_encoder").to(device)
 
     tokenizer = AutoTokenizer.from_pretrained(model, subfolder="text_encoder")
 
@@ -347,7 +350,12 @@ def muse_benchmark_full(in_queue, out_queue, timeout):
 def _muse_benchmark_full(device, dtype, compiled, batch_size, model, label, description, timesteps):
     tokenizer = AutoTokenizer.from_pretrained(model, subfolder="text_encoder")
 
-    text_encoder = CLIPTextModel.from_pretrained(model, subfolder="text_encoder").to(device=device, dtype=dtype)
+    if "text_model_cls" in model_config[model]:
+        text_model_cls = model_config[model]["text_model_cls"]
+    else:
+        text_model_cls = CLIPTextModel
+
+    text_encoder = text_model_cls.from_pretrained(model, subfolder="text_encoder").to(device=device, dtype=dtype)
 
     vae_cls = model_config[model]["vae"]["cls"]
     vae = vae_cls.from_pretrained(model, subfolder="vae")
@@ -377,9 +385,9 @@ def _muse_benchmark_full(device, dtype, compiled, batch_size, model, label, desc
         seq_len = None
 
     def benchmark_fn():
-        pipe(prompt, num_images_per_prompt=batch_size, timesteps=timesteps, seq_len=seq_len)
+        pipe(prompt, num_images_per_prompt=batch_size, timesteps=timesteps, transformer_seq_len=seq_len)
 
-    pipe(prompt, num_images_per_prompt=batch_size, timesteps=2, seq_len=seq_len)
+    pipe(prompt, num_images_per_prompt=batch_size, timesteps=2, transformer_seq_len=seq_len)
 
     def fn():
         return Timer(
@@ -545,6 +553,7 @@ model_config = {
             "fn": muse_benchmark_full,
         },
         "seq_len": 1024,
+        "text_model_cls": CLIPTextModelWithProjection,
     },
 }
 

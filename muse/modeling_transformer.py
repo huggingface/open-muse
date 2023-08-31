@@ -1811,6 +1811,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 cond_embeds = torch.cat([cond_embeds, micro_cond_embeds], dim=1)
             else:
                 cond_embeds = micro_cond_embeds
+            cond_embeds = cond_embeds.to(dtype=self.dtype)
             cond_embeds = self.cond_embed(cond_embeds)
         elif self.config.add_cond_embeds:
             cond_embeds = self.cond_embed(cond_embeds)
