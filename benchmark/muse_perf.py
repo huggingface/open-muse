@@ -24,6 +24,7 @@ all_models = [
     "openMUSE/muse-laiona6-uvit-clip-220k",
     "runwayml/stable-diffusion-v1-5",
     "williamberman/laiona6plus_uvit_clip_f8",
+    "williamberman/muse_research_run_benchmarking",
 ]
 
 all_batch_sizes = [1, 2, 4, 8, 16, 32]
@@ -66,7 +67,7 @@ skip = [
 
 def main():
     args = ArgumentParser()
-    args.add_argument("--device", required=True)
+    args.add_argument("--device", options=["4090", "a100", "t4", "cpu"], required=True)
 
     args = args.parse_args()
 
@@ -370,10 +371,15 @@ def _muse_benchmark_full(device, dtype, compiled, batch_size, model, label, desc
     pipe.device = device
     pipe.dtype = dtype
 
-    def benchmark_fn():
-        pipe(prompt, num_images_per_prompt=batch_size, timesteps=timesteps)
+    if "seq_len" in model_config[model]:
+        seq_len = model_config[model]["seq_len"]
+    else:
+        seq_len = None
 
-    pipe(prompt, num_images_per_prompt=batch_size, timesteps=2)
+    def benchmark_fn():
+        pipe(prompt, num_images_per_prompt=batch_size, timesteps=timesteps, seq_len=seq_len)
+
+    pipe(prompt, num_images_per_prompt=batch_size, timesteps=2, seq_len=seq_len)
 
     def fn():
         return Timer(
@@ -526,6 +532,19 @@ model_config = {
             "cls": PaellaVQModel,
         },
         "full": {"fn": muse_benchmark_full},
+    },
+    "williamberman/muse_research_run_benchmarking": {
+        "backbone": {
+            "fn": muse_benchmark_transformer_backbone,
+        },
+        "vae": {
+            "fn": muse_benchmark_vae,
+            "cls": VQGANModel,
+        },
+        "full": {
+            "fn": muse_benchmark_full,
+        },
+        "seq_len": 1024,
     },
 }
 
