@@ -346,6 +346,9 @@ class PipelineMuseInpainting(PipelineMuse):
         generator: Optional[torch.Generator] = None,
         use_fp16: bool = False,
         image_size: int = 256,
+        orig_size=(256, 256),
+        crop_coords=(0, 0),
+        aesthetic_score=6.0,
     ):
         from torchvision import transforms
 
@@ -366,7 +369,9 @@ class PipelineMuseInpainting(PipelineMuse):
         pixel_values = encode_transform(image).unsqueeze(0).to(self.device)
         _, image_tokens = self.vae.encode(pixel_values)
         mask_token_id = self.transformer.config.mask_token_id
+
         image_tokens[mask[None]] = mask_token_id
+
         image_tokens = image_tokens.repeat(num_images_per_prompt, 1)
         if class_ids is not None:
             if isinstance(class_ids, int):
@@ -388,7 +393,13 @@ class PipelineMuseInpainting(PipelineMuse):
                 max_length=self.tokenizer.model_max_length,
             ).input_ids  # TODO: remove hardcode
             input_ids = input_ids.to(self.device)
-            encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+
+            if self.transformer.config.add_cond_embeds:
+                outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
+                pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
+            else:
+                encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+                pooled_embeds = None
 
             if negative_text is not None:
                 if isinstance(negative_text, str):
@@ -417,10 +428,27 @@ class PipelineMuseInpainting(PipelineMuse):
                     bs_embed * num_images_per_prompt, seq_len, -1
                 )
 
+            empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
+                self.text_encoder.device
+            )
+            outputs = self.text_encoder(empty_input, output_hidden_states=True)
+            empty_embeds = outputs.hidden_states[-2]
+            empty_cond_embeds = outputs[0]
+
             model_inputs = {
                 "encoder_hidden_states": encoder_hidden_states,
                 "negative_embeds": negative_encoder_hidden_states,
+                "empty_embeds": empty_embeds,
+                "empty_cond_embeds": empty_cond_embeds,
+                "cond_embeds": pooled_embeds,
             }
+
+        if self.transformer.config.add_micro_cond_embeds:
+            micro_conds = list(orig_size) + list(crop_coords) + [aesthetic_score]
+            micro_conds = torch.tensor(micro_conds, device=self.device, dtype=encoder_hidden_states.dtype)
+            micro_conds = micro_conds.unsqueeze(0)
+            model_inputs["micro_conds"] = micro_conds
+
         generate = self.transformer.generate2
         with torch.autocast("cuda", enabled=use_fp16):
             generated_tokens = generate(
