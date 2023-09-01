@@ -3,7 +3,7 @@ from argparse import ArgumentParser
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_csv("artifacts/all.csv")
+df = pd.read_csv("benchmark/artifacts/all.csv")
 
 # round to GB
 df["Max Memory"] = df["Max Memory"].apply(lambda x: round(x / 10**9, 2))
@@ -11,12 +11,13 @@ df["Max Memory"] = df["Max Memory"].apply(lambda x: round(x / 10**9, 2))
 df["Median"] = df["Median"].apply(lambda x: round(x, 2))
 df["Mean"] = df["Mean"].apply(lambda x: round(x, 2))
 
-bar_width = 0.25
+bar_width = 0.20
 
 model_names = [
     "openMUSE/muse-laiona6-uvit-clip-220k",
     "williamberman/laiona6plus_uvit_clip_f8",
     "runwayml/stable-diffusion-v1-5",
+    "williamberman/muse_research_run_benchmarking_512_output",
 ]
 
 
