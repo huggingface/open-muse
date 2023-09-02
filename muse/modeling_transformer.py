@@ -1501,7 +1501,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_vannilla_resblock=False,
         ffn_type="glu",
         res_ffn_factor=4,
-        **kwargs,
+        force_down_up_sample=False**kwargs,
     ):
         super().__init__()
         self.vocab_size = vocab_size
@@ -1589,7 +1589,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             input_channels = output_channels
             output_channels = block_out_channels[i]
 
-            if use_vannilla_resblock:
+            if force_down_up_sample:
+                add_downsample = True
+            elif use_vannilla_resblock:
                 add_downsample = not is_final_block
             else:
                 add_downsample = not is_first_block
@@ -1674,6 +1676,11 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                 output_channels = reversed_block_out_channels[i + 1] if not is_final_block else output_channels
                 prev_output_channels = input_channel if i != 0 else 0
 
+            if force_down_up_sample:
+                add_upsample = True
+            else:
+                add_upsample = not is_final_block
+
             self.up_blocks.append(
                 UpBlock(
                     input_channels=input_channel,
@@ -1684,7 +1691,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
                     dropout=hidden_dropout if i == 0 else 0.0,
                     norm_type=norm_type,
                     ln_elementwise_affine=ln_elementwise_affine,
-                    add_upsample=not is_final_block,
+                    add_upsample=add_upsample,
                     add_cond_embeds=add_cond_embeds or add_micro_cond_embeds,
                     cond_embed_dim=cond_embed_dim,
                     has_attention=reversed_block_has_attention[i],

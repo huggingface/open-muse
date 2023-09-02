@@ -27,7 +27,7 @@ import numpy as np
 import plotly.express as px
 import torch
 import torch.nn.functional as F
-import wandb
+import torchvision.transforms.functional as TF
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
@@ -46,6 +46,7 @@ from transformers import (
 
 import muse
 import muse.training_utils
+import wandb
 from muse import (
     MOVQ,
     EMAModel,
@@ -228,9 +229,9 @@ def main():
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -812,6 +813,19 @@ def main():
                         empty_clip_embeds=empty_clip_embeds,
                     )
 
+                    generate_inpainting_images(
+                        model,
+                        vq_model,
+                        text_encoder,
+                        tokenizer,
+                        accelerator,
+                        config,
+                        global_step + 1,
+                        mask_schedule=mask_schedule,
+                        empty_embeds=empty_embeds,
+                        empty_clip_embeds=empty_clip_embeds,
+                    )
+
                     if config.training.get("use_ema", False):
                         # Switch back to the original model parameters for training.
                         ema.restore(model.parameters())
@@ -987,6 +1001,136 @@ def generate_images(
     # Log images
     wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
     wandb.log({"generated_images": wandb_images}, step=global_step)
+
+
+@torch.no_grad()
+def generate_inpainting_images(
+    model,
+    vq_model,
+    text_encoder,
+    tokenizer,
+    accelerator,
+    config,
+    global_step,
+    mask_schedule,
+    empty_embeds=None,
+    empty_clip_embeds=None,
+):
+    assert not config.training.get("pre_encode", False)
+
+    model.eval()
+
+    validation_prompts, validation_images, validation_masks = inpainting_validation_data()
+
+    validation_masks = validation_masks_to_latent_tensors(validation_masks).to(accelerator.device)
+
+    validation_images = torch.stack([TF.to_tensor(x) for x in validation_images])
+    validation_images = validation_images.to(accelerator.device)
+    _, validation_images = vq_model.encode(validation_images)
+    validation_images[validation_masks] = model.config.mask_token_id
+
+    token_input_ids = tokenizer(
+        validation_prompts,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=config.dataset.preprocessing.max_seq_length,
+    ).input_ids
+
+    if config.model.transformer.get("add_cond_embeds", False):
+        outputs = text_encoder(token_input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
+        encoder_hidden_states = outputs.hidden_states[-2]
+        clip_embeds = outputs[0]
+    else:
+        encoder_hidden_states = text_encoder(token_input_ids.to(accelerator.device)).last_hidden_state
+        clip_embeds = None
+
+    if config.model.transformer.get("add_micro_cond_embeds", False):
+        resolution = config.dataset.preprocessing.resolution
+        micro_conds = torch.tensor(
+            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+        )
+        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
+
+    with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
+        # Generate images
+        gen_token_ids = accelerator.unwrap_model(model).generate2(
+            input_ids=validation_images,
+            encoder_hidden_states=encoder_hidden_states,
+            cond_embeds=clip_embeds,
+            empty_embeds=empty_embeds,
+            empty_cond_embeds=empty_clip_embeds,
+            micro_conds=micro_conds,
+            guidance_scale=config.training.guidance_scale,
+            temperature=config.training.get("generation_temperature", 1.0),
+            timesteps=config.training.generation_timesteps,
+            noise_schedule=mask_schedule,
+            noise_type=config.training.get("noise_type", "mask"),
+            predict_all_tokens=config.training.get("predict_all_tokens", False),
+        )
+    # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
+    # so we clamp them to the correct range.
+    gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
+    images = vq_model.decode_code(gen_token_ids)
+
+    # Convert to PIL images
+    images = 2.0 * images - 1.0
+    images = torch.clamp(images, -1.0, 1.0)
+    images = (images + 1.0) / 2.0
+    images *= 255.0
+    images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+    pil_images = [Image.fromarray(image) for image in images]
+
+    # Log images
+    wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+    wandb.log({"generated_inpainting_images": wandb_images}, step=global_step)
+
+    model.train()
+
+
+def inpainting_validation_data():
+    validation_prompts = []
+    validation_images = []
+    validation_masks = []
+
+    for folder_name in os.listdir("./inpainting_validation"):
+        validation_prompts.append(folder_name)
+
+        image = None
+        mask = None
+
+        for file_name in os.listdir(f"./inpainting_validation/{folder_name}"):
+            if file_name.startswith("image"):
+                image = Image.open(f"./inpainting_validation/{folder_name}/{file_name}")
+
+            if file_name.startswith("mask"):
+                mask = Image.open(f"./inpainting_validation/{folder_name}/{file_name}").convert("L")
+
+        assert image is not None, f"could not find inpainting validation image under {folder_name}"
+        assert mask is not None, f"could not find inpainting validation mask under {folder_name}"
+
+        validation_images.append(image)
+        validation_masks.append(mask)
+
+    return validation_prompts, validation_images, validation_masks
+
+
+def validation_masks_to_latent_tensors(validation_masks):
+    validation_masks_ = []
+
+    for mask in validation_masks:
+        mask = mask.resize((mask.height // 16, mask.width // 16))
+        mask = np.array(mask)
+        mask = mask / 255
+        mask[mask < 0.5] = 0
+        mask[mask >= 0.5] = 1
+        mask = mask.reshape(-1)
+        mask = mask.astype(np.bool)
+        validation_masks_.append(mask)
+
+    validation_masks_ = np.stack(validation_masks_)
+
+    return torch.from_numpy(validation_masks_)
 
 
 def save_checkpoint(model, config, accelerator, global_step):
