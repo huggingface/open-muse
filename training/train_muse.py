@@ -160,8 +160,25 @@ def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, 
 
     # creat a random mask for each image
     num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-    mask = batch_randperm < num_token_masked.unsqueeze(-1)
+
+    mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
+
+    if mask_contiguous_region_prob is None:
+        mask_contiguous_region = False
+    else:
+        mask_contiguous_region = random.random() < mask_contiguous_region_prob
+
+    if not mask_contiguous_region:
+        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+        mask = batch_randperm < num_token_masked.unsqueeze(-1)
+    else:
+        # TODO - would be nice to vectorize
+        mask = torch.zeros((batch_size, seq_len), device=image_tokens.device)
+        for batch_idx, num_token_masked_ in enumerate(num_token_masked):
+            num_token_masked_ = int(num_token_masked_.item())
+            start_idx = random.randint(0, seq_len - num_token_masked_)
+            mask[batch_idx, start_idx : start_idx + num_token_masked_] = 1
+        mask = mask.to(torch.bool)
 
     # mask images and create input and labels
     if config.training.get("noise_type", "mask"):
