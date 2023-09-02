@@ -6,7 +6,7 @@ experiment:
     name: "research-run-512"
     output_dir: "/fsx/william/research-run-512"
     max_train_examples: 1000000000
-    max_eval_examples: 20000
+    max_eval_examples: 5000
     save_every: 2000
     eval_every: 1000
     generate_every: 1000

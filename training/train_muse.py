@@ -803,7 +803,13 @@ def main():
                         ema.copy_to(model.parameters())
 
                     validate_model(
-                        model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels, empty_embeds
+                        model,
+                        eval_dataloader,
+                        accelerator,
+                        global_step + 1,
+                        prepare_inputs_and_labels,
+                        empty_embeds,
+                        config.experiment.get("max_eval_examples", None),
                     )
 
                     if config.training.get("use_ema", False):
@@ -859,7 +865,14 @@ def main():
 
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
-        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+        validate_model(
+            model,
+            eval_dataloader,
+            accelerator,
+            global_step,
+            prepare_inputs_and_labels,
+            config.experiment.get("max_eval_examples", None),
+        )
     save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
@@ -873,11 +886,22 @@ def main():
 
 
 @torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, empty_embeds=None):
+def validate_model(
+    model,
+    eval_dataloader,
+    accelerator,
+    global_step,
+    prepare_inputs_and_labels,
+    empty_embeds=None,
+    max_eval_examples=None,
+):
     logger.info("Evaluating...")
     model.eval()
     eval_loss = 0
     now = time.time()
+
+    samples_taken = 0
+
     for i, batch in enumerate(eval_dataloader):
         pixel_values, input_ids = batch["image"], batch["input_ids"]
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
@@ -902,6 +926,12 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             micro_conds=micro_conds,
         )
         eval_loss += loss.mean()
+
+        samples_taken += input_ids.shape[0]
+
+        if max_eval_examples is not None and samples_taken >= max_eval_examples:
+            break
+
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
 
