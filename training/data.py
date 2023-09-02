@@ -434,8 +434,12 @@ class Text2ImageDataset:
         require_marked_as_not_getty: bool = False,
         max_pnsfw: Optional[float] = None,
     ):
-        if train_shards_path_or_url == "m4_shards":
-            with open("./configs/m4_shards.yaml") as f:
+        yaml_serialized_shard_paths = [
+            "m4_shards",
+            "laion-aesthetic-475-max-1024-joined-with-stability-metadata-laicov2_shards",
+        ]
+        if train_shards_path_or_url in yaml_serialized_shard_paths:
+            with open(f"./configs/{train_shards_path_or_url}.yaml") as f:
                 train_shards_path_or_url = yaml.safe_load(f)
 
         transform = ImageNetTransform(resolution, center_crop, random_flip)
