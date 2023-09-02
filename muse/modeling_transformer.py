@@ -2106,7 +2106,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             guidance_scales = torch.ones(timesteps) * guidance_scale
 
         if micro_conds is not None:
-            micro_conds = micro_conds.repeat(batch_size, 1).to(input_ids.device)
+            if micro_conds.shape[0] == 1:
+                micro_conds = micro_conds.repeat(batch_size, 1).to(input_ids.device)
             if guidance_scale > 0:
                 micro_conds = torch.cat([micro_conds, micro_conds], dim=0)
 

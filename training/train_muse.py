@@ -1020,6 +1020,8 @@ def generate_inpainting_images(
 
     model.eval()
 
+    mask_token_id = config.model.transformer.vocab_size - 1
+
     validation_prompts, validation_images, validation_masks = inpainting_validation_data()
 
     validation_masks = validation_masks_to_latent_tensors(validation_masks).to(accelerator.device)
@@ -1027,7 +1029,7 @@ def generate_inpainting_images(
     validation_images = torch.stack([TF.to_tensor(x) for x in validation_images])
     validation_images = validation_images.to(accelerator.device)
     _, validation_images = vq_model.encode(validation_images)
-    validation_images[validation_masks] = model.config.mask_token_id
+    validation_images[validation_masks] = mask_token_id
 
     token_input_ids = tokenizer(
         validation_prompts,
