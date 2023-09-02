@@ -111,7 +111,7 @@ lr_scheduler:
 
 training:
     gradient_accumulation_steps: 1
-    batch_size: 128
+    batch_size: 32
     mixed_precision: "fp16"
     enable_tf32: True
     use_ema: True

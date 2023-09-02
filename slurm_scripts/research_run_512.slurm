@@ -15,10 +15,10 @@ conda activate base
 
 echo "START TIME: $(date)"
 
-MUSE_REPO=/fsx/william/open-muse
+MUSE_REPO=/fsx/william/open-muse.1
 OUTPUT_DIR=/fsx/william/research-run-512
 LOG_PATH=$OUTPUT_DIR/main_log.txt
-CONFIG_PATH=/fsx/william/open-muse/configs/research_run_512.yaml
+CONFIG_PATH=/fsx/william/open-muse.1/configs/research_run_512.yaml
 
 mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
@@ -82,4 +82,4 @@ SRUN_ARGS=" \
     "
 
 # py-spy top -s -i -n -- $LAUNCHER --node_rank $SLURM_PROCID --role $SLURMD_NODENAME: $CMD
-clear; srun $SRUN_ARGS --jobid $SLURM_JOB_ID bash -c "$LAUNCHER --node_rank \$SLURM_PROCID --role \$SLURMD_NODENAME: $CMD" 2>&1 | tee $LOG_PATH
+clear; srun $SRUN_ARGS --jobid $SLURM_JOB_ID bash -c "export PYTHONPATH=$MUSE_REPO && $LAUNCHER --node_rank \$SLURM_PROCID --role \$SLURMD_NODENAME: $CMD" 2>&1 | tee $LOG_PATH
