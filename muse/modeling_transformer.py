@@ -1501,7 +1501,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_vannilla_resblock=False,
         ffn_type="glu",
         res_ffn_factor=4,
-        force_down_up_sample=False**kwargs,
+        force_down_up_sample=False,
+        **kwargs,
     ):
         super().__init__()
         self.vocab_size = vocab_size
