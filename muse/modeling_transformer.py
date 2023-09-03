@@ -22,7 +22,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, reduce
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
@@ -184,7 +184,7 @@ class Attention(nn.Module):
         self.use_memory_efficient_attention_xformers = use_memory_efficient_attention_xformers
         self.xformers_attention_op = attention_op
 
-    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, bias=None):
         if encoder_attention_mask is not None and self.use_memory_efficient_attention_xformers:
             raise ValueError("Memory efficient attention does not yet support encoder attention mask")
 
@@ -202,7 +202,12 @@ class Attention(nn.Module):
 
         if self.use_memory_efficient_attention_xformers:
             attn_output = xops.memory_efficient_attention(
-                query, key, value, op=self.xformers_attention_op, p=self.attention_dropout if self.training else 0.0
+                query,
+                key,
+                value,
+                op=self.xformers_attention_op,
+                p=self.attention_dropout if self.training else 0.0,
+                attn_bias=bias,
             )
             attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
         else:
@@ -210,12 +215,12 @@ class Attention(nn.Module):
             if encoder_attention_mask is not None:
                 src_attn_mask = torch.ones(batch, q_seq_len, dtype=torch.long, device=query.device)
                 attention_mask = make_attention_mask(src_attn_mask, encoder_attention_mask, dtype=query.dtype)
-            attn_output = self.attention(query, key, value, attention_mask)
+            attn_output = self.attention(query, key, value, attention_mask, bias)
 
         attn_output = self.out(attn_output)
         return attn_output
 
-    def attention(self, query, key, value, attention_mask=None):
+    def attention(self, query, key, value, attention_mask=None, bias=None):
         batch, seq_len = query.shape[:2]
         kv_seq_len = key.shape[1]
         query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
@@ -227,6 +232,8 @@ class Attention(nn.Module):
             alpha=1 / self.scale_attn,
         )
         attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
+        if bias is not None:
+            attn_weights += bias
         # Apply the attention mask
         if attention_mask is not None:
             attn_weights = torch.masked_fill(attn_weights, attention_mask, torch.finfo(query.dtype).min)
@@ -815,6 +822,7 @@ class TransformerLayer(nn.Module):
         cond_embed_dim=None,
         ffn_type="glu",
         use_bias=False,
+        **kwargs,
     ):
         super().__init__()
 
@@ -901,6 +909,126 @@ class TransformerLayer(nn.Module):
         return hidden_states
 
 
+class MaxVitTransformerLayer(TransformerLayer):
+    def __init__(
+        self,
+        hidden_size,
+        intermediate_size,
+        num_attention_heads,
+        hidden_dropout=0.0,
+        attention_dropout=0.0,
+        norm_type="layernorm",
+        use_bias=False,
+        window_size=8,
+        mbconv_expansion_rate=4,
+        mbconv_shrinkage_rate=0.25,
+        embedding_size=256,
+        **kwargs,
+    ):
+        super().__init__(
+            hidden_size,
+            intermediate_size,
+            num_attention_heads,
+            hidden_dropout=hidden_dropout,
+            attention_dropout=attention_dropout,
+            norm_type=norm_type,
+            use_bias=use_bias,
+            **kwargs,
+        )
+        norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        self.mb_conv = MBConv(
+            embedding_size,
+            embedding_size,
+            expansion_rate=mbconv_expansion_rate,
+            shrinkage_rate=mbconv_shrinkage_rate,
+            dropout=hidden_dropout,
+        )
+        self.window_size = window_size
+        self.norm0 = norm_cls(hidden_size)
+        self.attn0 = MaxVitAttention(
+            hidden_size=hidden_size,
+            num_heads=num_attention_heads,
+            attention_dropout=attention_dropout,
+            window_size=window_size,
+        )
+        self.norm1 = norm_cls(hidden_size)
+        # In lucidrian's code the implementation of feedforward is different
+        self.ff0 = FeedForward(hidden_size=hidden_size, intermediate_size=hidden_size, hidden_dropout=hidden_dropout)
+        self.norm2 = norm_cls(hidden_size)
+        self.attn1 = MaxVitAttention(
+            hidden_size=hidden_size,
+            num_heads=num_attention_heads,
+            attention_dropout=attention_dropout,
+            window_size=window_size,
+        )
+        self.norm3 = norm_cls(hidden_size)
+        self.ff1 = FeedForward(hidden_size=hidden_size, intermediate_size=hidden_size, hidden_dropout=hidden_dropout)
+
+    def attention(self, hidden_states):
+        # If you examine the rearranges before the first attention, we get self.window_size intervals to make a window_sizexwindow_size size grid which gives
+        # our local attention once positional embeddings are added to it
+        # However for the second one, we see that we pick one element, then take x // window_size steps then pick the next one
+        # This helps us make a "global" grid of window_size x window_size
+        hidden_states = self.mb_conv(hidden_states)
+        # block like attention(local attention)
+        hidden_states = rearrange(
+            hidden_states, "b d (x w1) (y w2) -> b x y w1 w2 d", w1=self.window_size, w2=self.window_size
+        )
+        hidden_states = self.norm0(hidden_states)
+        hidden_states = self.attn0(hidden_states)
+        hidden_states = self.norm1(hidden_states)
+        hidden_states = self.ff0(hidden_states)
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (x w1) (y w2)")
+        # grid-like attention(global attention)
+        hidden_states = rearrange(
+            hidden_states, "b d (w1 x) (w2 y) -> b x y w1 w2 d", w1=self.window_size, w2=self.window_size
+        )
+        hidden_states = self.norm2(hidden_states)
+        hidden_states = self.attn1(hidden_states)
+        hidden_states = self.norm3(hidden_states)
+        hidden_states = self.ff1(hidden_states)
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (w1 x) (w2 y)")
+        return hidden_states
+
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
+        residual = hidden_states
+
+        hidden_states = self.attn_layer_norm(hidden_states)
+        if cond_embeds is not None:
+            hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
+        hidden_states = hidden_states.permute(0, 2, 1)
+        b, c, seq_length = hidden_states.shape
+        h, w = int(seq_length**0.5), int(seq_length**0.5)
+        hidden_states = hidden_states.view(b, c, h, w)
+        attention_output = self.attention(hidden_states)
+        attention_output = attention_output.view(b, c, seq_length)
+        attention_output = attention_output.permute(0, 2, 1)
+        if self.use_normformer:
+            attention_output = self.post_attn_layer_norm(attention_output)
+
+        hidden_states = residual + attention_output
+
+        if encoder_hidden_states is not None:
+            residual = hidden_states
+            # TODO: should norm be applied to encoder_hidden_states as well?
+            hidden_states = self.crossattn_layer_norm(hidden_states)
+            if cond_embeds is not None:
+                hidden_states = self.cross_attn_adaLN_modulation(hidden_states, cond_embeds)
+            attention_output = self.crossattention(
+                hidden_states,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+            )
+            if self.use_normformer:
+                attention_output = self.post_crossattn_layer_norm(attention_output)
+            hidden_states = residual + attention_output
+
+        residual = hidden_states
+        hidden_states = self.ffn(hidden_states, cond_embeds=cond_embeds)
+        hidden_states = residual + hidden_states
+        return hidden_states
+
+
 class Embed(nn.Module):
     def __init__(
         self,
@@ -912,7 +1040,7 @@ class Embed(nn.Module):
         norm_type="layernorm",
         layer_norm_eps=1e-5,
         use_bias=False,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         use_embeddings_project=False,
     ):
         super().__init__()
@@ -922,14 +1050,14 @@ class Embed(nn.Module):
         self.hidden_size = hidden_size
         self.hidden_dropout = hidden_dropout
         self.max_position_embeddings = max_position_embeddings
-        self.layer_norm_embedddings = layer_norm_embedddings
+        self.layer_norm_embeddings = layer_norm_embeddings
         self.use_embeddings_project = use_embeddings_project
 
         self.word_embeddings = nn.Embedding(self.vocab_size, self.embedding_size)
         self.position_embeddings = nn.Embedding(self.max_position_embeddings, self.embedding_size)
         self.dropout = nn.Dropout(self.hidden_dropout)
 
-        if layer_norm_embedddings:
+        if layer_norm_embeddings:
             norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
             self.embeddings_ln = norm_cls(self.embedding_size, eps=layer_norm_eps)
 
@@ -944,7 +1072,7 @@ class Embed(nn.Module):
         position_embeddings = self.position_embeddings(position_ids)
         input_embeddings = word_embeddings + position_embeddings
 
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             input_embeddings = self.embeddings_ln(input_embeddings)
 
         if self.use_embeddings_project:
@@ -992,7 +1120,7 @@ class ConvEmbed(nn.Module):
         max_position_embeddings=256,
         norm_type="layernorm",
         ln_elementwise_affine=True,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         layer_norm_eps=1e-5,
         use_position_embeddings=True,
         use_bias=False,
@@ -1002,7 +1130,7 @@ class ConvEmbed(nn.Module):
         self.patch_size = patch_size
         self.max_position_embeddings = max_position_embeddings
         self.use_position_embeddings = use_position_embeddings
-        self.layer_norm_embedddings = layer_norm_embedddings
+        self.layer_norm_embeddings = layer_norm_embeddings
 
         self.embeddings = nn.Embedding(vocab_size, embedding_size)
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
@@ -1012,7 +1140,7 @@ class ConvEmbed(nn.Module):
         self.conv = nn.Conv2d(embedding_size * (patch_size**2), hidden_size, kernel_size=1, bias=use_bias)
         if use_position_embeddings:
             self.position_embeddings = nn.Embedding(self.max_position_embeddings, hidden_size)
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             self.embeddings_ln = Norm2D(
                 hidden_size, eps=layer_norm_eps, norm_type=norm_type, elementwise_affine=ln_elementwise_affine
             )
@@ -1032,7 +1160,7 @@ class ConvEmbed(nn.Module):
             position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = embeddings + position_embeddings
-        if self.layer_norm_embedddings:
+        if self.layer_norm_embeddings:
             embeddings = self.embeddings_ln(embeddings)
         return embeddings
 
@@ -1106,9 +1234,12 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
+        use_position_embeddings=False,
         use_codebook_size_for_output=False,
         use_conv_in_out=False,
         patch_size=1,
+        transformer_type="default",
+        window_size=4,
         **kwargs,
     ):
         super().__init__()
@@ -1125,16 +1256,18 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.register_to_config(mask_token_id=vocab_size - 1)
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        transformer_cls = TransformerLayer if transformer_type == "default" else MaxVitTransformerLayer
 
         if use_conv_in_out:
             self.embed = ConvEmbed(
                 vocab_size,
-                embedding_size,
+                self.embedding_size,
                 hidden_size,
                 patch_size=patch_size,
                 norm_type=norm_type,
                 layer_norm_eps=layer_norm_eps,
                 use_bias=use_bias,
+                use_position_embeddings=use_position_embeddings,
             )
         else:
             self.embed = Embed(
@@ -1155,7 +1288,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
 
         self.transformer_layers = nn.ModuleList(
             [
-                TransformerLayer(
+                transformer_cls(
                     hidden_size=self.hidden_size,
                     intermediate_size=self.intermediate_size,
                     num_attention_heads=self.num_attention_heads,
@@ -1167,6 +1300,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     layer_norm_eps=layer_norm_eps,
                     use_normformer=use_normformer,
                     use_bias=use_bias,
+                    embedding_size=self.embedding_size,
+                    window_size=window_size,
                 )
                 for _ in range(self.num_hidden_layers)
             ]
@@ -1179,7 +1314,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             if use_conv_in_out:
                 self.mlm_layer = ConvMlmLayer(
                     self.output_size,
-                    embedding_size,
+                    self.embedding_size,
                     hidden_size,
                     patch_size=patch_size,
                     norm_type=norm_type,
@@ -1230,13 +1365,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
     ):
         if self.config.add_cross_attention and encoder_hidden_states is None:
             raise ValueError("If `add_cross_attention` is True, `encoder_hidden_states` should be provided.")
-
         hidden_states = self.embed(input_ids)
 
         if encoder_hidden_states is not None and self.config.project_encoder_hidden_states:
             encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
             encoder_hidden_states = self.encoder_proj_layer_norm(encoder_hidden_states)
-
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
             batch_size = encoder_hidden_states.shape[0]
@@ -1485,11 +1618,10 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         codebook_size=1024,
         num_vq_tokens=256,
         num_classes=None,  # set for class-conditioned generation
-        use_position_embeddings=False,
         use_codebook_size_for_output=False,
         patch_size=1,
         layer_norm_before_mlm=False,
-        layer_norm_embedddings=False,
+        layer_norm_embeddings=False,
         add_cond_embeds=False,
         cond_embed_dim=None,
         add_micro_cond_embeds=False,
@@ -1499,6 +1631,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         use_empty_embeds_for_uncond=False,
         learn_uncond_embeds=False,
         use_vannilla_resblock=False,
+        transformer_type="default",
         ffn_type="glu",
         res_ffn_factor=4,
         **kwargs,
@@ -1518,6 +1651,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         self.register_to_config(block_out_channels=tuple(block_out_channels))
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
+        transformer_cls = TransformerLayer if transformer_type == "default" else MaxVitTransformerLayer
 
         if block_has_attention is None:
             block_has_attention = [False] * len(block_out_channels)
@@ -1553,10 +1687,9 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
             block_out_channels[0],
             patch_size=patch_size,
             norm_type=norm_type,
-            layer_norm_embedddings=layer_norm_embedddings,
+            layer_norm_embeddings=layer_norm_embeddings,
             layer_norm_eps=layer_norm_eps,
             ln_elementwise_affine=ln_elementwise_affine,
-            use_position_embeddings=use_position_embeddings,
             use_bias=use_bias,
         )
 
@@ -1624,7 +1757,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         # Mid Transformer
         self.transformer_layers = nn.ModuleList(
             [
-                TransformerLayer(
+                transformer_cls(
                     hidden_size=self.hidden_size,
                     intermediate_size=self.intermediate_size,
                     num_attention_heads=self.num_attention_heads,
@@ -2225,3 +2358,155 @@ class MaskGiTUViT(ModelMixin, ConfigMixin):
         if return_intermediate:
             return sampled_ids, intermediate
         return sampled_ids
+
+
+# Taken and slightly adapted from https://github.com/lucidrains/vit-pytorch/blob/main/vit_pytorch/max_vit.py
+# Originally proposed https://arxiv.org/abs/1709.01507
+# The main idea is without changing the size of the input, choose to prioritize some channels over others
+class SqueezeExcitation(nn.Module):
+    def __init__(self, dim, shrinkage_rate=0.25):
+        super().__init__()
+        hidden_dim = int(dim * shrinkage_rate)
+
+        self.gate = nn.Sequential(
+            nn.Linear(dim, hidden_dim, bias=False),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, dim, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        hidden = reduce(x, "b c h w -> b c", "mean")
+        hidden = self.gate(hidden)
+        hidden = rearrange(hidden, "b c -> b c 1 1")
+        return x * hidden
+
+
+class MBConvResidual(nn.Module):
+    def __init__(self, fn, dropout=0.0):
+        super().__init__()
+        self.fn = fn
+        self.dropsample = Dropsample(dropout)
+
+    def forward(self, x):
+        out = self.fn(x)
+        out = self.dropsample(out)
+        return out + x
+
+
+class Dropsample(nn.Module):
+    def __init__(self, prob=0):
+        super().__init__()
+        self.prob = prob
+
+    def forward(self, x):
+        device = x.device
+
+        if self.prob == 0.0 or (not self.training):
+            return x
+
+        keep_mask = torch.FloatTensor((x.shape[0], 1, 1, 1), device=device).uniform_() > self.prob
+        return x * keep_mask / (1 - self.prob)
+
+
+class MBConv(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        downsample=False,
+        expansion_rate=4,
+        shrinkage_rate=0.25,
+        dropout=0.0,
+    ):
+        super().__init__()
+        # One function of this mbconv layer argued in the paper is to provide conditional position encoding especially with the depthwise convolution
+        # so that we do not need explicit positional embeddings
+        hidden_dim = int(expansion_rate * dim_out)
+        stride = 2 if downsample else 1
+
+        self.net = nn.Sequential(
+            nn.Conv2d(dim_in, hidden_dim, 1),
+            nn.BatchNorm2d(hidden_dim),
+            nn.GELU(),
+            nn.Conv2d(hidden_dim, hidden_dim, 3, stride=stride, padding=1, groups=hidden_dim),
+            nn.BatchNorm2d(hidden_dim),
+            nn.GELU(),
+            SqueezeExcitation(hidden_dim, shrinkage_rate=shrinkage_rate),
+            nn.Conv2d(hidden_dim, dim_out, 1),
+            nn.BatchNorm2d(dim_out),
+        )
+
+        if dim_in == dim_out and not downsample:
+            self.net = MBConvResidual(self.net, dropout=dropout)
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class MaxVitAttention(Attention):
+    def __init__(
+        self, hidden_size, num_heads, window_size=8, encoder_hidden_size=None, attention_dropout=0.0, use_bias=False
+    ):
+        super().__init__(
+            hidden_size,
+            num_heads,
+            encoder_hidden_size=encoder_hidden_size,
+            attention_dropout=attention_dropout,
+            use_bias=use_bias,
+        )
+        self.rel_pos_bias = nn.Embedding((2 * window_size - 1) ** 2, self.num_heads)
+
+        # TODO: Maybe make this more comprehensible. This is basically positional embeddings for our grid
+        pos = torch.arange(window_size)
+        grid = torch.stack(torch.meshgrid(pos, pos, indexing="ij"))
+        grid = rearrange(grid, "c i j -> (i j) c")
+        """
+        grid is
+        tensor([[ 0,  0],
+        [ 0,  1],
+        [ 0,  2],
+        ...,
+        [window_size-1, window_size-1]])
+        with shape [window_size**2, 2]
+        This is essentially 2d coordinates for window_size x window_size grid
+        """
+        rel_pos = rearrange(grid, "i ... -> i 1 ...") - rearrange(grid, "j ... -> 1 j ...")
+        rel_pos += window_size - 1
+        """
+        rel_pos has shape [window_size**2, window_wize**2, 2]
+        here rel_pos[i] = tensor([[24+(i // window_size), 24+(i % window_size)],
+        [24+(i // window_size), 23+(i % window_size)],
+        [24+(i // window_size), 22+(i % window_size)],
+        ...,
+        [ (i // window_size),  2+(i % window_size)],
+        [ (i // window_size),  1+(i % window_size)],
+        [ (i // window_size),  (i % window_size)]])
+        """
+        rel_pos_indices = (rel_pos * torch.tensor([2 * window_size - 1, 1])).sum(dim=-1)
+        """
+        rel_pos_indices has shape (625, 625)
+        rel_pos_indices[i] = [i, i+1, i+2...i+window_size-1, i+2*window_size-1, i+2*window_size....]
+        """
+        self.register_buffer("rel_pos_indices", rel_pos_indices, persistent=False)
+
+    def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None):
+        batch, height, width, window_height, window_width, _ = hidden_states.shape
+        # flatten
+        # Here, w1 and w2 are both window size so x will have size (b x y), window_size**2, d
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> (b x y) (w1 w2) d")
+        bias = self.rel_pos_bias(self.rel_pos_indices)
+        # shape is [window_size**2, window_size**2, self.num_heads]
+        bias = rearrange(bias, "i j h -> h i j")
+        # shape is [self.num_heads, window_size**2, window_size**2]
+        # the bias adds positional embeddings for each window size segment
+        out = super().forward(
+            hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            bias=bias,
+        )
+        out = rearrange(out, "b (w1 w2) d -> b w1 w2 d", w1=window_height, w2=window_width)
+
+        # combine heads out
+        return rearrange(out, "(b x y) ... -> b x y ...", x=height, y=width)
