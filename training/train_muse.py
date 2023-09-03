@@ -307,7 +307,10 @@ def main():
 
         vq_class = get_vq_model_class(config.model.vq_model.type)
         vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
-
+        if config.training.is_second_stage_training:
+            low_res_vq_class = get_vq_model_class(config.model.low_res_vq_model.type)
+            low_res_vq_model = low_res_vq_class.from_pretrained(config.model.low_res_vq_model.pretrained)
+            low_res_vq_model.requires_grad_(False)
         # Freeze the text model and VQGAN
         text_encoder.requires_grad_(False)
         vq_model.requires_grad_(False)
@@ -321,6 +324,14 @@ def main():
         model = model_cls.from_pretrained(config.model.pretrained_model_path)
     else:
         model = model_cls(**config.model.transformer)
+
+    if config.training.is_second_stage_training:
+        adapter_model_cls = MaskGitTransformer if config.adapter_model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+        if config.adapter_model.get("pretrained_model_path", None) is not None:
+            adapter_model = adapter_model_cls.from_pretrained(config.adapter_model.pretrained_model_path)
+        else:
+            adapter_model = adapter_model_cls(**config.adapter_model.transformer)
+        model.add_adapter(adapter_model)
     mask_id = model.config.mask_token_id
     output_size = model.output_size
 
@@ -487,6 +498,8 @@ def main():
     if not is_pre_encode:
         text_encoder.to(device=accelerator.device, dtype=weight_dtype)
         vq_model.to(device=accelerator.device)
+        if config.training.is_second_stage_training:
+            low_res_vq_model.to(device=accelerator.device)
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
 
@@ -562,7 +575,19 @@ def main():
 
             global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
+    @torch.no_grad()
+    def prepare_low_res_image_tokens(
+        pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
+    ):
+        # TODO: Currently does not work with pre_encode. Fix
+        if is_pre_encode:
+            low_res_image_tokens = pixel_values_or_image_ids
+        else:
+            # Lower resolution
+            pixel_values_or_image_ids = F.interpolate(pixel_values_or_image_ids, (pixel_values_or_image_ids.shape[2]//2, pixel_values_or_image_ids.shape[3]//2))
+            low_res_image_tokens = low_res_vq_model.get_code(pixel_values)
 
+        return low_res_image_tokens
     @torch.no_grad()
     def prepare_inputs_and_labels(
         pixel_values_or_image_ids: Union[torch.FloatTensor, torch.LongTensor],
@@ -647,7 +672,10 @@ def main():
                 clip_embeds,
                 micro_conds,
             ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate, batch=batch)
-
+            additional_args = {}
+            if config.training.is_second_stage_training:
+                low_res_input_ids = prepare_low_res_image_tokens(pixel_values)
+                additional_args['low_res_input_ids'] = low_res_input_ids
             # log the inputs for the first step of the first epoch
             if global_step == 0 and epoch == 0:
                 logger.info("Input ids: {}".format(input_ids))
@@ -660,6 +688,7 @@ def main():
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
                         cond_dropout_prob=config.training.cond_dropout_prob,
+                        **additional_args
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
@@ -674,6 +703,7 @@ def main():
                         empty_embeds=empty_embeds,
                         empty_cond_embeds=empty_clip_embeds,
                         micro_conds=micro_conds,
+                        **additional_args
                     )
 
                 # Gather the losses across all processes for logging (if we use distributed training).
@@ -798,7 +828,7 @@ def main():
                     if config.training.get("use_ema", False):
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
-
+                    # Do 2nd stage generation of images
                     generate_images(
                         model,
                         vq_model,
@@ -828,7 +858,7 @@ def main():
 
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
-        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels)
+        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, prepare_low_res_image_tokens, is_second_stage_training=config.training.is_second_stage_training)
     save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
@@ -842,7 +872,7 @@ def main():
 
 
 @torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, empty_embeds=None):
+def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, prepare_low_res_image_tokens, empty_embeds=None, is_second_stage_training=False):
     logger.info("Evaluating...")
     model.eval()
     eval_loss = 0
@@ -861,6 +891,10 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             clip_embeds,
             micro_conds,
         ) = prepare_inputs_and_labels(pixel_values, input_ids, batch=batch, is_train=False)
+        additional_args = {}
+        if is_second_stage_training:
+            low_res_input_ids = prepare_low_res_image_tokens(pixel_values)
+            additional_args["low_res_input_ids"] = low_res_input_ids
         _, loss = model(
             input_ids=input_ids,
             encoder_hidden_states=encoder_hidden_states,
@@ -869,6 +903,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             loss_weight=loss_weight,
             empty_embeds=empty_embeds,
             micro_conds=micro_conds,
+            **additional_args
         )
         eval_loss += loss.mean()
     eval_loss = eval_loss / (i + 1)
