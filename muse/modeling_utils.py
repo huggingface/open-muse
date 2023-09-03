@@ -290,6 +290,21 @@ class ModelMixin(torch.nn.Module):
             if isinstance(module, torch.nn.Module):
                 fn_recursive_set_mem_eff(module)
 
+    def set_use_flash_attn(self, valid: bool) -> None:
+        # Recursively walk through all the children.
+        # Any children which exposes the set_use_flash_attn method
+        # gets the message
+        def fn_recursive_set_flash_attn(module: torch.nn.Module):
+            if hasattr(module, "set_use_flash_attn"):
+                module.set_use_flash_attn(valid)
+
+            for child in module.children():
+                fn_recursive_set_flash_attn(child)
+
+        for module in self.children():
+            if isinstance(module, torch.nn.Module):
+                fn_recursive_set_flash_attn(module)
+
     def enable_xformers_memory_efficient_attention(self, attention_op: Optional[Callable] = None):
         r"""
         Enable memory efficient attention as implemented in xformers.
@@ -327,6 +342,12 @@ class ModelMixin(torch.nn.Module):
         Disable memory efficient attention as implemented in xformers.
         """
         self.set_use_memory_efficient_attention_xformers(False)
+
+    def enable_flash_attn(self):
+        self.set_use_flash_attn(True)
+
+    def disable_flash_attn(self):
+        self.set_use_flash_attn(False)
 
     def save_pretrained(
         self,
