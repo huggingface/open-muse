@@ -172,12 +172,32 @@ def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, 
         batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
         mask = batch_randperm < num_token_masked.unsqueeze(-1)
     else:
+        resolution = int(seq_len**0.5)
+        mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
+
         # TODO - would be nice to vectorize
-        mask = torch.zeros((batch_size, seq_len), device=image_tokens.device)
         for batch_idx, num_token_masked_ in enumerate(num_token_masked):
             num_token_masked_ = int(num_token_masked_.item())
-            start_idx = random.randint(0, seq_len - num_token_masked_)
-            mask[batch_idx, start_idx : start_idx + num_token_masked_] = 1
+
+            # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
+            num_token_masked_height = random.randint(
+                math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
+            )
+            num_token_masked_height = min(num_token_masked_height, resolution)
+
+            num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
+            num_token_masked_width = min(num_token_masked_width, resolution)
+
+            start_idx_height = random.randint(0, resolution - num_token_masked_height)
+            start_idx_width = random.randint(0, resolution - num_token_masked_width)
+
+            mask[
+                batch_idx,
+                start_idx_height : start_idx_height + num_token_masked_height,
+                start_idx_width : start_idx_width + num_token_masked_width,
+            ] = 1
+
+        mask = mask.reshape(batch_size, seq_len)
         mask = mask.to(torch.bool)
 
     # mask images and create input and labels
