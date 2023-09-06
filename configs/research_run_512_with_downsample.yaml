@@ -14,6 +14,7 @@ experiment:
     log_grad_norm_every: 500
     resume_from_checkpoint: latest
     resume_lr_scheduler: True
+    checkpoints_total_limit: 10
 
 model:
     vq_model:
