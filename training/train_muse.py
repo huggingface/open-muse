@@ -29,6 +29,7 @@ import plotly.express as px
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
+import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DistributedType, set_seed
@@ -47,7 +48,6 @@ from transformers import (
 
 import muse
 import muse.training_utils
-import wandb
 from muse import (
     MOVQ,
     EMAModel,
@@ -382,7 +382,8 @@ def main():
             del load_model
 
         def save_model_hook(models, weights, output_dir):
-            ema.save_pretrained(os.path.join(output_dir, "ema_model"))
+            if accelerator.is_main_process:
+                ema.save_pretrained(os.path.join(output_dir, "ema_model"))
 
         accelerator.register_load_state_pre_hook(load_model_hook)
         accelerator.register_save_state_pre_hook(save_model_hook)
