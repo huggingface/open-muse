@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import random
+import shutil
 import time
 from functools import partial
 from pathlib import Path
@@ -1203,7 +1204,30 @@ def validation_masks_to_latent_tensors(validation_masks):
 
 
 def save_checkpoint(model, config, accelerator, global_step):
-    save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
+    output_dir = config.experiment.output_dir
+    checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
+
+    # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+    if accelerator.is_main_process and checkpoints_total_limit is not None:
+        checkpoints = os.listdir(output_dir)
+        checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+        checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+
+        # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+        if len(checkpoints) >= checkpoints_total_limit:
+            num_to_remove = len(checkpoints) - checkpoints_total_limit + 1
+            removing_checkpoints = checkpoints[0:num_to_remove]
+
+            logger.info(
+                f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+            )
+            logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+
+            for removing_checkpoint in removing_checkpoints:
+                removing_checkpoint = os.path.join(output_dir, removing_checkpoint)
+                shutil.rmtree(removing_checkpoint)
+
+    save_path = Path(output_dir) / f"checkpoint-{global_step}"
 
     # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
     # XXX: could also make this conditional on deepspeed
@@ -1220,6 +1244,7 @@ def save_checkpoint(model, config, accelerator, global_step):
         logger.info(f"Saved state to {save_path}")
 
     accelerator.save_state(save_path)
+    logger.info(f"Saved state to {save_path}")
 
 
 def log_grad_norm(model, accelerator, global_step):
