@@ -18,11 +18,11 @@ import logging
 import math
 import os
 import random
+import shutil
 import time
 from functools import partial
 from pathlib import Path
 from typing import Any, List, Tuple, Union
-import shutil
 
 import numpy as np
 import plotly.express as px
@@ -1202,12 +1202,13 @@ def validation_masks_to_latent_tensors(validation_masks):
 
     return torch.from_numpy(validation_masks_)
 
+
 def save_checkpoint(model, config, accelerator, global_step):
     output_dir = config.experiment.output_dir
     checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
 
     # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-    if checkpoints_total_limit is not None:
+    if accelerator.is_main_process and checkpoints_total_limit is not None:
         checkpoints = os.listdir(output_dir)
         checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
         checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
