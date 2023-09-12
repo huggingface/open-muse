@@ -729,7 +729,6 @@ def main():
                         loss_weight=loss_weight,
                         micro_conds=micro_conds,
                     )
-                    print(logits.shape, labels.shape, loss.shape)
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
