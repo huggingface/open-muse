@@ -602,6 +602,12 @@ def main():
 
             global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
+    
+    temp = model_cls.from_pretrained(os.path.join(config.experiment.resume_from_checkpoint, "ema_model"))
+    ema.shadow_params = [p.clone().detach() for p in temp.parameters()]
+    ema.model_config = temp.config
+    del temp
+    ema.to(accelerator.device)
 
     @torch.no_grad()
     def prepare_inputs_and_labels(
@@ -693,13 +699,30 @@ def main():
                 logger.info("Input ids: {}".format(input_ids))
                 logger.info("Labels: {}".format(labels))
 
+            if config.training.cond_dropout_prob > 0.0:
+                assert encoder_hidden_states is not None
+
+                batch_size = encoder_hidden_states.shape[0]
+
+                mask = (
+                    torch.zeros((batch_size, 1, 1), device=encoder_hidden_states.device).float().uniform_(0, 1)
+                    < config.training.cond_dropout_prob
+                )
+
+                empty_embeds_ = empty_embeds.expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds_
+                )
+
+                empty_clip_embeds_ = empty_clip_embeds.expand(batch_size, -1)
+                cond_embeds = torch.where((clip_embeds * mask.squeeze(-1)).bool(), clip_embeds, empty_clip_embeds_)
+
             # Train Step
             with accelerator.accumulate(model):
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
-                        cond_dropout_prob=config.training.cond_dropout_prob,
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
@@ -708,11 +731,8 @@ def main():
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
                         label_smoothing=config.training.label_smoothing,
-                        cond_dropout_prob=config.training.cond_dropout_prob,
-                        cond_embeds=clip_embeds,
+                        cond_embeds=cond_embeds,
                         loss_weight=loss_weight,
-                        empty_embeds=empty_embeds,
-                        empty_cond_embeds=empty_clip_embeds,
                         micro_conds=micro_conds,
                     )
 
@@ -1049,6 +1069,7 @@ def generate_images(
             noise_schedule=mask_schedule,
             noise_type=config.training.get("noise_type", "mask"),
             predict_all_tokens=config.training.get("predict_all_tokens", False),
+            seq_len=config.model.transformer.num_vq_tokens,
         )
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.

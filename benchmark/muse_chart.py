@@ -3,122 +3,149 @@ from argparse import ArgumentParser
 import matplotlib.pyplot as plt
 import pandas as pd
 
-df = pd.read_csv("artifacts/all.csv")
+"""
+python benchmark/muse_chart.py --device a100
+python benchmark/muse_chart.py --device 4090
+"""
 
-# round to GB
-df["Max Memory"] = df["Max Memory"].apply(lambda x: round(x / 10**9, 2))
-
-df["Median"] = df["Median"].apply(lambda x: round(x, 2))
-df["Mean"] = df["Mean"].apply(lambda x: round(x, 2))
-
-bar_width = 0.25
-
-model_names = [
-    "openMUSE/muse-laiona6-uvit-clip-220k",
-    "williamberman/laiona6plus_uvit_clip_f8",
-    "runwayml/stable-diffusion-v1-5",
-]
+bar_width = 0.10
 
 
-def chart(device, component, compiled, plot_on, legend, y_axis_key, y_label, timesteps):
-    filter = (df["Device"] == device) & (df["Component"] == component) & (df["Compilation Type"] == compiled)
+def main():
+    parser = ArgumentParser()
+    parser.add_argument("--device", choices=["4090", "a100"], required=True)
+
+    args = parser.parse_args()
+
+    y_axis_key = "Median"
+    y_label = "Median Time (s)"
+
+    df = pd.read_csv("benchmark/artifacts/all.csv")
+
+    df["Median"] = df["Median"].apply(lambda x: round(x / 1000, 2))
+
+    timesteps = [12, 20]
+    resolutions = [256, 512]
+    force_down_up_samples = [False, True]
+
+    num_rows = len(timesteps) * len(force_down_up_samples)
+    num_cols = len(resolutions)
+
+    fig, axs = plt.subplots(num_rows, num_cols, sharey="row")
+
+    for row_idx_1, timesteps_ in enumerate(timesteps):
+        for row_idx_2, force_down_up_sample in enumerate(force_down_up_samples):
+            row_idx = row_idx_1 * len(timesteps) + row_idx_2
+
+            for col_idx, resolution in enumerate(resolutions):
+                plot_on = axs[row_idx, col_idx]
+
+                chart(
+                    df=df,
+                    device=args.device,
+                    resolution=resolution,
+                    force_down_up_sample=force_down_up_sample,
+                    plot_on=plot_on,
+                    y_axis_key=y_axis_key,
+                    y_label=y_label,
+                    timesteps=timesteps_,
+                )
+
+                if row_idx == 3 and col_idx == 1:
+                    plot_on.legend(bbox_to_anchor=(1, -0.1), fontsize="x-small")
+
+    plt.subplots_adjust(hspace=0.75, wspace=0.50)
+
+    plt.show()
+
+
+def chart(df, device, resolution, force_down_up_sample, plot_on, y_axis_key, y_label, timesteps):
+    filter = (df["Device"] == device) & (df["Resolution"] == resolution)
 
     if timesteps is not None:
         filter = filter & (df["Timesteps"] == timesteps)
 
     fdf = df[filter]
 
-    placement = range(6)
+    placement = range(2)
 
     def inc_placement():
         nonlocal placement
-        placement = [x + bar_width for x in placement]
+        placement = [x + bar_width + 0.05 for x in placement]
 
-    for model_name in model_names:
-        filter_ = fdf["Model Name"] == model_name
+    (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Use Xformers"] == False)
 
-        ffdf = fdf[filter_]
+    for use_xformers in [False, True]:
+        filter_ = (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Use Xformers"] == use_xformers)
 
-        y_axis = ffdf[y_axis_key].tolist()
+        plot_one_bar(
+            fdf=fdf,
+            filter_=filter_,
+            plot_on=plot_on,
+            placement=placement,
+            label=f"stable_diffusion_1_5, use_xformers: {use_xformers}",
+            y_axis_key=y_axis_key,
+        )
 
-        for _ in range(6 - len(y_axis)):
-            y_axis.append(0)
+        inc_placement()
 
-        bars = plot_on.bar(placement, y_axis, width=bar_width, label=f"{model_name}")
+    for use_xformers, use_fused_mlp, use_fused_residual_norm in [
+        [False, False, False],
+        [True, False, False],
+        [True, True, True],
+    ]:
+        filter_ = (
+            (fdf["Model Name"] == "muse")
+            & (fdf["Use Xformers"] == use_xformers)
+            & (fdf["Use Fused MLP"] == use_fused_mlp)
+            & (fdf["Use Fused Residual Norm"] == use_fused_residual_norm)
+            & (df["Force Down Up Sample"] == force_down_up_sample)
+        )
 
-        for bar in bars:
-            yval = bar.get_height()
-            plot_on.text(
-                bar.get_x() + bar.get_width() / 2,
-                yval + 0.05,
-                yval,
-                ha="center",
-                va="bottom",
-                rotation=80,
-            )
+        plot_one_bar(
+            fdf=fdf,
+            filter_=filter_,
+            plot_on=plot_on,
+            placement=placement,
+            label=(
+                f"muse, use_xformers: {use_xformers}, use_fused_mlp: {use_fused_mlp}, use_fused_residual_norm:"
+                f" {use_fused_residual_norm}"
+            ),
+            y_axis_key=y_axis_key,
+        )
 
         inc_placement()
 
     plot_on.set_xlabel("Batch Size")
     plot_on.set_ylabel(y_label)
-    plot_on.set_xticks([r + bar_width for r in range(6)], [1, 2, 4, 8, 16, 32])
-    plot_on.set_title(f"{device}, {component}, compiled: {compiled}")
+    plot_on.set_xticks([r + bar_width for r in range(2)], [1, 8])
+    plot_on.set_title(
+        f"{device}, timesteps: {timesteps}, resolution: {resolution} muse downsampled {force_down_up_sample}"
+    )
 
-    if legend:
-        plot_on.legend(fontsize="x-small")
+
+def plot_one_bar(fdf, filter_, plot_on, placement, label, y_axis_key):
+    ffdf = fdf[filter_]
+
+    y_axis = ffdf[y_axis_key].tolist()
+
+    for _ in range(2 - len(y_axis)):
+        y_axis.append(0)
+
+    bars = plot_on.bar(placement, y_axis, width=bar_width, label=label)
+
+    for bar in bars:
+        yval = bar.get_height()
+        plot_on.text(
+            bar.get_x() + bar.get_width() / 2,
+            yval + 0.05,
+            yval,
+            ha="center",
+            va="bottom",
+            rotation=80,
+            fontsize="small",
+        )
 
 
-"""
-python muse_chart.py --component full --graphing time --timesteps 12
-python muse_chart.py --component full --graphing time --timesteps 20
-python muse_chart.py --component full --graphing memory --timesteps 12
-python muse_chart.py --component full --graphing memory --timesteps 20
-
-python muse_chart.py --component backbone --graphing time
-python muse_chart.py --component backbone --graphing memory
-
-python muse_chart.py --component vae --graphing time
-python muse_chart.py --component vae --graphing memory
-"""
 if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument("--component", required=True)
-    parser.add_argument("--graphing", required=True)
-    parser.add_argument("--timesteps", required=False, default=None)
-
-    args = parser.parse_args()
-
-    assert args.component in ["full", "backbone", "vae"]
-
-    if args.component == "full":
-        assert args.timesteps is not None
-        args.timesteps = int(args.timesteps)
-
-    if args.graphing == "time":
-        y_axis_key = "Median"
-        y_label = "Median Time (ms)"
-    elif args.graphing == "memory":
-        y_axis_key = "Max Memory"
-        y_label = "Max Memory (GB)"
-    else:
-        assert False, args.graphing
-
-    fig, axs = plt.subplots(4, 3, sharey="row")
-
-    for row_idx, device in enumerate(["a100", "4090", "t4", "cpu"]):
-        for col_idx, compiled in enumerate(["None", "default", "reduce-overhead"]):
-            legend = row_idx == 0 and col_idx == 2
-            chart(
-                device,
-                args.component,
-                compiled,
-                axs[row_idx, col_idx],
-                legend,
-                y_axis_key,
-                y_label,
-                args.timesteps,
-            )
-
-    plt.subplots_adjust(hspace=0.75, wspace=0.50)
-
-    plt.show()
+    main()
