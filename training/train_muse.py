@@ -605,6 +605,7 @@ def main():
     
     temp = model_cls.from_pretrained(os.path.join(config.experiment.resume_from_checkpoint, "ema_model"))
     ema.shadow_params = [p.clone().detach() for p in temp.parameters()]
+    ema.model_config = temp.config
     del temp
     ema.to(accelerator.device)
 
