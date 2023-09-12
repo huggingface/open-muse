@@ -602,6 +602,11 @@ def main():
 
             global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
+    
+    temp = model_cls.from_pretrained(os.path.join(config.experiment.resume_from_checkpoint, "ema_model"))
+    ema.shadow_params = [p.clone().detach() for p in temp.parameters()]
+    del temp
+    ema.to(accelerator.device)
 
     @torch.no_grad()
     def prepare_inputs_and_labels(
