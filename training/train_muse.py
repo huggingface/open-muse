@@ -262,7 +262,7 @@ def main():
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
         log_with="wandb",
-        logging_dir=config.experiment.logging_dir,
+        project_dir=config.experiment.logging_dir,
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
     )
 
