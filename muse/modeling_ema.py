@@ -136,7 +136,15 @@ class EMAModel:
         """
         parameters = list(parameters)
         for s_param, param in zip(self.shadow_params, parameters):
-            param.data.copy_(s_param.to(param.device).data)
+            try:
+                param.data.copy_(s_param.to(param.device).data)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Error when copying ExponentialMovingAverage of parameters {s_param.shape} "
+                    f"to parameters {param.shape}. "
+                    f"This probably means that you are attempting to use an ExponentialMovingAverage "
+                    f"that was instantiated with a different set of parameters."
+                ) from e
 
     def to(self, device=None, dtype=None) -> None:
         r"""Move internal buffers of the ExponentialMovingAverage to `device`.
