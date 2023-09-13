@@ -67,6 +67,8 @@ class PipelineMuse:
         negative_text: Optional[Union[str, List[str]]] = None,
         prompt_embeds: Optional[torch.Tensor] = None,
         pooled_embeds: Optional[torch.Tensor] = None,
+        negative_prompt_embeds: Optional[torch.Tensor] = None,
+        negative_pooled_embeds: Optional[torch.Tensor] = None,
         class_ids: Optional[Union[int, List[int]]] = None,
         timesteps: int = 8,
         noise_schedule: str = "cosine",
@@ -147,6 +149,9 @@ class PipelineMuse:
                 else:
                     negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
                     negative_pooled_embeds = None
+            elif negative_prompt_embeds is not None:
+                negative_encoder_hidden_states = negative_prompt_embeds.to(self.device, dtype=self.text_encoder.dtype)
+                negative_pooled_embeds = negative_pooled_embeds.to(self.device, dtype=self.text_encoder.dtype)
             else:
                 negative_encoder_hidden_states = None
                 negative_pooled_embeds = None
