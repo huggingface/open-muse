@@ -844,7 +844,6 @@ def main():
                         accelerator,
                         global_step + 1,
                         prepare_inputs_and_labels,
-                        empty_embeds,
                         config.experiment.get("max_eval_examples", None),
                     )
 
@@ -928,7 +927,6 @@ def validate_model(
     accelerator,
     global_step,
     prepare_inputs_and_labels,
-    empty_embeds=None,
     max_eval_examples=None,
 ):
     logger.info("Evaluating...")
@@ -958,7 +956,6 @@ def validate_model(
             labels=labels,
             cond_embeds=clip_embeds,
             loss_weight=loss_weight,
-            empty_embeds=empty_embeds,
             micro_conds=micro_conds,
         )
         eval_loss += loss.mean()
