@@ -65,6 +65,8 @@ class PipelineMuse:
         self,
         text: Optional[Union[str, List[str]]] = None,
         negative_text: Optional[Union[str, List[str]]] = None,
+        prompt_embeds: Optional[torch.Tensor] = None,
+        pooled_embeds: Optional[torch.Tensor] = None,
         class_ids: Optional[Union[int, List[int]]] = None,
         timesteps: int = 8,
         noise_schedule: str = "cosine",
@@ -103,18 +105,24 @@ class PipelineMuse:
             if isinstance(text, str):
                 text = [text]
 
-            input_ids = self.tokenizer(
-                text,
-                return_tensors="pt",
-                padding="max_length",
-                truncation=True,
-                max_length=self.tokenizer.model_max_length,
-            ).input_ids  # TODO: remove hardcode
-            input_ids = input_ids.to(self.device)
+            if prompt_embeds is None:
+                input_ids = self.tokenizer(
+                    text,
+                    return_tensors="pt",
+                    padding="max_length",
+                    truncation=True,
+                    max_length=self.tokenizer.model_max_length,
+                ).input_ids  # TODO: remove hardcode
+                input_ids = input_ids.to(self.device)
 
             if self.transformer.config.add_cond_embeds:
-                outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
-                pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
+                if prompt_embeds is not None and pooled_embeds is not None:
+                    pooled_embeds, encoder_hidden_states = pooled_embeds, prompt_embeds
+                    pooled_embeds = pooled_embeds.to(self.device, dtype=self.text_encoder.dtype)
+                    encoder_hidden_states = encoder_hidden_states.to(self.device, dtype=self.text_encoder.dtype)
+                else:
+                    outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
+                    pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
             else:
                 encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
                 pooled_embeds = None
