@@ -337,11 +337,11 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         generator: torch.Generator = None,
         return_intermediate=False,
         seq_len=None,
+        use_tqdm=None,
         # Legacy: kept for compatibility with pipeline
         topk_filter_thres=None,
         noise_type=None,
         predict_all_tokens=None,
-        use_tqdm=None,
     ):
         batch_size = encoder_hidden_states.shape[0]
 
@@ -405,7 +405,13 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
 
             micro_conds = torch.cat([micro_conds, micro_conds], dim=0)
 
-        for step in range(timesteps):
+        if use_tqdm:
+            from tqdm import tqdm
+            timesteps_iter = tqdm(range(timesteps))
+        else:
+            timesteps_iter = range(timesteps)
+        
+        for step in timesteps_iter:
             if guidance_scale > 0:
                 model_input = torch.cat([input_ids] * 2)
 
