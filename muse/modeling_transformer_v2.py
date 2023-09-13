@@ -139,6 +139,7 @@ def config_from_legacy_kwargs(**kwargs):
 
     # set default config values
     config = MaskGiTUViT_v2Config(**config)
+    config.block_out_channels = list(config.block_out_channels)
 
     return config
 
