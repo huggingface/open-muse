@@ -406,7 +406,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
             micro_conds = torch.cat([micro_conds, micro_conds], dim=0)
 
         if use_tqdm:
-            from tqdm import tqdm
+            from tqdm.auto import tqdm
             timesteps_iter = tqdm(range(timesteps))
         else:
             timesteps_iter = range(timesteps)
