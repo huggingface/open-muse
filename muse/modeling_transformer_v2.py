@@ -163,10 +163,6 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         )
         self.encoder_proj_layer_norm = Norm(self.config.hidden_size, self.config)
 
-        # after the initial projection of the encoder hidden size, set the new encoder_hidden_size
-        # to the hidden size
-        self.register_to_config(encoder_hidden_size=self.config.hidden_size)
-
         self.embed = ConvEmbed(self.config)
 
         self.cond_embed = nn.Sequential(
@@ -178,10 +174,6 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
             nn.SiLU(),
             nn.Linear(self.config.hidden_size, self.config.hidden_size, bias=self.config.use_bias),
         )
-
-        # after the initial projection of the conditional embeddings, set the new cond_embed_dim
-        # to the hidden size
-        self.register_to_config(cond_embed_dim=self.config.hidden_size)
 
         self.down_blocks = nn.ModuleList([DownsampleBlock(self.config.block_out_channels[0], self.config)])
 
@@ -758,7 +750,7 @@ class TransformerLayer(nn.Module):
 
         self.crossattn_layer_norm = Norm(config.hidden_size, config)
         self.crossattention = Attention(
-            config.hidden_size, config.encoder_hidden_size, config.num_attention_heads, config
+            config.hidden_size, config.hidden_size, config.num_attention_heads, config
         )
         self.cross_attn_adaLN_modulation = AdaLNModulation(config.hidden_size, config)
 
@@ -789,8 +781,8 @@ class AttentionBlock2D(nn.Module):
     def __init__(self, hidden_size: int, config: MaskGiTUViT_v2Config):
         super().__init__()
 
-        if config.encoder_hidden_size != hidden_size:
-            self.kv_mapper = nn.Linear(config.encoder_hidden_size, hidden_size, bias=config.use_bias)
+        if config.hidden_size != hidden_size:
+            self.kv_mapper = nn.Linear(config.hidden_size, hidden_size, bias=config.use_bias)
         else:
             self.kv_mapper = None
 
@@ -1018,7 +1010,7 @@ class ConvMlmLayer(nn.Module):
 class AdaLNModulation(nn.Module):
     def __init__(self, hidden_size: int, config: MaskGiTUViT_v2Config):
         super().__init__()
-        self.mapper = nn.Linear(config.cond_embed_dim, hidden_size * 2, bias=config.use_bias)
+        self.mapper = nn.Linear(config.hidden_size, hidden_size * 2, bias=config.use_bias)
 
     def forward(self, hidden_states, cond_embeds):
         cond_embeds = F.silu(cond_embeds)
