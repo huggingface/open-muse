@@ -626,7 +626,7 @@ def main():
                     split_batch_size = config.training.split_vae_encode
                     # Use a batch of at most split_vae_encode images to encode and then concat the results
                     batch_size = pixel_values.shape[0]
-                    num_splits = math.ceil(batch_size / 16)
+                    num_splits = math.ceil(batch_size / split_batch_size)
                     image_tokens = []
                     for i in range(num_splits):
                         start_idx = i * split_batch_size
