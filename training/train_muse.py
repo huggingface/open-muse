@@ -1078,7 +1078,21 @@ def generate_images(
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
-    images = vq_model.decode_code(gen_token_ids)
+    
+    if config.training.get("split_vae_encode", False):
+        split_batch_size = config.training.split_vae_encode
+        # Use a batch of at most split_vae_encode images to encode and then concat the results
+        batch_size = gen_token_ids.shape[0]
+        num_splits = math.ceil(batch_size / split_batch_size)
+        images = []
+        for i in range(num_splits):
+            start_idx = i * split_batch_size
+            end_idx = min((i + 1) * split_batch_size, batch_size)
+            images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+        images = torch.cat(images, dim=0)
+    else:
+        images = vq_model.decode_code(gen_token_ids)
+    
     model.train()
 
     if config.training.get("pre_encode", False):
