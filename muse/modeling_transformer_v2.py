@@ -18,6 +18,7 @@
 import dataclasses
 import math
 import numbers
+import warnings
 from dataclasses import dataclass
 from typing import Callable, Optional, Tuple
 
@@ -51,6 +52,8 @@ try:
     from flash_attn.ops.fused_dense import fused_mlp_func
 except ImportError:
     fused_mlp_func = None
+
+warnings.simplefilter("once", UserWarning)
 
 
 def sinusoidal_encode(features, embedding_dim, max_positions=10000):
@@ -153,6 +156,11 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         config = config_from_legacy_kwargs(**kwargs)
         self.register_to_config(**dataclasses.asdict(config))
         self.register_to_config(mask_token_id=self.config.vocab_size - 1)
+
+        # TODO: Allow enabling fused norm using a function (like we do for xformers attention)
+        if self.config.use_fused_residual_norm and dropout_add_layer_norm is None:
+            warnings.warn("Cannot use fused layer norm. Please install flash_attn. Falling back to unfused layer norm", UserWarning)
+            self.register_to_config(use_fused_residual_norm=False)
 
         assert len(self.config.block_out_channels) == 1
 
