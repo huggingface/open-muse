@@ -436,6 +436,7 @@ class Text2ImageDataset:
         max_pwatermark: Optional[float] = 0.5,
         min_aesthetic_score: Optional[float] = 4.75,
         min_size: Optional[int] = 256,
+        only_return_images: bool = False,
     ):
         yaml_serialized_shard_paths = [
             "m4_shards",
@@ -477,7 +478,7 @@ class Text2ImageDataset:
                 wds.map(filter_keys(set(["image", "input_ids", "orig_size", "aesthetic_score"]))),
                 wds.map(partial(image_transform, resolution=resolution), handler=wds.warn_and_continue),
                 wds.map_dict(
-                    input_ids=tokenize,
+                    input_ids=tokenize if not only_return_images else lambda x: None,
                     orig_size=get_orig_size,
                     aesthetic_score=get_aesthetic_score,
                     handler=wds.warn_and_continue,

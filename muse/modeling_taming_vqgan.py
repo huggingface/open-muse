@@ -549,6 +549,9 @@ class VQGANModel(ModelMixin, ConfigMixin):
             kernel_size=1,
         )
 
+    def get_last_layer(self):
+        return self.decoder.conv_out.weight
+
     def encode(self, pixel_values, return_loss=False):
         hidden_states = self.encoder(pixel_values)
         hidden_states = self.quant_conv(hidden_states)
