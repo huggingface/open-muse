@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -64,17 +64,17 @@ class PipelineMuse:
     def __call__(
         self,
         text: Optional[Union[str, List[str]]] = None,
-        negative_text: Optional[Union[str, List[str]]] = None,
+        negative_text: Optional[Union[str, List[str]]] = "",
         prompt_embeds: Optional[torch.Tensor] = None,
         pooled_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         negative_pooled_embeds: Optional[torch.Tensor] = None,
         class_ids: Optional[Union[int, List[int]]] = None,
-        timesteps: int = 8,
+        timesteps: int = 16,
         noise_schedule: str = "cosine",
-        guidance_scale: float = 8.0,
+        guidance_scale: float = 10.0,
         guidance_schedule=None,
-        temperature: float = 1.0,
+        temperature: Union[float, Tuple[float]] = (2, 0),
         topk_filter_thres: float = 0.9,
         num_images_per_prompt: int = 1,
         use_maskgit_generate: bool = True,
@@ -82,7 +82,7 @@ class PipelineMuse:
         use_fp16: bool = False,
         noise_type="mask",  # can be "mask" or "random_replace"
         predict_all_tokens=False,
-        orig_size=(256, 256),
+        orig_size=(512, 512),
         crop_coords=(0, 0),
         aesthetic_score=6.0,
         return_intermediate: bool = False,
