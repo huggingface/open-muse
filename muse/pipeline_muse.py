@@ -287,24 +287,25 @@ class PipelineMuse:
         if not is_class_conditioned:
             # Very hacky way to load different text encoders
             # TODO: Add config for pipeline to specify text encoder
-            is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"].lower()
-            text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
+            # is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"].lower()
+            # text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
 
-            if is_clip:
-                config = CLIPConfig.from_pretrained(**text_encoder_args)
-                if config.architectures[0] == "CLIPTextModel":
-                    text_encoder_cls = CLIPTextModel
-                else:
-                    text_encoder_cls = CLIPTextModelWithProjection
-                    text_encoder_args["projection_dim"] = 768
+            # if is_clip:
+            #     config = CLIPConfig.from_pretrained(**text_encoder_args)
+            #     if config.architectures[0] == "CLIPTextModel":
+            #         text_encoder_cls = CLIPTextModel
+            #     else:
+            #         text_encoder_cls = CLIPTextModelWithProjection
+            #         text_encoder_args["projection_dim"] = 768
 
-            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
+            # TODO: make this more robust
+            text_encoder = CLIPTextModelWithProjection.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         transformer_config = MaskGitTransformer.load_config(**transformer_args)
         if transformer_config["_class_name"] == "MaskGitTransformer":
             transformer = MaskGitTransformer.from_pretrained(**transformer_args)
-        elif transformer_config["_class_name"] == "MaskGiTUViT":
+        elif transformer_config["_class_name"] == "MaskGiTUViT" or transformer_config["_class_name"] == "MaskGiTUViT_v2":
             transformer = MaskGiTUViT.from_pretrained(**transformer_args)
         else:
             raise ValueError(f"Unknown Transformer class: {transformer_config['_class_name']}")
@@ -321,12 +322,14 @@ class PipelineMuse:
             vae = PaellaVQModel.from_pretrained(**vae_args)
         else:
             raise ValueError(f"Unknown VAE class: {vae_config['_class_name']}")
+        
         if is_class_conditioned:
             return cls(
                 vae=vae,
                 transformer=transformer,
                 is_class_conditioned=is_class_conditioned,
             )
+
         return cls(
             vae=vae,
             transformer=transformer,
