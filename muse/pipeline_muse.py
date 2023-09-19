@@ -52,12 +52,14 @@ class PipelineMuse:
         self.device = "cpu"
 
     def to(self, device="cpu", dtype=torch.float32) -> None:
-        if not self.is_class_conditioned:
-            self.text_encoder.to(device, dtype=dtype)
-        self.vae.to(device, dtype=dtype)
-        self.transformer.to(device, dtype=dtype)
         self.device = device
         self.dtype = dtype
+        
+        if not self.is_class_conditioned:
+            self.text_encoder.to(device, dtype=dtype)
+        self.transformer.to(device, dtype=dtype)
+        self.vae.to(device, dtype=torch.float32) # keep vae in fp32
+
         return self
 
     @torch.no_grad()
