@@ -181,13 +181,15 @@ class UpsamplingBlock(nn.Module):
         self.config = config
         self.block_idx = block_idx
         self.curr_res = curr_res
+        decoder_hidden_channels = self.config.hidden_channels if self.config.decoder_hidden_channels is None else self.config.decoder_hidden_channels
+        decoder_channel_mult = self.config.channel_mult if self.config.decoder_channel_mult is None else self.config.decoder_channel_mult
 
         if self.block_idx == self.config.num_resolutions - 1:
-            block_in = self.config.hidden_channels * self.config.channel_mult[-1]
+            block_in = decoder_hidden_channels * decoder_channel_mult[-1]
         else:
-            block_in = self.config.hidden_channels * self.config.channel_mult[self.block_idx + 1]
+            block_in = decoder_hidden_channels * decoder_channel_mult[self.block_idx + 1]
 
-        block_out = self.config.hidden_channels * self.config.channel_mult[self.block_idx]
+        block_out = decoder_hidden_channels * decoder_channel_mult[self.block_idx]
 
         res_blocks = []
         attn_blocks = []
@@ -351,9 +353,11 @@ class Decoder(nn.Module):
         super().__init__()
 
         self.config = config
+        decoder_hidden_channels = self.config.hidden_channels if self.config.decoder_hidden_channels is None else self.config.decoder_hidden_channels
+        decoder_channel_mult = self.config.channel_mult if self.config.decoder_channel_mult is None else self.config.decoder_channel_mult
 
         # compute in_channel_mult, block_in and curr_res at lowest res
-        block_in = self.config.hidden_channels * self.config.channel_mult[self.config.num_resolutions - 1]
+        block_in = decoder_hidden_channels * decoder_channel_mult[self.config.num_resolutions - 1]
         curr_res = self.config.resolution // 2 ** (self.config.num_resolutions - 1)
         self.z_shape = (1, self.config.z_channels, curr_res, curr_res)
 
@@ -387,7 +391,7 @@ class Decoder(nn.Module):
         self.up = nn.ModuleList(list(reversed(upsample_blocks)))  # reverse to get consistent order
 
         # end
-        block_out = self.config.hidden_channels * self.config.channel_mult[0]
+        block_out = decoder_hidden_channels * decoder_channel_mult[0]
         self.norm_out = nn.GroupNorm(num_groups=32, num_channels=block_out, eps=1e-6, affine=True)
         self.conv_out = nn.Conv2d(
             block_out,
@@ -535,6 +539,8 @@ class VQGANModel(ModelMixin, ConfigMixin):
         num_res_blocks: int = 2,
         decoder_res_blocks: Optional[int] = None,
         extra_mid_res_blocks: Optional[int] = None,
+        decoder_hidden_channels: Optional[int] = None,
+        decoder_channel_mult: Optional[Tuple[int]] = None,
         attn_resolutions: int = (16,),
         no_attn_mid_block: bool = False,
         z_channels: int = 256,
