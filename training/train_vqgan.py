@@ -229,6 +229,7 @@ def main():
 
     if config.training.only_train_new_layers and not config.training.train_from_scratch:
         model.decoder.requires_grad_(False)
+        model.decoder.conv_out.requires_grad_(True)
 
         if config.training.scale_mid_block:
             model.decoder.mid.extra_mid_res_blocks.requires_grad_(True)
