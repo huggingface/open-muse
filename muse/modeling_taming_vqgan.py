@@ -14,7 +14,7 @@
 
 import math
 from functools import partial
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -175,7 +175,7 @@ class AttnBlock(nn.Module):
 
 
 class UpsamplingBlock(nn.Module):
-    def __init__(self, config, curr_res: int, block_idx: int):
+    def __init__(self, config, num_res_blocks: int, curr_res: int, block_idx: int):
         super().__init__()
 
         self.config = config
@@ -191,7 +191,7 @@ class UpsamplingBlock(nn.Module):
 
         res_blocks = []
         attn_blocks = []
-        for _ in range(self.config.num_res_blocks + 1):
+        for _ in range(num_res_blocks + 1):
             res_blocks.append(ResnetBlock(block_in, block_out, dropout_prob=self.config.dropout))
             block_in = block_out
             if self.curr_res in self.config.attn_resolutions:
@@ -277,6 +277,12 @@ class MidBlock(nn.Module):
             dropout_prob=self.dropout,
         )
 
+        if config.extra_mid_res_blocks is not None:
+            extra_mid_res_blocks = []
+            for _ in range(config.extra_mid_res_blocks):
+                extra_mid_res_blocks.append(ResnetBlock(self.in_channels, dropout_prob=self.dropout))
+            self.extra_mid_res_blocks = nn.ModuleList(extra_mid_res_blocks)
+
     def forward(self, hidden_states):
         hidden_states = self.block_1(hidden_states)
         if not self.no_attn:
@@ -351,6 +357,13 @@ class Decoder(nn.Module):
         curr_res = self.config.resolution // 2 ** (self.config.num_resolutions - 1)
         self.z_shape = (1, self.config.z_channels, curr_res, curr_res)
 
+        if self.config.decoder_res_blocks is None:
+            num_decoder_res_blocks = self.config.num_res_blocks
+        
+        if isinstance(num_decoder_res_blocks, int):
+            num_decoder_res_blocks = [num_decoder_res_blocks] * self.config.num_resolutions
+            num_decoder_res_blocks = reversed(num_decoder_res_blocks)
+
         # z to block_in
         self.conv_in = nn.Conv2d(
             self.config.z_channels,
@@ -366,7 +379,7 @@ class Decoder(nn.Module):
         # upsampling
         upsample_blocks = []
         for i_level in reversed(range(self.config.num_resolutions)):
-            upsample_blocks.append(UpsamplingBlock(self.config, curr_res, block_idx=i_level))
+            upsample_blocks.append(UpsamplingBlock(self.config, num_decoder_res_blocks[i_level], curr_res, block_idx=i_level))
             if i_level != 0:
                 curr_res = curr_res * 2
         self.up = nn.ModuleList(list(reversed(upsample_blocks)))  # reverse to get consistent order
@@ -518,6 +531,8 @@ class VQGANModel(ModelMixin, ConfigMixin):
         hidden_channels: int = 128,
         channel_mult: Tuple = (1, 1, 2, 2, 4),
         num_res_blocks: int = 2,
+        decoder_res_blocks: Optional[int] = None,
+        extra_mid_res_blocks: Optional[int] = None,
         attn_resolutions: int = (16,),
         no_attn_mid_block: bool = False,
         z_channels: int = 256,
