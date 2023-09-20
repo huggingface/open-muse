@@ -198,9 +198,24 @@ def main():
     model.quantize.requires_grad_(False)
     model.quant_conv.requires_grad_(False)
     model.post_quant_conv.requires_grad_(False)
-
+    
+    # Create the EMA model
     if config.training.use_ema:
         ema_model = EMAModel(model.parameters(), model_cls=VQGANModel, model_config=model.config)
+        
+        # Create custom saving and loading hooks so that `accelerator.save_state(...)` serializes in a nice format.
+        def load_model_hook(models, input_dir):
+            load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=VQGANModel)
+            ema_model.load_state_dict(load_model.state_dict())
+            ema_model.to(accelerator.device)
+            del load_model
+
+        def save_model_hook(models, weights, output_dir):
+            if accelerator.is_main_process:
+                ema_model.save_pretrained(os.path.join(output_dir, "ema_model"))
+
+        accelerator.register_load_state_pre_hook(load_model_hook)
+        accelerator.register_save_state_pre_hook(save_model_hook)
 
     discriminator = NLayerDiscriminator(
         input_nc=3,
@@ -320,6 +335,8 @@ def main():
         model, discriminator, optimizer, discr_optimizer, lr_scheduler, discr_lr_scheduler
     )
     loss_module = loss_module.to(accelerator.device)
+    if config.training.use_ema:
+        ema_model = ema_model.to(accelerator.device)
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
@@ -351,7 +368,8 @@ def main():
             dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
-            path = os.path.join(config.experiment.output_dir, path)
+            if path is not None:
+                path = os.path.join(config.experiment.output_dir, path)
 
         if path is None:
             accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
@@ -360,13 +378,23 @@ def main():
             accelerator.print(f"Resuming from checkpoint {path}")
 
             resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
+            dont_resume_optimizer = config.experiment.get("dont_resume_optimizer", False)
             if not resume_lr_scheduler:
                 logger.info("Not resuming the lr scheduler.")
                 accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
+            if dont_resume_optimizer:
+                logger.info("Not resuming the optimizer.")
+                accelerator._optimizers = []  # very hacky, but we don't want to resume the optimizer
+                grad_scaler = accelerator.scaler
+                accelerator.scaler = None
+
             accelerator.load_state(path)
-            accelerator.wait_for_everyone()
             if not resume_lr_scheduler:
                 accelerator._schedulers = [lr_scheduler]
+            if dont_resume_optimizer:
+                accelerator._optimizers = [optimizer]
+                accelerator.scaler = grad_scaler
+
             global_step = int(os.path.basename(path).split("-")[1])
             first_epoch = global_step // num_update_steps_per_epoch
 
