@@ -484,6 +484,8 @@ class Text2ImageDataset:
                     handler=wds.warn_and_continue,
                 ),
             ]
+            if only_return_images:
+                processing_pipeline.append(wds.map(filter_keys(set(["image"]))))
         else:
             # lowercase and replace / with .
             vae_checkpoint = vae_checkpoint.lower().replace("/", ".")
