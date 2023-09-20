@@ -191,18 +191,53 @@ def main():
     #########################
     logger.info("Loading models and optimizer")
 
-    model = VQGANModel.from_pretrained(config.model.vq_model.pretrained)
+    pretrained = VQGANModel.from_pretrained(config.model.vq_model.pretrained)
+
+    base_args = dict(
+        resolution=256,
+        num_channels=3,
+        hidden_channels=128,
+        channel_mult=(1, 2, 2, 4, 6),
+        num_res_blocks=2,
+        attn_resolutions=tuple(),
+        no_attn_mid_block=True,
+        z_channels=64,
+        num_embeddings=8192,
+        quantized_embed_dim=64,
+    )
+    if config.training.scale_mid_block:
+        base_args["extra_mid_res_blocks"] = 10
+    if config.training.scale_res_blocks:
+        base_args["decoder_res_blocks"] = 4
+    if config.training.scale_decoder_channels:
+        base_args["decoder_hidden_channels"] = 256
+
+    model = VQGANModel(**base_args)
+
+    if config.training.pretrained:
+        model.load_state_dict(pretrained.state_dict(), strict=False)
 
     # freeze the encoder
     model.encoder.requires_grad_(False)
     model.quantize.requires_grad_(False)
     model.quant_conv.requires_grad_(False)
     model.post_quant_conv.requires_grad_(False)
-    
+
+    if config.training.only_train_new_layers:
+        model.decoder.requires_grad_(False)
+
+        if config.training.scale_mid_block:
+            model.decoder.mid.extra_mid_res_blocks.requires_grad_(True)
+
+        if config.training.scale_res_blocks and not config.training.scale_decoder_channels:
+            for up_block in model.decoder.up:
+                for res_block in up_block.block[3:]:
+                    res_block.requires_grad_(True)
+
     # Create the EMA model
     if config.training.use_ema:
         ema_model = EMAModel(model.parameters(), model_cls=VQGANModel, model_config=model.config)
-        
+
         # Create custom saving and loading hooks so that `accelerator.save_state(...)` serializes in a nice format.
         def load_model_hook(models, input_dir):
             load_model = EMAModel.from_pretrained(os.path.join(input_dir, "ema_model"), model_cls=VQGANModel)
@@ -406,7 +441,9 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
-            pixel_values = batch["image"].to(accelerator.device, memory_format=torch.contiguous_format, non_blocking=True)
+            pixel_values = batch["image"].to(
+                accelerator.device, memory_format=torch.contiguous_format, non_blocking=True
+            )
             data_time_m.update(time.time() - end)
 
             # encode images to the latent space and get the commit loss from vq tokenization
