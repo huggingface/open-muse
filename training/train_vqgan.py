@@ -47,6 +47,7 @@ from vqgan_train_utils.vq_perceptual_loss import VQLPIPSWithDiscriminator
 import muse
 from muse import EMAModel, VQGANModel
 from muse.lr_schedulers import get_scheduler
+torch.autograd.set_detect_anomaly(True)
 
 logger = get_logger(__name__, log_level="INFO")
 
