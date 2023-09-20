@@ -90,12 +90,15 @@ class PipelineMuse:
         return_intermediate: bool = False,
         use_tqdm=True,
         transformer_seq_len=None,
+        clip_skip:int = None,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
 
         if text is not None and class_ids is not None:
             raise ValueError("Only one of text or class_ids may be provided.")
+        
+        clip_layer_idx = -(clip_skip+1)  if clip_skip is not None else -2
 
         if class_ids is not None:
             if isinstance(class_ids, int):
@@ -126,7 +129,7 @@ class PipelineMuse:
                     encoder_hidden_states = encoder_hidden_states.to(self.device, dtype=self.text_encoder.dtype)
                 else:
                     outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
-                    pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
+                    pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[clip_layer_idx]
             else:
                 encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
                 pooled_embeds = None
@@ -147,7 +150,7 @@ class PipelineMuse:
                 if self.transformer.config.add_cond_embeds:
                     outputs = self.text_encoder(negative_input_ids, return_dict=True, output_hidden_states=True)
                     negative_pooled_embeds = outputs.text_embeds
-                    negative_encoder_hidden_states = outputs.hidden_states[-2]
+                    negative_encoder_hidden_states = outputs.hidden_states[clip_layer_idx]
                 else:
                     negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
                     negative_pooled_embeds = None
@@ -177,12 +180,15 @@ class PipelineMuse:
                     bs_embed * num_images_per_prompt, seq_len, -1
                 )
 
-            empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
-                self.text_encoder.device
-            )
-            outputs = self.text_encoder(empty_input, output_hidden_states=True)
-            empty_embeds = outputs.hidden_states[-2]
-            empty_cond_embeds = outputs[0]
+            if negative_encoder_hidden_states is None:
+                empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
+                    self.text_encoder.device
+                )
+                outputs = self.text_encoder(empty_input, output_hidden_states=True)
+                empty_embeds = outputs.hidden_states[-2]
+                empty_cond_embeds = outputs[0]
+            else:
+                empty_embeds, empty_cond_embeds = None, None
 
             model_inputs = {
                 "encoder_hidden_states": encoder_hidden_states,
