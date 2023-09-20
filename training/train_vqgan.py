@@ -466,7 +466,7 @@ def main():
                     if k == "disc_factor":
                         ae_logs[k] = v
                     else:
-                        print(k)
+                        accelerator.print(f"{k}: {v.shape}")
                         ae_logs[k] = accelerator.gather(v.repeat(config.training.batch_size)).mean().item()
 
                 if config.training.max_grad_norm is not None and accelerator.sync_gradients:

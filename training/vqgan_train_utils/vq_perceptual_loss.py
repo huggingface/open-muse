@@ -105,7 +105,6 @@ class VQLPIPSWithDiscriminator(nn.Module):
             if self.codebook_weight > 0 and codebook_loss is not None:
                 loss += self.codebook_weight * codebook_loss.mean()
 
-            print(p_loss.shape)
             log = {
                 "{}/total_loss".format(split): loss.clone().detach(),
                 "{}/nll_loss".format(split): nll_loss.detach(),
