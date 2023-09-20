@@ -258,7 +258,7 @@ class DownsamplingBlock(nn.Module):
 
 
 class MidBlock(nn.Module):
-    def __init__(self, config, in_channels: int, no_attn: False, dropout: float):
+    def __init__(self, config, in_channels: int, no_attn: False, dropout: float, is_decoder: bool = False):
         super().__init__()
 
         self.config = config
@@ -279,7 +279,7 @@ class MidBlock(nn.Module):
             dropout_prob=self.dropout,
         )
 
-        if config.extra_mid_res_blocks is not None:
+        if config.extra_mid_res_blocks is not None and is_decoder:
             extra_mid_res_blocks = []
             for _ in range(config.extra_mid_res_blocks):
                 extra_mid_res_blocks.append(ResnetBlock(self.in_channels, dropout_prob=self.dropout))
@@ -290,6 +290,11 @@ class MidBlock(nn.Module):
         if not self.no_attn:
             hidden_states = self.attn_1(hidden_states)
         hidden_states = self.block_2(hidden_states)
+
+        if hasattr(self, "extra_mid_res_blocks"):
+            for block in self.extra_mid_res_blocks:
+                hidden_states = block(hidden_states)
+
         return hidden_states
 
 
@@ -380,7 +385,7 @@ class Decoder(nn.Module):
         )
 
         # middle
-        self.mid = MidBlock(config, block_in, self.config.no_attn_mid_block, self.config.dropout)
+        self.mid = MidBlock(config, block_in, self.config.no_attn_mid_block, self.config.dropout, is_decoder=True)
 
         # upsampling
         upsample_blocks = []
