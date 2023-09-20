@@ -1,0 +1,74 @@
+wandb:
+  entity: psuraj
+
+experiment:
+    project: "muse"
+    name: "oai-clip-lbl-smooth"
+    output_dir: "oai-clip-lbl-smooth"
+    max_train_examples: 700000000 # toal sucessfully downloaded images for laiona5plus
+    max_eval_examples: 8118
+    save_every: 1000
+    eval_every: 1000
+    generate_every: 1000
+    log_every: 50
+    log_grad_norm_every: 500
+    resume_from_checkpoint: False
+    resume_lr_scheduler: True
+
+
+dataset:
+    type: "text2image"
+    params:
+        train_shards_path_or_url: "pipe:aws s3 cp s3://hf-datasets-laion-5b-us-west-2/glacier/laion-data/laion-aesthetics-v2-5-plus-data/{00000..60578}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://hf-datasets-laion-5b-us-west-2/glacier/laion-data/laion-aesthetics-v2-5-plus-data/{60579..60581}.tar -"
+        batch_size: ${training.batch_size}
+        shuffle_buffer_size: 1000
+        num_workers: 4
+        resolution: 256
+        pin_memory: True
+        persistent_workers: True
+    preprocessing:
+        max_seq_length: 77
+        resolution: 256
+        center_crop: False
+        random_flip: False
+
+
+optimizer:
+    name: fused_adamw
+    params: # default adamw params
+        learning_rate: 1e-4
+        discr_learning_rate: 1e-6
+        scale_lr: False # scale learning rate by total batch size
+        beta1: 0.5
+        beta2: 0.9
+        weight_decay: 0.01
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "constant_with_warmup"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 2000
+
+
+training:
+    gradient_accumulation_steps: 1
+    batch_size: 128
+    mixed_precision: "no"
+    enable_tf32: True
+    use_ema: False
+    seed: 9345104
+    max_train_steps: 600000
+    overfit_one_batch: False
+    max_grad_norm: null
+    disc_start: 50000
+    disc_factor: 1.0
+    disc_weight: 0.8
+    perceptual_weight: 1.0
+    scale_mid_block: True
+    scale_res_blocks: False
+    scale_decoder_channels: False
+    only_train_new_layers: True
+    train_from_scratch: False

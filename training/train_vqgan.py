@@ -127,7 +127,7 @@ def main():
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
         log_with="wandb",
-        logging_dir=config.experiment.logging_dir,
+        project_dir=config.experiment.logging_dir,
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes.
     )
 
@@ -191,7 +191,7 @@ def main():
     #########################
     logger.info("Loading models and optimizer")
 
-    pretrained = VQGANModel.from_pretrained(config.model.vq_model.pretrained)
+    pretrained = VQGANModel.from_pretrained("openMUSE/vqgan-f16-8192-laion")
 
     base_args = dict(
         resolution=256,
@@ -214,7 +214,11 @@ def main():
 
     model = VQGANModel(**base_args)
 
-    if config.training.pretrained:
+    if config.training.train_from_scratch:
+        # ignore all keys that start with "decoder"
+        pretrained_dict = {k: v for k, v in pretrained.state_dict().items() if not k.startswith("decoder")}
+        model.load_state_dict(pretrained_dict, strict=False)
+    else:
         model.load_state_dict(pretrained.state_dict(), strict=False)
 
     # freeze the encoder
@@ -223,7 +227,7 @@ def main():
     model.quant_conv.requires_grad_(False)
     model.post_quant_conv.requires_grad_(False)
 
-    if config.training.only_train_new_layers:
+    if config.training.only_train_new_layers and not config.training.train_from_scratch:
         model.decoder.requires_grad_(False)
 
         if config.training.scale_mid_block:
@@ -336,16 +340,6 @@ def main():
         shuffle_buffer_size=dataset_config.shuffle_buffer_size,
         pin_memory=dataset_config.pin_memory,
         persistent_workers=dataset_config.persistent_workers,
-        is_pre_encoded=False,
-        vae_checkpoint=config.model.vq_model.pretrained,
-        text_encoder_checkpoint=config.model.text_encoder.pretrained,
-        use_filtered_dataset=dataset_config.get("use_filtered_dataset", False),
-        require_marked_as_ok_by_spawning=dataset_config.get("require_marked_as_ok_by_spawning", False),
-        require_marked_as_not_getty=dataset_config.get("require_marked_as_not_getty", False),
-        max_pnsfw=dataset_config.get("max_pnsfw", None),
-        max_pwatermark=dataset_config.get("max_pwatermark", 0.5),
-        min_aesthetic_score=dataset_config.get("min_aesthetic_score", 4.75),
-        min_size=dataset_config.get("min_size", 256),
         only_return_images=True,
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
