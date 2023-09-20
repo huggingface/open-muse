@@ -359,6 +359,8 @@ class Decoder(nn.Module):
 
         if self.config.decoder_res_blocks is None:
             num_decoder_res_blocks = self.config.num_res_blocks
+        else:
+            num_decoder_res_blocks = self.config.decoder_res_blocks
         
         if isinstance(num_decoder_res_blocks, int):
             num_decoder_res_blocks = [num_decoder_res_blocks] * self.config.num_resolutions
