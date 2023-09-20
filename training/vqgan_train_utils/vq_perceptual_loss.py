@@ -108,7 +108,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
             log = {
                 "{}/total_loss".format(split): loss.clone().detach(),
                 "{}/nll_loss".format(split): nll_loss.detach(),
-                "{}/rec_loss".format(split): rec_loss.detach(),
+                "{}/rec_loss".format(split): rec_loss.detach().mean(),
                 "{}/p_loss".format(split): p_loss.detach(),
                 "{}/d_weight".format(split): d_weight.detach(),
                 "{}/disc_factor".format(split): torch.tensor(disc_factor),
