@@ -98,8 +98,6 @@ class PipelineMuse:
         if text is not None and class_ids is not None:
             raise ValueError("Only one of text or class_ids may be provided.")
         
-        clip_layer_idx = -(clip_skip+1)  if clip_skip is not None else -2
-
         if class_ids is not None:
             if isinstance(class_ids, int):
                 class_ids = [class_ids]
@@ -128,6 +126,7 @@ class PipelineMuse:
                     pooled_embeds = pooled_embeds.to(self.device, dtype=self.text_encoder.dtype)
                     encoder_hidden_states = encoder_hidden_states.to(self.device, dtype=self.text_encoder.dtype)
                 else:
+                    clip_layer_idx = -(clip_skip+1)  if clip_skip is not None else -2
                     outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
                     pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[clip_layer_idx]
             else:
@@ -150,7 +149,7 @@ class PipelineMuse:
                 if self.transformer.config.add_cond_embeds:
                     outputs = self.text_encoder(negative_input_ids, return_dict=True, output_hidden_states=True)
                     negative_pooled_embeds = outputs.text_embeds
-                    negative_encoder_hidden_states = outputs.hidden_states[clip_layer_idx]
+                    negative_encoder_hidden_states = outputs.hidden_states[-2]
                 else:
                     negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
                     negative_pooled_embeds = None
