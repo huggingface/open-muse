@@ -466,7 +466,6 @@ def main():
                     if k in ["train/disc_factor", "train/g_loss", "train/d_weight", "train/p_loss"]:
                         ae_logs[k] = v
                     else:
-                        accelerator.print(f"{k}: {v.shape}")
                         ae_logs[k] = accelerator.gather(v.repeat(config.training.batch_size)).mean().item()
 
                 if config.training.max_grad_norm is not None and accelerator.sync_gradients:
@@ -507,7 +506,10 @@ def main():
                 # Gather the losses across all processes for logging (if we use distributed training).
                 discr_logs = {}
                 for k, v in log_dict_discr.items():
-                    discr_logs[k] = accelerator.gather(v.repeat(config.training.batch_size)).mean().item()
+                    if k in ["train/logits_real", "train/logits_fake"]:
+                        discr_logs[k] = v
+                    else:
+                        discr_logs[k] = accelerator.gather(v.repeat(config.training.batch_size)).mean().item()
 
                 if config.training.max_grad_norm is not None and accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(discriminator.parameters(), config.training.max_grad_norm)
