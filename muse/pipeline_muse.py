@@ -253,6 +253,9 @@ class PipelineMuse:
         text_encoder_path: Optional[str] = None,
         vae_path: Optional[str] = None,
         transformer_path: Optional[str] = None,
+        vae = None,
+        text_encoder = None,
+        transformer = None,
         is_class_conditioned: bool = False,
     ) -> None:
         """
@@ -301,11 +304,14 @@ class PipelineMuse:
             #         text_encoder_args["projection_dim"] = 768
 
             # TODO: make this more robust
-            text_encoder = CLIPTextModelWithProjection.from_pretrained(**text_encoder_args)
+            if text_encoder is None:
+                text_encoder = CLIPTextModelWithProjection.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         transformer_config = MaskGitTransformer.load_config(**transformer_args)
-        if transformer_config["_class_name"] == "MaskGitTransformer":
+        if transformer is not None:
+            ...
+        elif transformer_config["_class_name"] == "MaskGitTransformer":
             transformer = MaskGitTransformer.from_pretrained(**transformer_args)
         elif transformer_config["_class_name"] == "MaskGiTUViT" or transformer_config["_class_name"] == "MaskGiTUViT_v2":
             transformer = MaskGiTUViT.from_pretrained(**transformer_args)
@@ -314,7 +320,9 @@ class PipelineMuse:
 
         # Hacky way to load different VQ models
         vae_config = MaskGitVQGAN.load_config(**vae_args)
-        if vae_config["_class_name"] == "VQGANModel":
+        if vae is not None:
+            ...
+        elif vae_config["_class_name"] == "VQGANModel":
             vae = VQGANModel.from_pretrained(**vae_args)
         elif vae_config["_class_name"] == "MaskGitVQGAN":
             vae = MaskGitVQGAN.from_pretrained(**vae_args)
