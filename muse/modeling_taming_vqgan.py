@@ -362,7 +362,7 @@ class Decoder(nn.Module):
         
         if isinstance(num_decoder_res_blocks, int):
             num_decoder_res_blocks = [num_decoder_res_blocks] * self.config.num_resolutions
-            num_decoder_res_blocks = reversed(num_decoder_res_blocks)
+            num_decoder_res_blocks = list(reversed(num_decoder_res_blocks))
 
         # z to block_in
         self.conv_in = nn.Conv2d(
