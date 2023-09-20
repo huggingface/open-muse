@@ -365,9 +365,9 @@ def main():
     model, discriminator, optimizer, discr_optimizer, lr_scheduler, discr_lr_scheduler = accelerator.prepare(
         model, discriminator, optimizer, discr_optimizer, lr_scheduler, discr_lr_scheduler
     )
-    loss_module = loss_module.to(accelerator.device)
+    loss_module.to(accelerator.device)
     if config.training.use_ema:
-        ema_model = ema_model.to(accelerator.device)
+        ema_model.to(accelerator.device)
 
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
