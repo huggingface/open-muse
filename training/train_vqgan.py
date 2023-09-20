@@ -575,9 +575,18 @@ def main():
 
                 # Generate images
                 if (global_step + 1) % config.experiment.generate_every == 0 and accelerator.is_main_process:
+                    # Store the model parameters temporarily and load the EMA parameters to perform inference.
+                    if config.training.get("use_ema", False):
+                        ema_model.store(model.parameters())
+                        ema_model.copy_to(model.parameters())
+                    
                     generate_images(
                         model, pixel_values[: config.training.num_validation_log], accelerator, global_step + 1
                     )
+
+                    if config.training.get("use_ema", False):
+                        # Switch back to the original model parameters for training.
+                        ema_model.restore(model.parameters())
 
                 global_step += 1
 
