@@ -463,7 +463,7 @@ def main():
                 # Gather the losses across all processes for logging (if we use distributed training).
                 ae_logs = {}
                 for k, v in log_dict_ae.items():
-                    if k == "train/disc_factor" or k == "train/g_loss":
+                    if k in ["train/disc_factor", "train/g_loss", "train/d_weight"]:
                         ae_logs[k] = v
                     else:
                         accelerator.print(f"{k}: {v.shape}")
