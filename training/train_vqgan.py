@@ -545,6 +545,14 @@ def main():
                     samples_per_second_per_gpu = (
                         config.training.gradient_accumulation_steps * config.training.batch_size / batch_time_m.val
                     )
+                    logger.info(
+                        f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
+                        f"Batch (t): {batch_time_m.val:0.4f} "
+                        f"LR: {lr_scheduler.get_last_lr()[0]:0.6f} "
+                        f"Step: {global_step + 1} "
+                        f"AE Loss: {ae_logs['train/total_loss']:0.4f} "
+                        f"Discr Loss: {discr_logs['train/disc_loss']:0.4f} "
+                    )
                     logs = {
                         "lr": lr_scheduler.get_last_lr()[0],
                         "samples/sec/gpu": samples_per_second_per_gpu,
@@ -554,15 +562,6 @@ def main():
                     logs.update(ae_logs)
                     logs.update(discr_logs)
                     accelerator.log(logs, step=global_step + 1)
-
-                    logger.info(
-                        f"Data (t): {data_time_m.val:0.4f}, {samples_per_second_per_gpu:0.2f}/s/gpu "
-                        f"Batch (t): {batch_time_m.val:0.4f} "
-                        f"LR: {lr_scheduler.get_last_lr()[0]:0.6f} "
-                        f"Step: {global_step + 1} "
-                        f"AE Loss: {ae_logs['train/total_loss']:0.4f} "
-                        f"Discr Loss: {discr_logs['train/disc_loss']:0.4f} "
-                    )
 
                     # resetting batch / data time meters per log window
                     batch_time_m.reset()
