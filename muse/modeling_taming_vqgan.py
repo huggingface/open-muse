@@ -181,8 +181,14 @@ class UpsamplingBlock(nn.Module):
         self.config = config
         self.block_idx = block_idx
         self.curr_res = curr_res
-        decoder_hidden_channels = self.config.hidden_channels if self.config.decoder_hidden_channels is None else self.config.decoder_hidden_channels
-        decoder_channel_mult = self.config.channel_mult if self.config.decoder_channel_mult is None else self.config.decoder_channel_mult
+        decoder_hidden_channels = (
+            self.config.hidden_channels
+            if self.config.decoder_hidden_channels is None
+            else self.config.decoder_hidden_channels
+        )
+        decoder_channel_mult = (
+            self.config.channel_mult if self.config.decoder_channel_mult is None else self.config.decoder_channel_mult
+        )
 
         if self.block_idx == self.config.num_resolutions - 1:
             block_in = decoder_hidden_channels * decoder_channel_mult[-1]
@@ -358,8 +364,14 @@ class Decoder(nn.Module):
         super().__init__()
 
         self.config = config
-        decoder_hidden_channels = self.config.hidden_channels if self.config.decoder_hidden_channels is None else self.config.decoder_hidden_channels
-        decoder_channel_mult = self.config.channel_mult if self.config.decoder_channel_mult is None else self.config.decoder_channel_mult
+        decoder_hidden_channels = (
+            self.config.hidden_channels
+            if self.config.decoder_hidden_channels is None
+            else self.config.decoder_hidden_channels
+        )
+        decoder_channel_mult = (
+            self.config.channel_mult if self.config.decoder_channel_mult is None else self.config.decoder_channel_mult
+        )
 
         # compute in_channel_mult, block_in and curr_res at lowest res
         block_in = decoder_hidden_channels * decoder_channel_mult[self.config.num_resolutions - 1]
@@ -370,7 +382,7 @@ class Decoder(nn.Module):
             num_decoder_res_blocks = self.config.num_res_blocks
         else:
             num_decoder_res_blocks = self.config.decoder_res_blocks
-        
+
         if isinstance(num_decoder_res_blocks, int):
             num_decoder_res_blocks = [num_decoder_res_blocks] * self.config.num_resolutions
             num_decoder_res_blocks = list(reversed(num_decoder_res_blocks))
@@ -390,7 +402,9 @@ class Decoder(nn.Module):
         # upsampling
         upsample_blocks = []
         for i_level in reversed(range(self.config.num_resolutions)):
-            upsample_blocks.append(UpsamplingBlock(self.config, num_decoder_res_blocks[i_level], curr_res, block_idx=i_level))
+            upsample_blocks.append(
+                UpsamplingBlock(self.config, num_decoder_res_blocks[i_level], curr_res, block_idx=i_level)
+            )
             if i_level != 0:
                 curr_res = curr_res * 2
         self.up = nn.ModuleList(list(reversed(upsample_blocks)))  # reverse to get consistent order
