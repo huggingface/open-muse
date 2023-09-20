@@ -112,7 +112,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
                 "{}/p_loss".format(split): p_loss.detach().mean(),
                 "{}/d_weight".format(split): d_weight.detach(),
                 "{}/disc_factor".format(split): torch.tensor(disc_factor),
-                "{}/g_loss".format(split): g_loss.detach(),
+                "{}/g_loss".format(split): g_loss.detach().mean(),
             }
 
             if self.codebook_weight > 0 and codebook_loss is not None:
