@@ -91,6 +91,7 @@ class PipelineMuse:
         use_tqdm=True,
         transformer_seq_len=None,
         clip_skip:int = None,
+        return_type="pil", # can be pil, tensor, or tokens
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -229,10 +230,16 @@ class PipelineMuse:
                 generated_tokens, intermediate = outputs
             else:
                 generated_tokens = outputs
+        
+        if return_type == "tokens":
+            return generated_tokens
 
         images = self.vae.decode_code(generated_tokens)
         if return_intermediate:
             intermediate_images = [self.vae.decode_code(tokens) for tokens in intermediate]
+        
+        if return_type == "tensor":
+            return images
 
         # Convert to PIL images
         images = [self.to_pil_image(image) for image in images]
