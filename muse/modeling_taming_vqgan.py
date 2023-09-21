@@ -568,6 +568,7 @@ class VQGANModel(ModelMixin, ConfigMixin):
         dropout: float = 0.0,
         resample_with_conv: bool = True,
         commitment_cost: float = 0.25,
+        **kwargs,
     ):
         super().__init__()
 
