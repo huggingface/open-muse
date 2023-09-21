@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Tuple
 
 import numpy as np
 import torch
@@ -52,29 +52,31 @@ class PipelineMuse:
         self.device = "cpu"
 
     def to(self, device="cpu", dtype=torch.float32) -> None:
-        if not self.is_class_conditioned:
-            self.text_encoder.to(device, dtype=dtype)
-        self.vae.to(device, dtype=dtype)
-        self.transformer.to(device, dtype=dtype)
         self.device = device
         self.dtype = dtype
+        
+        if not self.is_class_conditioned:
+            self.text_encoder.to(device, dtype=dtype)
+        self.transformer.to(device, dtype=dtype)
+        self.vae.to(device, dtype=torch.float32) # keep vae in fp32
+
         return self
 
     @torch.no_grad()
     def __call__(
         self,
         text: Optional[Union[str, List[str]]] = None,
-        negative_text: Optional[Union[str, List[str]]] = None,
+        negative_text: Optional[Union[str, List[str]]] = "",
         prompt_embeds: Optional[torch.Tensor] = None,
         pooled_embeds: Optional[torch.Tensor] = None,
         negative_prompt_embeds: Optional[torch.Tensor] = None,
         negative_pooled_embeds: Optional[torch.Tensor] = None,
         class_ids: Optional[Union[int, List[int]]] = None,
-        timesteps: int = 8,
+        timesteps: int = 16,
         noise_schedule: str = "cosine",
-        guidance_scale: float = 8.0,
+        guidance_scale: float = 10.0,
         guidance_schedule=None,
-        temperature: float = 1.0,
+        temperature: Union[float, Tuple[float]] = (2, 0),
         topk_filter_thres: float = 0.9,
         num_images_per_prompt: int = 1,
         use_maskgit_generate: bool = True,
@@ -82,19 +84,20 @@ class PipelineMuse:
         use_fp16: bool = False,
         noise_type="mask",  # can be "mask" or "random_replace"
         predict_all_tokens=False,
-        orig_size=(256, 256),
+        orig_size=(512, 512),
         crop_coords=(0, 0),
         aesthetic_score=6.0,
         return_intermediate: bool = False,
         use_tqdm=True,
         transformer_seq_len=None,
+        clip_skip:int = None,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
 
         if text is not None and class_ids is not None:
             raise ValueError("Only one of text or class_ids may be provided.")
-
+        
         if class_ids is not None:
             if isinstance(class_ids, int):
                 class_ids = [class_ids]
@@ -123,8 +126,9 @@ class PipelineMuse:
                     pooled_embeds = pooled_embeds.to(self.device, dtype=self.text_encoder.dtype)
                     encoder_hidden_states = encoder_hidden_states.to(self.device, dtype=self.text_encoder.dtype)
                 else:
+                    clip_layer_idx = -(clip_skip+1)  if clip_skip is not None else -2
                     outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
-                    pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
+                    pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[clip_layer_idx]
             else:
                 encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
                 pooled_embeds = None
@@ -175,12 +179,15 @@ class PipelineMuse:
                     bs_embed * num_images_per_prompt, seq_len, -1
                 )
 
-            empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
-                self.text_encoder.device
-            )
-            outputs = self.text_encoder(empty_input, output_hidden_states=True)
-            empty_embeds = outputs.hidden_states[-2]
-            empty_cond_embeds = outputs[0]
+            if negative_encoder_hidden_states is None:
+                empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
+                    self.text_encoder.device
+                )
+                outputs = self.text_encoder(empty_input, output_hidden_states=True)
+                empty_embeds = outputs.hidden_states[-2]
+                empty_cond_embeds = outputs[0]
+            else:
+                empty_embeds, empty_cond_embeds = None, None
 
             model_inputs = {
                 "encoder_hidden_states": encoder_hidden_states,
@@ -251,6 +258,9 @@ class PipelineMuse:
         text_encoder_path: Optional[str] = None,
         vae_path: Optional[str] = None,
         transformer_path: Optional[str] = None,
+        vae = None,
+        text_encoder = None,
+        transformer = None,
         is_class_conditioned: bool = False,
     ) -> None:
         """
@@ -287,31 +297,37 @@ class PipelineMuse:
         if not is_class_conditioned:
             # Very hacky way to load different text encoders
             # TODO: Add config for pipeline to specify text encoder
-            is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"].lower()
-            text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
+            # is_clip = "clip" in text_encoder_args["pretrained_model_name_or_path"].lower()
+            # text_encoder_cls = CLIPTextModel if is_clip else T5EncoderModel
 
-            if is_clip:
-                config = CLIPConfig.from_pretrained(**text_encoder_args)
-                if config.architectures[0] == "CLIPTextModel":
-                    text_encoder_cls = CLIPTextModel
-                else:
-                    text_encoder_cls = CLIPTextModelWithProjection
-                    text_encoder_args["projection_dim"] = 768
+            # if is_clip:
+            #     config = CLIPConfig.from_pretrained(**text_encoder_args)
+            #     if config.architectures[0] == "CLIPTextModel":
+            #         text_encoder_cls = CLIPTextModel
+            #     else:
+            #         text_encoder_cls = CLIPTextModelWithProjection
+            #         text_encoder_args["projection_dim"] = 768
 
-            text_encoder = text_encoder_cls.from_pretrained(**text_encoder_args)
+            # TODO: make this more robust
+            if text_encoder is None:
+                text_encoder = CLIPTextModelWithProjection.from_pretrained(**text_encoder_args)
             tokenizer = AutoTokenizer.from_pretrained(**tokenizer_args)
 
         transformer_config = MaskGitTransformer.load_config(**transformer_args)
-        if transformer_config["_class_name"] == "MaskGitTransformer":
+        if transformer is not None:
+            ...
+        elif transformer_config["_class_name"] == "MaskGitTransformer":
             transformer = MaskGitTransformer.from_pretrained(**transformer_args)
-        elif transformer_config["_class_name"] == "MaskGiTUViT":
+        elif transformer_config["_class_name"] == "MaskGiTUViT" or transformer_config["_class_name"] == "MaskGiTUViT_v2":
             transformer = MaskGiTUViT.from_pretrained(**transformer_args)
         else:
             raise ValueError(f"Unknown Transformer class: {transformer_config['_class_name']}")
 
         # Hacky way to load different VQ models
         vae_config = MaskGitVQGAN.load_config(**vae_args)
-        if vae_config["_class_name"] == "VQGANModel":
+        if vae is not None:
+            ...
+        elif vae_config["_class_name"] == "VQGANModel":
             vae = VQGANModel.from_pretrained(**vae_args)
         elif vae_config["_class_name"] == "MaskGitVQGAN":
             vae = MaskGitVQGAN.from_pretrained(**vae_args)
@@ -321,12 +337,14 @@ class PipelineMuse:
             vae = PaellaVQModel.from_pretrained(**vae_args)
         else:
             raise ValueError(f"Unknown VAE class: {vae_config['_class_name']}")
+        
         if is_class_conditioned:
             return cls(
                 vae=vae,
                 transformer=transformer,
                 is_class_conditioned=is_class_conditioned,
             )
+
         return cls(
             vae=vae,
             transformer=transformer,
