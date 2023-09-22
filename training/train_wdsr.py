@@ -410,7 +410,14 @@ def main():
 
             # encode images to the latent space and get the commit loss from vq tokenization
             # Return commit loss
-            vq_images, _, _ = vqgan(pixel_values, return_loss=False)
+            # encode with batch size 16, vq_images, _, _ = vqgan(pixel_values, return_loss=False)
+            vq_images = []
+            for i in range(0, pixel_values.shape[0], 16):
+                vq_image, _, _ = vqgan(pixel_values[i:i+16], return_loss=False)
+                vq_images.append(vq_image)
+            vq_images = torch.cat(vq_images, dim=0)
+            
+            
             vq_images = 2.0 * vq_images - 1.0
             vq_images = torch.clamp(vq_images, -1.0, 1.0)
             vq_images = (vq_images + 1.0) / 2.0
