@@ -552,7 +552,7 @@ def main():
                         ema_model.copy_to(model.parameters())
                     
                     generate_images(
-                        model, pixel_values[: config.training.num_validation_log], accelerator, global_step + 1
+                        model, vqgan, pixel_values[: config.training.num_validation_log], accelerator, global_step + 1
                     )
 
                     if config.training.get("use_ema", False):
@@ -605,17 +605,14 @@ def generate_images(model, vqgan, original_images, accelerator, global_step):
     model.train()
 
     # Convert to PIL images
-    original_images = 2.0 * original_images - 1.0
-    original_images = torch.clamp(original_images, -1.0, 1.0)
-    original_images = (original_images + 1.0) / 2.0
-    original_images *= 255.0
-    original_images = original_images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+    vq_image *= 255.0
+    vq_image = vq_image.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
 
     images *= 255.0
     images = torch.clamp(images, 0.0, 255.0)
     images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
     
-    images = np.concatenate([original_images, images], axis=2)
+    images = np.concatenate([vq_image, images], axis=2)
     pil_images = [Image.fromarray(image) for image in images]
 
     # Log images
