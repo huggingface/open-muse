@@ -81,7 +81,7 @@ class WDSR(ModelMixin, ConfigMixin):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
     
     def get_last_layer(self):
-        return self.body[-1]
+        return self.body[-1].weight_v
 
 class Block(nn.Module):
     def __init__(
