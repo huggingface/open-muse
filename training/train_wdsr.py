@@ -600,13 +600,13 @@ def generate_images(model, vqgan, original_images, accelerator, global_step):
     elif accelerator.mixed_precision == "bf16":
         dtype = torch.bfloat16
 
-    with torch.autocast("cuda", dtype=dtype, enabled=accelerator.mixed_precision != "no"):
-        vq_image, _, _ = vqgan(original_images, return_loss=False)
-        vq_image = 2.0 * vq_image - 1.0
-        vq_image = torch.clamp(vq_image, -1.0, 1.0)
-        vq_image = (vq_image + 1.0) / 2.0
-        vq_image = (255.0 * vq_image) / 255.0
+    vq_image, _, _ = vqgan(original_images, return_loss=False)
+    vq_image = 2.0 * vq_image - 1.0
+    vq_image = torch.clamp(vq_image, -1.0, 1.0)
+    vq_image = (vq_image + 1.0) / 2.0
+    vq_image = (255.0 * vq_image) / 255.0
     
+    with torch.autocast("cuda", dtype=dtype, enabled=accelerator.mixed_precision != "no"):
         images = model(vq_image)
 
     model.train()
@@ -620,7 +620,7 @@ def generate_images(model, vqgan, original_images, accelerator, global_step):
     images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
     
     images = np.concatenate([vq_image, images], axis=2)
-    pil_images = [Image.fromarray(image) for image in images]
+    pil_images = [Image.fromarray(image).convert("RGB") for image in images]
 
     # Log images
     wandb_images = [wandb.Image(image, caption="Original, Generated") for image in pil_images]
