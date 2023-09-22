@@ -607,7 +607,7 @@ def generate_images(model, vqgan, original_images, accelerator, global_step):
         vq_image = (vq_image + 1.0) / 2.0
         vq_image = (255.0 * vq_image) / 255.0
     
-    images = model(vq_image)
+        images = model(vq_image)
 
     model.train()
 
