@@ -412,8 +412,8 @@ def main():
             # Return commit loss
             # encode with batch size 16, vq_images, _, _ = vqgan(pixel_values, return_loss=False)
             vq_images = []
-            for i in range(0, pixel_values.shape[0], 16):
-                vq_image, _, _ = vqgan(pixel_values[i:i+16], return_loss=False)
+            for i in range(0, pixel_values.shape[0], 32):
+                vq_image, _, _ = vqgan(pixel_values[i:i+32], return_loss=False)
                 vq_images.append(vq_image)
             vq_images = torch.cat(vq_images, dim=0)
             
