@@ -441,11 +441,11 @@ def main():
             )
             data_time_m.update(time.time() - end)
 
-            # encode images to the latent space and get the commit loss from vq tokenization
-            # Return commit loss
-            fmap, _, _ = model(pixel_values, return_loss=False)
-
             with accelerator.accumulate(model):
+                # encode images to the latent space and get the commit loss from vq tokenization
+                # Return commit loss
+                fmap, _, _ = model(pixel_values, return_loss=False)
+                
                 # ########################
                 # autoencode
                 # ########################
