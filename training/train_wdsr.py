@@ -414,7 +414,7 @@ def main():
             # encode with batch size 16, vq_images, _, _ = vqgan(pixel_values, return_loss=False)
             vq_images = []
             for i in range(0, pixel_values.shape[0], 32):
-                code = vqgan.get_code(pixel_values[i:i+32], return_loss=False)
+                code = vqgan.get_code(pixel_values[i:i+32])
 
                 # randomly replace 5-10% of the codes with random codes
                 # code is of shape (batch_size, num_tokens), code is a torch tensor
