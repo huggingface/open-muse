@@ -27,7 +27,7 @@ model:
         pretrained: "google/t5-v1_1-large"
     low_res_vq_model:
         pretrained: "openMUSE/vqgan-f16-8192-laion"
-        type: "maskgit_vqgan"
+        type: "vqgan"
     transformer:
         vocab_size: 16392
         max_position_embeddings: 4096
