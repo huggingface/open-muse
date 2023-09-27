@@ -878,6 +878,7 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
     model.eval()
     eval_loss = 0
     now = time.time()
+    i = 0
     for i, batch in enumerate(eval_dataloader):
         pixel_values, input_ids = batch["image"], batch["input_ids"]
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
