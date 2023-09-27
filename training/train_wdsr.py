@@ -17,6 +17,7 @@ import json
 import logging
 import math
 import os
+import random
 import time
 from pathlib import Path
 from typing import Any, List, Tuple
@@ -413,7 +414,20 @@ def main():
             # encode with batch size 16, vq_images, _, _ = vqgan(pixel_values, return_loss=False)
             vq_images = []
             for i in range(0, pixel_values.shape[0], 32):
-                vq_image, _, _ = vqgan(pixel_values[i:i+32], return_loss=False)
+                code = vqgan.get_code(pixel_values[i:i+32], return_loss=False)
+
+                # randomly replace 5-10% of the codes with random codes
+                # code is of shape (batch_size, num_tokens), code is a torch tensor
+                if random.random() < 0.5:
+                    codebook_dim = vqgan.config.num_embeddings
+                    num_tokens = code.shape[1]
+                    num_replace = int(num_tokens * np.random.uniform(0.02, 0.1))
+                    replace_idx = np.random.choice(num_tokens, num_replace, replace=False)
+                    replace_code = torch.randint(codebook_dim, (num_replace,)).to(code.device)
+                    code[:, replace_idx] = replace_code
+                
+                vq_image = vqgan.decode_code(code)
+                
                 vq_images.append(vq_image)
             vq_images = torch.cat(vq_images, dim=0)
             
