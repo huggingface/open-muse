@@ -326,12 +326,12 @@ def main():
         model = model_cls(**config.model.transformer)
 
     if config.training.is_second_stage_training:
-        adapter_model_cls = MaskGitTransformer if config.model.adapter.get("architecture", "transformer") == "transformer" else MaskGiTUViT
-        assert config.model.adapter.num_vq_tokens == config.model.adapter.max_position_embeddings *16
+        adapter_model_cls = MaskGitTransformer if config.adapter_model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+        assert config.adapter_model.num_vq_tokens == config.adapter_model.max_position_embeddings *16
         if config.adapter_model.get("pretrained_model_path", None) is not None:
-            adapter_model = adapter_model_cls.from_pretrained(config.model.adapter.pretrained_model_path)
+            adapter_model = adapter_model_cls.from_pretrained(config.adapter_model.pretrained_model_path)
         else:
-            adapter_model = adapter_model_cls(**config.model.adapter)
+            adapter_model = adapter_model_cls(**config.adapter_model)
         model.add_adapter(adapter_model)
     mask_id = model.config.mask_token_id
     output_size = model.output_size
