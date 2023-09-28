@@ -436,6 +436,9 @@ def main():
             vq_images = torch.clamp(vq_images, -1.0, 1.0)
             vq_images = (vq_images + 1.0) / 2.0
             vq_images = (255.0 * vq_images) / 255.0
+
+            if config.training.get("denoise", False):
+                vq_images = torch.randn_like(vq_images) * (25 / 255.0) + vq_images
             
             with accelerator.accumulate(model):
                 reconstructions = model(vq_images)
@@ -615,18 +618,23 @@ def generate_images(model, vqgan, original_images, accelerator, global_step):
         dtype = torch.bfloat16
 
     vq_image, _, _ = vqgan(original_images, return_loss=False)
-    vq_image = 2.0 * vq_image - 1.0
-    vq_image = torch.clamp(vq_image, -1.0, 1.0)
-    vq_image = (vq_image + 1.0) / 2.0
-    vq_image = (255.0 * vq_image) / 255.0
+
     
     with torch.autocast("cuda", dtype=dtype, enabled=accelerator.mixed_precision != "no"):
-        images = model(vq_image)
+        vq_image_ = 2.0 * vq_image - 1.0
+        vq_image_ = torch.clamp(vq_image_, -1.0, 1.0)
+        vq_image_ = (vq_image_ + 1.0) / 2.0
+        vq_image_ = (255.0 * vq_image_) / 255.0
+        images = model(vq_image_)
 
     model.train()
 
     # Convert to PIL images
+    vq_image = 2.0 * vq_image - 1.0
+    vq_image = torch.clamp(vq_image, -1.0, 1.0)
+    vq_image = (vq_image + 1.0) / 2.0
     vq_image *= 255.0
+    vq_image = torch.clamp(vq_image, 0.0, 255.0)
     vq_image = vq_image.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
 
     images *= 255.0
