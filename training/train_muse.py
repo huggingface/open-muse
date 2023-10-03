@@ -970,7 +970,7 @@ def generate_images(
         vq_model.to(accelerator.device)
     if config.training.is_second_stage_training:
         low_res_model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
-        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained, subfolder="transformer").to(accelerator.device)
+        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained).to(accelerator.device)
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
