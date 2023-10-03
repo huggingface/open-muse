@@ -54,7 +54,7 @@ model:
         vocab_size: 8256
         max_position_embeddings: 256
         hidden_size: 1024
-        num_hidden_layers: 24
+        num_hidden_layers: 16
         num_attention_heads: 16
         intermediate_size: 4096
         add_cross_attention: True
