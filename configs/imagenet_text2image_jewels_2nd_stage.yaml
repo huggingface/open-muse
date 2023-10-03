@@ -9,7 +9,7 @@ experiment:
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
     save_every: 1000
-    eval_every: 1000
+    eval_every: 1000000000000
     generate_every: 1000
     log_every: 50
     log_grad_norm_every: 500
@@ -83,7 +83,7 @@ dataset:
         train_shards_path_or_url: "/p/scratch/ccstdl/muse/muse-imagenet/imagenet-train-{000000..000320}.tar"
         eval_shards_path_or_url: "/p/scratch/ccstdl/muse/muse-imagenet/imagenet-val-{000000..000012}.tar"
         imagenet_class_mapping_path: "/p/scratch/ccstdl/muse/imagenet-class-mapping.json"
-        dataset.params.validation_prompts_file: null
+        validation_prompts_file: null
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
         num_workers: 2
