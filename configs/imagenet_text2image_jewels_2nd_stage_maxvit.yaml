@@ -52,7 +52,7 @@ model:
         attention_dropout: 0.0
         transformer_type: "maxvit"
     low_res_transformer:
-        pretrained: "openMUSE/muse-256"
+        pretrained: "openMUSE/research-run-checkpoint-600000"
         architecture: "uvit"
     adapter_model:
         vocab_size: 8256
