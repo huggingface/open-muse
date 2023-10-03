@@ -495,12 +495,18 @@ def main():
         weight_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
+    logger.info(f"Model has {sum(p.numel() for p in text_encoder.parameters())} parameters")
 
     if not is_pre_encode:
         text_encoder.to(device=accelerator.device, dtype=weight_dtype)
+        logger.info(f"Text encoder has {sum(p.numel() for p in text_encoder.parameters())} parameters")
         vq_model.to(device=accelerator.device)
+        logger.info(f"Vqmodel has {sum(p.numel() for p in vq_model.parameters())} parameters")
+
         if config.training.is_second_stage_training:
             low_res_vq_model.to(device=accelerator.device)
+            logger.info(f"low-res vqmodel has {sum(p.numel() for p in low_res_vq_model.parameters())} parameters")
+
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
 
@@ -829,7 +835,6 @@ def main():
                     if config.training.get("use_ema", False):
                         ema.store(model.parameters())
                         ema.copy_to(model.parameters())
-                    # Do 2nd stage generation of images
                     generate_images(
                         model,
                         vq_model,
@@ -841,6 +846,7 @@ def main():
                         mask_schedule=mask_schedule,
                         empty_embeds=empty_embeds,
                         empty_clip_embeds=empty_clip_embeds,
+                        low_res_vq_model=low_res_vq_model
                     )
 
                     if config.training.get("use_ema", False):
@@ -927,6 +933,7 @@ def generate_images(
     mask_schedule,
     empty_embeds=None,
     empty_clip_embeds=None,
+    low_res_vq_model=None
 ):
     logger.info("Generating images...")
     model.eval()
@@ -961,7 +968,9 @@ def generate_images(
 
         text_encoder.to(device=accelerator.device, dtype=weight_dtype)
         vq_model.to(accelerator.device)
-
+    if config.training.is_second_stage_training:
+        low_res_model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained, subfolder="transformer").to(accelerator.device)
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
@@ -987,22 +996,43 @@ def generate_images(
 
     if config.training.get("pre_encode", False):
         del text_encoder
-
+    # Reformatted to allow big model trainings
+    low_res_gen_token_ids, gen_token_ids = [], []
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
-        gen_token_ids = accelerator.unwrap_model(model).generate2(
-            encoder_hidden_states=encoder_hidden_states,
-            cond_embeds=clip_embeds,
-            empty_embeds=empty_embeds,
-            empty_cond_embeds=empty_clip_embeds,
-            micro_conds=micro_conds,
-            guidance_scale=config.training.guidance_scale,
-            temperature=config.training.get("generation_temperature", 1.0),
-            timesteps=config.training.generation_timesteps,
-            noise_schedule=mask_schedule,
-            noise_type=config.training.get("noise_type", "mask"),
-            predict_all_tokens=config.training.get("predict_all_tokens", False),
-        )
+        for i in range(encoder_hidden_states.shape[0]):
+            low_res_gen_token_id = None
+            if config.training.is_second_stage_training:
+                low_res_gen_token_id = low_res_model.generate2(
+                    encoder_hidden_states=encoder_hidden_states[i][None],
+                    cond_embeds=clip_embeds and clip_embeds[i][None],
+                    empty_embeds=empty_embeds,
+                    empty_cond_embeds=empty_clip_embeds,
+                    micro_conds=micro_conds and micro_conds[i][None],
+                    guidance_scale=config.training.guidance_scale,
+                    temperature=config.training.get("generation_temperature", 1.0),
+                    timesteps=config.training.generation_timesteps,
+                    noise_schedule=mask_schedule,
+                    noise_type=config.training.get("noise_type", "mask"),
+                    predict_all_tokens=config.training.get("predict_all_tokens", False),
+                )
+            gen_token_id = accelerator.unwrap_model(model).generate2(
+                encoder_hidden_states=encoder_hidden_states[i][None],
+                cond_embeds=clip_embeds and clip_embeds[i][None],
+                empty_embeds=empty_embeds,
+                empty_cond_embeds=empty_clip_embeds,
+                micro_conds=micro_conds and micro_conds[i][None],
+                guidance_scale=config.training.guidance_scale,
+                temperature=config.training.get("generation_temperature", 1.0),
+                timesteps=config.training.generation_timesteps,
+                noise_schedule=mask_schedule,
+                noise_type=config.training.get("noise_type", "mask"),
+                predict_all_tokens=config.training.get("predict_all_tokens", False),
+                low_res_input_ids=low_res_gen_token_id
+            )
+            low_res_gen_token_ids.append(low_res_gen_token_id)
+            gen_token_ids.append(gen_token_id)
+    low_res_gen_token_ids, gen_token_ids = torch.cat(low_res_gen_token_ids, dim=0), torch.cat(gen_token_ids, dim=0)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
@@ -1013,16 +1043,23 @@ def generate_images(
         del vq_model
 
     # Convert to PIL images
-    images = 2.0 * images - 1.0
-    images = torch.clamp(images, -1.0, 1.0)
-    images = (images + 1.0) / 2.0
+    images = torch.clamp(images, 0.0, 1.0)
     images *= 255.0
     images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
     pil_images = [Image.fromarray(image) for image in images]
-
+    output_dict = {}
+    output_dict["generated_images"] = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+    if config.training.is_second_stage_training:
+        low_res_gen_token_ids = torch.clamp(gen_token_ids, max=low_res_model.config.codebook_size - 1)
+        low_res_images = low_res_vq_model.decode_code(low_res_gen_token_ids)
+        low_res_images = torch.clamp(low_res_images, 0.0, 1.0)
+        low_res_images *= 255.0
+        low_res_images = low_res_images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+        low_res_pil_images = [Image.fromarray(image) for image in low_res_images]
+        low_res_wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+        output_dict["low_res_generated_images"] = low_res_wandb_images
     # Log images
-    wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
-    wandb.log({"generated_images": wandb_images}, step=global_step)
+    wandb.log(output_dict, step=global_step)
 
 
 def save_checkpoint(model, config, accelerator, global_step):

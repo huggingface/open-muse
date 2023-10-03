@@ -2201,6 +2201,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
         predict_all_tokens=False,
         generator: torch.Generator = None,
         return_intermediate=False,
+        low_res_input_ids=None,
         **kwargs,
     ):
         """
@@ -2293,7 +2294,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
             else:
-                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states)
+                logits = self(input_ids, encoder_hidden_states=encoder_hidden_states, low_res_input_ids=low_res_input_ids)
                 logits = logits[..., : self.config.codebook_size]
 
             # remove class token

@@ -51,6 +51,9 @@ model:
         hidden_dropout: 0.0
         attention_dropout: 0.0
         transformer_type: "maxvit"
+    low_res_transformer:
+        pretrained: "openMUSE/muse-256"
+        architecture: "uvit"
     adapter_model:
         vocab_size: 8256
         max_position_embeddings: 256
@@ -76,7 +79,6 @@ model:
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: False
     offline: True
-
 
 dataset:
     type: "classification"
