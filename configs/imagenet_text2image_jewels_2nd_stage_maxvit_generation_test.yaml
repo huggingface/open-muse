@@ -61,7 +61,7 @@ model:
         num_hidden_layers: 16
         num_attention_heads: 16
         intermediate_size: 4096
-        add_cross_attention: True
+        add_cross_attention: False
         encoder_hidden_size: 1024
         project_encoder_hidden_states: False
         codebook_size: 8192

@@ -774,7 +774,6 @@ def main():
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
-                    print("encoder hidden states is ", encoder_hidden_states)
                     logits, loss = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
