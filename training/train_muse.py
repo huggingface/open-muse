@@ -1052,7 +1052,6 @@ def generate_images(
     low_res_vq_model=None
 ):
     logger.info("Generating images...")
-    print(config.training.is_second_stage_training)
     model.eval()
     # fmt: off
     imagenet_class_names = ['jay', 'castle', 'coffee mug', 'desk', 'Eskimo dog,  husky', 'valley,  vale', 'red wine', 'coral reef', 'mixing bowl', 'cleaver,  meat cleaver,  chopper', 'vine snake', 'bloodhound,  sleuthhound', 'barbershop', 'ski', 'otter', 'snowmobile']
@@ -1159,7 +1158,7 @@ def generate_images(
             gen_token_ids.append(gen_token_id)
     gen_token_ids = torch.cat(gen_token_ids, dim=0)
     if config.training.is_second_stage_training:
-        low_res_gen_token_id = torch.cat(low_res_gen_token_id, dim=0)
+        low_res_gen_token_ids = torch.cat(low_res_gen_token_ids, dim=0)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
