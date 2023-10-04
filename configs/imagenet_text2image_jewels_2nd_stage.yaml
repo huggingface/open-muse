@@ -79,7 +79,7 @@ model:
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: False
     offline: True
-    architecture: "uvit"
+    architecture: "transformer"
 
 
 
