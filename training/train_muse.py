@@ -1052,6 +1052,7 @@ def generate_images(
     low_res_vq_model=None
 ):
     logger.info("Generating images...")
+    print(config.training.is_second_stage_training)
     model.eval()
     # fmt: off
     imagenet_class_names = ['jay', 'castle', 'coffee mug', 'desk', 'Eskimo dog,  husky', 'valley,  vale', 'red wine', 'coral reef', 'mixing bowl', 'cleaver,  meat cleaver,  chopper', 'vine snake', 'bloodhound,  sleuthhound', 'barbershop', 'ski', 'otter', 'snowmobile']
@@ -1116,7 +1117,10 @@ def generate_images(
     if config.training.get("pre_encode", False):
         del text_encoder
     # Reformatted to allow big model trainings
-    low_res_gen_token_ids, gen_token_ids = [], []
+    gen_token_ids = []
+    low_res_gen_token_ids = None
+    if config.training.is_second_stage_training:
+        low_res_gen_token_ids = []
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         for i in range(encoder_hidden_states.shape[0]):
@@ -1135,6 +1139,8 @@ def generate_images(
                     noise_type=config.training.get("noise_type", "mask"),
                     predict_all_tokens=config.training.get("predict_all_tokens", False),
                 )
+                low_res_gen_token_id = torch.clamp(low_res_gen_token_id, max=low_res_model.config.codebook_size - 1)
+                low_res_gen_token_ids.append(low_res_gen_token_id)
             gen_token_id = accelerator.unwrap_model(model).generate2(
                 encoder_hidden_states=encoder_hidden_states[i][None],
                 cond_embeds=clip_embeds and clip_embeds[i][None],
@@ -1150,9 +1156,10 @@ def generate_images(
                 low_res_input_ids=low_res_gen_token_id,
                 seq_len=config.model.transformer.num_vq_tokens,
             )
-            low_res_gen_token_ids.append(low_res_gen_token_id)
             gen_token_ids.append(gen_token_id)
-    low_res_gen_token_ids, gen_token_ids = torch.cat(low_res_gen_token_ids, dim=0), torch.cat(gen_token_ids, dim=0)
+    gen_token_ids = torch.cat(gen_token_ids, dim=0)
+    if config.training.is_second_stage_training:
+        low_res_gen_token_id = torch.cat(low_res_gen_token_id, dim=0)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
@@ -1184,7 +1191,6 @@ def generate_images(
     output_dict = {}
     output_dict["generated_images"] = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
     if config.training.is_second_stage_training:
-        low_res_gen_token_ids = torch.clamp(gen_token_ids, max=low_res_model.config.codebook_size - 1)
         low_res_images = low_res_vq_model.decode_code(low_res_gen_token_ids)
         low_res_images = torch.clamp(low_res_images, 0.0, 1.0)
         low_res_images *= 255.0
