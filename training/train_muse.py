@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import random
+import shutil
 import time
 from functools import partial
 from pathlib import Path
@@ -27,6 +28,7 @@ import numpy as np
 import plotly.express as px
 import torch
 import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 import wandb
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -56,6 +58,7 @@ from muse import (
     VQGANModel,
     get_mask_chedule,
 )
+from muse.modeling_transformer_v2 import MaskGiTUViT_v2
 from muse.lr_schedulers import get_scheduler
 
 try:
@@ -159,8 +162,45 @@ def mask_or_random_replace_tokens(image_tokens, mask_id, config, mask_schedule, 
 
     # creat a random mask for each image
     num_token_masked = (seq_len * mask_prob).round().clamp(min=1)
-    batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
-    mask = batch_randperm < num_token_masked.unsqueeze(-1)
+
+    mask_contiguous_region_prob = config.training.get("mask_contiguous_region_prob", None)
+
+    if mask_contiguous_region_prob is None:
+        mask_contiguous_region = False
+    else:
+        mask_contiguous_region = random.random() < mask_contiguous_region_prob
+
+    if not mask_contiguous_region:
+        batch_randperm = torch.rand(batch_size, seq_len, device=image_tokens.device).argsort(dim=-1)
+        mask = batch_randperm < num_token_masked.unsqueeze(-1)
+    else:
+        resolution = int(seq_len**0.5)
+        mask = torch.zeros((batch_size, resolution, resolution), device=image_tokens.device)
+
+        # TODO - would be nice to vectorize
+        for batch_idx, num_token_masked_ in enumerate(num_token_masked):
+            num_token_masked_ = int(num_token_masked_.item())
+
+            # NOTE: a bit handwavy with the bounds but gets a rectangle of ~num_token_masked_
+            num_token_masked_height = random.randint(
+                math.ceil(num_token_masked_ / resolution), min(resolution, num_token_masked_)
+            )
+            num_token_masked_height = min(num_token_masked_height, resolution)
+
+            num_token_masked_width = math.ceil(num_token_masked_ / num_token_masked_height)
+            num_token_masked_width = min(num_token_masked_width, resolution)
+
+            start_idx_height = random.randint(0, resolution - num_token_masked_height)
+            start_idx_width = random.randint(0, resolution - num_token_masked_width)
+
+            mask[
+                batch_idx,
+                start_idx_height : start_idx_height + num_token_masked_height,
+                start_idx_width : start_idx_width + num_token_masked_width,
+            ] = 1
+
+        mask = mask.reshape(batch_size, seq_len)
+        mask = mask.to(torch.bool)
 
     # mask images and create input and labels
     if config.training.get("noise_type", "mask"):
@@ -223,14 +263,14 @@ def main():
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
         log_with="wandb",
-        logging_dir=config.experiment.logging_dir,
+        project_dir=config.experiment.logging_dir,
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
-        accelerator.state.deepspeed_plugin.deepspeed_config[
-            "train_micro_batch_size_per_gpu"
-        ] = config.training.batch_size
+        accelerator.state.deepspeed_plugin.deepspeed_config["train_micro_batch_size_per_gpu"] = (
+            config.training.batch_size
+        )
 
     #####################################
     # SETUP LOGGING, SEED and CONFIG    #
@@ -320,6 +360,9 @@ def main():
         vq_model = None
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+    if config.model.get("architecture", "transformer") == "uvit_v2":
+        model_cls = MaskGiTUViT_v2
+
     if config.model.get("pretrained_model_path", None) is not None:
         model = model_cls.from_pretrained(config.model.pretrained_model_path)
     else:
@@ -355,7 +398,8 @@ def main():
             del load_model
 
         def save_model_hook(models, weights, output_dir):
-            ema.save_pretrained(os.path.join(output_dir, "ema_model"))
+            if accelerator.is_main_process:
+                ema.save_pretrained(os.path.join(output_dir, "ema_model"))
 
         accelerator.register_load_state_pre_hook(load_model_hook)
         accelerator.register_save_state_pre_hook(save_model_hook)
@@ -472,6 +516,9 @@ def main():
         require_marked_as_ok_by_spawning=dataset_config.get("require_marked_as_ok_by_spawning", False),
         require_marked_as_not_getty=dataset_config.get("require_marked_as_not_getty", False),
         max_pnsfw=dataset_config.get("max_pnsfw", None),
+        max_pwatermark=dataset_config.get("max_pwatermark", 0.5),
+        min_aesthetic_score=dataset_config.get("min_aesthetic_score", 4.75),
+        min_size=dataset_config.get("min_size", 256),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
     print("eval dataloader ", eval_dataloader)
@@ -612,8 +659,21 @@ def main():
                     pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
                 )
             else:
-                image_tokens = vq_model.get_code(pixel_values)
                 soft_targets = None
+
+                if config.training.get("split_vae_encode", False):
+                    split_batch_size = config.training.split_vae_encode
+                    # Use a batch of at most split_vae_encode images to encode and then concat the results
+                    batch_size = pixel_values.shape[0]
+                    num_splits = math.ceil(batch_size / split_batch_size)
+                    image_tokens = []
+                    for i in range(num_splits):
+                        start_idx = i * split_batch_size
+                        end_idx = min((i + 1) * split_batch_size, batch_size)
+                        image_tokens.append(vq_model.get_code(pixel_values[start_idx:end_idx]))
+                    image_tokens = torch.cat(image_tokens, dim=0)
+                else:
+                    image_tokens = vq_model.get_code(pixel_values)
 
         if not is_pre_encode:
             if config.model.transformer.get("add_cond_embeds", False):
@@ -688,14 +748,30 @@ def main():
                 logger.info("Input ids: {}".format(input_ids))
                 logger.info("Labels: {}".format(labels))
 
+            if config.training.cond_dropout_prob > 0.0:
+                assert encoder_hidden_states is not None
+
+                batch_size = encoder_hidden_states.shape[0]
+
+                mask = (
+                    torch.zeros((batch_size, 1, 1), device=encoder_hidden_states.device).float().uniform_(0, 1)
+                    < config.training.cond_dropout_prob
+                )
+
+                empty_embeds_ = empty_embeds.expand(batch_size, -1, -1)
+                encoder_hidden_states = torch.where(
+                    (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds_
+                )
+
+                empty_clip_embeds_ = empty_clip_embeds.expand(batch_size, -1)
+                cond_embeds = torch.where((clip_embeds * mask.squeeze(-1)).bool(), clip_embeds, empty_clip_embeds_)
+
             # Train Step
             with accelerator.accumulate(model):
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
                         encoder_hidden_states=encoder_hidden_states,
-                        cond_dropout_prob=config.training.cond_dropout_prob,
-                        **additional_args
                     )
                     loss = soft_target_cross_entropy(logits, labels, soft_targets)
                 else:
@@ -704,11 +780,8 @@ def main():
                         encoder_hidden_states=encoder_hidden_states,
                         labels=labels,
                         label_smoothing=config.training.label_smoothing,
-                        cond_dropout_prob=config.training.cond_dropout_prob,
-                        cond_embeds=clip_embeds,
+                        cond_embeds=cond_embeds,
                         loss_weight=loss_weight,
-                        empty_embeds=empty_embeds,
-                        empty_cond_embeds=empty_clip_embeds,
                         micro_conds=micro_conds,
                         **additional_args
                     )
@@ -822,7 +895,12 @@ def main():
                         ema.copy_to(model.parameters())
 
                     validate_model(
-                        model, eval_dataloader, accelerator, global_step + 1, prepare_inputs_and_labels, empty_embeds
+                        model,
+                        eval_dataloader,
+                        accelerator,
+                        global_step + 1,
+                        prepare_inputs_and_labels,
+                        config.experiment.get("max_eval_examples", None),
                     )
 
                     if config.training.get("use_ema", False):
@@ -849,6 +927,19 @@ def main():
                         low_res_vq_model=low_res_vq_model
                     )
 
+                    generate_inpainting_images(
+                        model,
+                        vq_model,
+                        text_encoder,
+                        tokenizer,
+                        accelerator,
+                        config,
+                        global_step + 1,
+                        mask_schedule=mask_schedule,
+                        empty_embeds=empty_embeds,
+                        empty_clip_embeds=empty_clip_embeds,
+                    )
+
                     if config.training.get("use_ema", False):
                         # Switch back to the original model parameters for training.
                         ema.restore(model.parameters())
@@ -865,7 +956,16 @@ def main():
 
     # Evaluate and save checkpoint at the end of training
     if accelerator.is_main_process:
-        validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, prepare_low_res_image_tokens, is_second_stage_training=config.training.is_second_stage_training)
+        validate_model(
+            model,
+            eval_dataloader,
+            accelerator,
+            global_step,
+            prepare_inputs_and_labels,
+            prepare_low_res_image_tokens,
+            config.experiment.get("max_eval_examples", None),
+            is_second_stage_training=config.training.is_second_stage_training
+        )
     save_checkpoint(model, config, accelerator, global_step)
 
     # Save the final trained checkpoint
@@ -879,11 +979,23 @@ def main():
 
 
 @torch.no_grad()
-def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inputs_and_labels, prepare_low_res_image_tokens, empty_embeds=None, is_second_stage_training=False):
+def validate_model(
+    model,
+    eval_dataloader,
+    accelerator,
+    global_step,
+    prepare_inputs_and_labels,
+    prepare_low_res_image_tokens,
+    max_eval_examples=None,
+    is_second_stage_training=False
+):
     logger.info("Evaluating...")
     model.eval()
     eval_loss = 0
     now = time.time()
+
+    samples_taken = 0
+
     for i, batch in enumerate(eval_dataloader):
         pixel_values, input_ids = batch["image"], batch["input_ids"]
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
@@ -908,11 +1020,16 @@ def validate_model(model, eval_dataloader, accelerator, global_step, prepare_inp
             labels=labels,
             cond_embeds=clip_embeds,
             loss_weight=loss_weight,
-            empty_embeds=empty_embeds,
             micro_conds=micro_conds,
             **additional_args
         )
         eval_loss += loss.mean()
+
+        samples_taken += input_ids.shape[0]
+
+        if max_eval_examples is not None and samples_taken >= max_eval_examples:
+            break
+
     eval_loss = eval_loss / (i + 1)
     eval_time = time.time() - now
 
@@ -969,7 +1086,9 @@ def generate_images(
         text_encoder.to(device=accelerator.device, dtype=weight_dtype)
         vq_model.to(accelerator.device)
     if config.training.is_second_stage_training:
-        low_res_model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+        low_res_model_cls = MaskGitTransformer if config.model.low_res_transformer.get("architecture", "transformer") == "transformer" else MaskGiTUViT
+        if config.model.low_res_transformer.get("architecture", "transformer") == "uvit_v2":
+            low_res_model_cls = MaskGiTUViT_v2
         low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained).to(accelerator.device)
     input_ids = tokenizer(
         validation_prompts,
@@ -1028,7 +1147,8 @@ def generate_images(
                 noise_schedule=mask_schedule,
                 noise_type=config.training.get("noise_type", "mask"),
                 predict_all_tokens=config.training.get("predict_all_tokens", False),
-                low_res_input_ids=low_res_gen_token_id
+                low_res_input_ids=low_res_gen_token_id,
+                seq_len=config.model.transformer.num_vq_tokens,
             )
             low_res_gen_token_ids.append(low_res_gen_token_id)
             gen_token_ids.append(gen_token_id)
@@ -1036,7 +1156,20 @@ def generate_images(
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
-    images = vq_model.decode_code(gen_token_ids)
+    if config.training.get("split_vae_encode", False):
+        split_batch_size = config.training.split_vae_encode
+        # Use a batch of at most split_vae_encode images to encode and then concat the results
+        batch_size = gen_token_ids.shape[0]
+        num_splits = math.ceil(batch_size / split_batch_size)
+        images = []
+        for i in range(num_splits):
+            start_idx = i * split_batch_size
+            end_idx = min((i + 1) * split_batch_size, batch_size)
+            images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+        images = torch.cat(images, dim=0)
+    else:
+        images = vq_model.decode_code(gen_token_ids)
+    
     model.train()
 
     if config.training.get("pre_encode", False):
@@ -1062,8 +1195,176 @@ def generate_images(
     wandb.log(output_dict, step=global_step)
 
 
+@torch.no_grad()
+def generate_inpainting_images(
+    model,
+    vq_model,
+    text_encoder,
+    tokenizer,
+    accelerator,
+    config,
+    global_step,
+    mask_schedule,
+    empty_embeds=None,
+    empty_clip_embeds=None,
+):
+    assert not config.training.get("pre_encode", False)
+
+    model.eval()
+
+    mask_token_id = config.model.transformer.vocab_size - 1
+
+    validation_prompts, validation_images, validation_masks = inpainting_validation_data()
+
+    validation_masks = validation_masks_to_latent_tensors(validation_masks).to(accelerator.device)
+
+    validation_images = torch.stack([TF.to_tensor(x) for x in validation_images])
+    validation_images = validation_images.to(accelerator.device)
+    _, validation_images = vq_model.encode(validation_images)
+    validation_images[validation_masks] = mask_token_id
+
+    token_input_ids = tokenizer(
+        validation_prompts,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=config.dataset.preprocessing.max_seq_length,
+    ).input_ids
+
+    if config.model.transformer.get("add_cond_embeds", False):
+        outputs = text_encoder(token_input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
+        encoder_hidden_states = outputs.hidden_states[-2]
+        clip_embeds = outputs[0]
+    else:
+        encoder_hidden_states = text_encoder(token_input_ids.to(accelerator.device)).last_hidden_state
+        clip_embeds = None
+
+    if config.model.transformer.get("add_micro_cond_embeds", False):
+        resolution = config.dataset.preprocessing.resolution
+        micro_conds = torch.tensor(
+            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
+        )
+        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
+
+    with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
+        # Generate images
+        gen_token_ids = accelerator.unwrap_model(model).generate2(
+            input_ids=validation_images,
+            encoder_hidden_states=encoder_hidden_states,
+            cond_embeds=clip_embeds,
+            empty_embeds=empty_embeds,
+            empty_cond_embeds=empty_clip_embeds,
+            micro_conds=micro_conds,
+            guidance_scale=config.training.guidance_scale,
+            temperature=config.training.get("generation_temperature", 1.0),
+            timesteps=config.training.generation_timesteps,
+            noise_schedule=mask_schedule,
+            noise_type=config.training.get("noise_type", "mask"),
+            predict_all_tokens=config.training.get("predict_all_tokens", False),
+        )
+    # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
+    # so we clamp them to the correct range.
+    gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
+
+    if config.training.get("split_vae_encode", False):
+        split_batch_size = config.training.split_vae_encode
+        # Use a batch of at most split_vae_encode images to decode and then concat the results
+        batch_size = gen_token_ids.shape[0]
+        num_splits = math.ceil(batch_size / split_batch_size)
+        images = []
+        for i in range(num_splits):
+            start_idx = i * split_batch_size
+            end_idx = min((i + 1) * split_batch_size, batch_size)
+            images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
+        images = torch.cat(images, dim=0)
+    else:
+        images = vq_model.decode_code(gen_token_ids)
+
+    # Convert to PIL images
+    images = 2.0 * images - 1.0
+    images = torch.clamp(images, -1.0, 1.0)
+    images = (images + 1.0) / 2.0
+    images *= 255.0
+    images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
+    pil_images = [Image.fromarray(image) for image in images]
+
+    # Log images
+    wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+    wandb.log({"generated_inpainting_images": wandb_images}, step=global_step)
+
+    model.train()
+
+
+def inpainting_validation_data():
+    validation_prompts = []
+    validation_images = []
+    validation_masks = []
+
+    for folder_name in os.listdir("./inpainting_validation"):
+        validation_prompts.append(folder_name)
+
+        image = None
+        mask = None
+
+        for file_name in os.listdir(f"./inpainting_validation/{folder_name}"):
+            if file_name.startswith("image"):
+                image = Image.open(f"./inpainting_validation/{folder_name}/{file_name}")
+
+            if file_name.startswith("mask"):
+                mask = Image.open(f"./inpainting_validation/{folder_name}/{file_name}").convert("L")
+
+        assert image is not None, f"could not find inpainting validation image under {folder_name}"
+        assert mask is not None, f"could not find inpainting validation mask under {folder_name}"
+
+        validation_images.append(image)
+        validation_masks.append(mask)
+
+    return validation_prompts, validation_images, validation_masks
+
+
+def validation_masks_to_latent_tensors(validation_masks):
+    validation_masks_ = []
+
+    for mask in validation_masks:
+        mask = mask.resize((mask.height // 16, mask.width // 16))
+        mask = np.array(mask)
+        mask = mask / 255
+        mask[mask < 0.5] = 0
+        mask[mask >= 0.5] = 1
+        mask = mask.reshape(-1)
+        mask = mask.astype(np.bool)
+        validation_masks_.append(mask)
+
+    validation_masks_ = np.stack(validation_masks_)
+
+    return torch.from_numpy(validation_masks_)
+
+
 def save_checkpoint(model, config, accelerator, global_step):
-    save_path = Path(config.experiment.output_dir) / f"checkpoint-{global_step}"
+    output_dir = config.experiment.output_dir
+    checkpoints_total_limit = config.experiment.get("checkpoints_total_limit", None)
+
+    # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+    if accelerator.is_main_process and checkpoints_total_limit is not None:
+        checkpoints = os.listdir(output_dir)
+        checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+        checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+
+        # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+        if len(checkpoints) >= checkpoints_total_limit:
+            num_to_remove = len(checkpoints) - checkpoints_total_limit + 1
+            removing_checkpoints = checkpoints[0:num_to_remove]
+
+            logger.info(
+                f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+            )
+            logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+
+            for removing_checkpoint in removing_checkpoints:
+                removing_checkpoint = os.path.join(output_dir, removing_checkpoint)
+                shutil.rmtree(removing_checkpoint)
+
+    save_path = Path(output_dir) / f"checkpoint-{global_step}"
 
     # retrieve the model on all processes for deepspeed stage 3 to work then save on one process (we are not using stage 3 yet)
     # XXX: could also make this conditional on deepspeed
@@ -1080,6 +1381,7 @@ def save_checkpoint(model, config, accelerator, global_step):
         logger.info(f"Saved state to {save_path}")
 
     accelerator.save_state(save_path)
+    logger.info(f"Saved state to {save_path}")
 
 
 def log_grad_norm(model, accelerator, global_step):

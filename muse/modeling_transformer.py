@@ -27,7 +27,8 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 from tqdm import tqdm
 
-from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
+from .modeling_transformer_v2 import MaskGiTUViT_v2
+from .modeling_utils import ConfigMixin, ModelMixin, register_to_config, TransformerAdapterMixin
 from .sampling import cosine_schedule, gumbel_sample, mask_by_random_topk, top_k
 
 try:
@@ -36,6 +37,8 @@ try:
     is_xformers_available = True
 except ImportError:
     is_xformers_available = False
+
+MaskGiTUViT = MaskGiTUViT_v2
 
 
 # classifier free guidance functions
@@ -1204,12 +1207,6 @@ class ConvMlmLayer(nn.Module):
         logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
         return logits
 
-class TransformerAdapterMixin:
-    def __init__(self):
-        self.adapter = None
-    def add_adapter(self, adapter):
-        self.adapter = adapter
-
 class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
     _supports_gradient_checkpointing = True
 
@@ -1595,7 +1592,6 @@ class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             input_ids = torch.where(masking, mask_token_id, sampled_ids)
 
         return sampled_ids
-
 
 class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
     _supports_gradient_checkpointing = True

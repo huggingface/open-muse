@@ -1168,3 +1168,9 @@ def register_to_config(init):
         init(self, *args, **init_kwargs)
 
     return inner_init
+
+class TransformerAdapterMixin:
+    def __init__(self):
+        self.adapter = None
+    def add_adapter(self, adapter):
+        self.adapter = adapter
