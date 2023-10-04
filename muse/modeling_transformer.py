@@ -1656,6 +1656,8 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
         self.use_projection = block_out_channels[-1] != hidden_size
         self.register_to_config(mask_token_id=vocab_size - 1)
         self.register_to_config(block_out_channels=tuple(block_out_channels))
+        self.register_to_config(use_empty_embeds_for_uncond=use_empty_embeds_for_uncond)
+
 
         norm_cls = partial(LayerNorm, use_bias=use_bias) if norm_type == "layernorm" else RMSNorm
         transformer_cls = TransformerLayer if transformer_type == "default" else MaxVitTransformerLayer
