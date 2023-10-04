@@ -27,6 +27,7 @@ model:
         pretrained: "openMUSE/clip-vit-large-patch14-text-enc"
         pad_token_id: 49407
     low_res_vq_model:
+        pretrained: "openMUSE/vqgan-f16-8192-laion"
         type: "vqgan"
     transformer:
         vocab_size: 16392
@@ -51,8 +52,8 @@ model:
         hidden_dropout: 0.0
         attention_dropout: 0.0
     low_res_transformer:
-        pretrained: "openMUSE/muse-256"
-        architecture: "uvit_v2"
+        pretrained: "openMUSE/research-run-checkpoint-600000"
+        architecture: "uvit"
 
     adapter_model:
         vocab_size: 1024
