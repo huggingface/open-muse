@@ -54,6 +54,7 @@ model:
         transformer_type: "maxvit"
     low_res_transformer:
         pretrained: "openMUSE/research-run-checkpoint-600000"
+        use_empty_embeds_for_uncond: false
         architecture: "uvit"
     adapter_model:
         vocab_size: 1024
