@@ -1376,7 +1376,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             if low_res_input_ids is not None:
                 assert self.adapter is not None
                 low_res_hidden_states = self.adapter(low_res_input_ids)
-                encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=-1)
+                encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=1)
 
         # condition dropout for classifier free guidance
         if encoder_hidden_states is not None and self.training and cond_dropout_prob > 0.0:
@@ -1947,7 +1947,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             if low_res_input_ids is not None:
                 assert self.adapter is not None
                 low_res_hidden_states = self.adapter(low_res_input_ids)
-                encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=-1)
+                encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=1)
 
         if self.config.add_micro_cond_embeds:
             micro_cond_embeds = sinusoidal_enocde(micro_conds.flatten(), self.config.micro_cond_encode_dim)

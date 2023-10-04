@@ -255,8 +255,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin, TransformerAdapterMixin):
         if low_res_input_ids is not None:
             assert self.adapter is not None
             low_res_hidden_states = self.adapter(low_res_input_ids)
-            print(low_res_input_ids.shape, encoder_hidden_states.shape, low_res_hidden_states.shape)
-            encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=-1)
+            encoder_hidden_states = torch.concat([encoder_hidden_states, low_res_hidden_states], dim=1)
 
         micro_cond_embeds = sinusoidal_encode(micro_conds.flatten(), self.config.micro_cond_encode_dim)
         micro_cond_embeds = micro_cond_embeds.reshape((input_ids.shape[0], -1))
