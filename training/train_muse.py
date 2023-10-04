@@ -925,19 +925,20 @@ def main():
                         empty_clip_embeds=empty_clip_embeds,
                         low_res_vq_model=low_res_vq_model
                     )
-
-                    generate_inpainting_images(
-                        model,
-                        vq_model,
-                        text_encoder,
-                        tokenizer,
-                        accelerator,
-                        config,
-                        global_step + 1,
-                        mask_schedule=mask_schedule,
-                        empty_embeds=empty_embeds,
-                        empty_clip_embeds=empty_clip_embeds,
-                    )
+                    # TODO: Support inpainting generation for second stage training
+                    if not config.training.is_second_stage_training:
+                        generate_inpainting_images(
+                            model,
+                            vq_model,
+                            text_encoder,
+                            tokenizer,
+                            accelerator,
+                            config,
+                            global_step + 1,
+                            mask_schedule=mask_schedule,
+                            empty_embeds=empty_embeds,
+                            empty_clip_embeds=empty_clip_embeds,
+                        )
 
                     if config.training.get("use_ema", False):
                         # Switch back to the original model parameters for training.
