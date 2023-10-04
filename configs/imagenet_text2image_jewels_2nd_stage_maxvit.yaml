@@ -134,8 +134,8 @@ training:
     min_masking_rate: 0.0
     label_smoothing: 0.0
     max_grad_norm: null
-    guidance_scale: 2.0
-    generation_timesteps: 4
+    guidance_scale: 4.0
+    generation_timesteps: 12
     # related to vae code sampling
     use_soft_code_target: False
     use_stochastic_code: False
