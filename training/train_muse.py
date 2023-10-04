@@ -1088,7 +1088,8 @@ def generate_images(
         low_res_model_cls = MaskGitTransformer if config.model.low_res_transformer.get("architecture", "transformer") == "transformer" else MaskGiTUViT
         if config.model.low_res_transformer.get("architecture", "transformer") == "uvit_v2":
             low_res_model_cls = MaskGiTUViT_v2
-        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained, use_empty_embeds_for_uncond=config.model.low_res_transformer.get("use_empty_embeds_for_uncond", True)).to(accelerator.device)
+        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained).to(accelerator.device)
+        low_res_model.config.use_empty_embeds_for_uncond=config.model.low_res_transformer.get("use_empty_embeds_for_uncond", True)
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
