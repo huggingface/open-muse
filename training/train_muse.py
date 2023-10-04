@@ -1338,7 +1338,7 @@ def validation_masks_to_latent_tensors(validation_masks):
         mask[mask < 0.5] = 0
         mask[mask >= 0.5] = 1
         mask = mask.reshape(-1)
-        mask = mask.astype(np.bool)
+        mask = mask.astype(bool)
         validation_masks_.append(mask)
 
     validation_masks_ = np.stack(validation_masks_)
