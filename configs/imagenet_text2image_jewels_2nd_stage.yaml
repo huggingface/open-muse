@@ -99,7 +99,7 @@ dataset:
         pin_memory: True
         persistent_workers: True
     preprocessing:
-        max_seq_length: 16
+        max_seq_length: 77
         resolution: 256
         center_crop: True
         random_flip: False

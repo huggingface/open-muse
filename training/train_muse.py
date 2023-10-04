@@ -1176,7 +1176,6 @@ def generate_images(
         images = torch.cat(images, dim=0)
     else:
         images = vq_model.decode_code(gen_token_ids)
-    
     model.train()
 
     if config.training.get("pre_encode", False):
@@ -1196,7 +1195,7 @@ def generate_images(
         low_res_images *= 255.0
         low_res_images = low_res_images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
         low_res_pil_images = [Image.fromarray(image) for image in low_res_images]
-        low_res_wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
+        low_res_wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(low_res_pil_images)]
         output_dict["low_res_generated_images"] = low_res_wandb_images
     # Log images
     wandb.log(output_dict, step=global_step)
