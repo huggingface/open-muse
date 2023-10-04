@@ -747,7 +747,7 @@ def main():
             if global_step == 0 and epoch == 0:
                 logger.info("Input ids: {}".format(input_ids))
                 logger.info("Labels: {}".format(labels))
-
+            cond_embeds = None
             if config.training.cond_dropout_prob > 0.0:
                 assert encoder_hidden_states is not None
 
