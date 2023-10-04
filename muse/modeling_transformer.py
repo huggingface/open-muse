@@ -1125,7 +1125,7 @@ class ConvEmbed(nn.Module):
         ln_elementwise_affine=True,
         layer_norm_embeddings=False,
         layer_norm_eps=1e-5,
-        use_position_embeddings=True,
+        use_position_embeddings=False,
         use_bias=False,
     ):
         super().__init__()
