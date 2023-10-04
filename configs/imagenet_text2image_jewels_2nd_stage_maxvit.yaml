@@ -122,13 +122,13 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 64
+    gradient_accumulation_steps: 1
     batch_size: 2
     mixed_precision: "no"
     enable_tf32: True
     use_ema: False
     seed: 9345104
-    max_train_steps: 200000
+    max_train_steps: 600000
     overfit_one_batch: False
     cond_dropout_prob: 0.0
     min_masking_rate: 0.0
