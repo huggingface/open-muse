@@ -349,7 +349,7 @@ def main():
         vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
         if config.training.is_second_stage_training:
             low_res_vq_class = get_vq_model_class(config.model.low_res_vq_model.type)
-            low_res_vq_model = low_res_vq_class.from_pretrained(config.model.low_res_vq_model.pretrained)
+            low_res_vq_model = low_res_vq_class.from_pretrained(config.model.low_res_transformer.pretrained, subfolder="vae")
             low_res_vq_model.requires_grad_(False)
         # Freeze the text model and VQGAN
         text_encoder.requires_grad_(False)
@@ -757,7 +757,6 @@ def main():
                     torch.zeros((batch_size, 1, 1), device=encoder_hidden_states.device).float().uniform_(0, 1)
                     < config.training.cond_dropout_prob
                 )
-
                 empty_embeds_ = empty_embeds.expand(batch_size, -1, -1)
                 encoder_hidden_states = torch.where(
                     (encoder_hidden_states * mask).bool(), encoder_hidden_states, empty_embeds_
@@ -1089,7 +1088,7 @@ def generate_images(
         low_res_model_cls = MaskGitTransformer if config.model.low_res_transformer.get("architecture", "transformer") == "transformer" else MaskGiTUViT
         if config.model.low_res_transformer.get("architecture", "transformer") == "uvit_v2":
             low_res_model_cls = MaskGiTUViT_v2
-        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained).to(accelerator.device)
+        low_res_model = low_res_model_cls.from_pretrained(config.model.low_res_transformer.pretrained, subfolder="transformer").to(accelerator.device)
     input_ids = tokenizer(
         validation_prompts,
         return_tensors="pt",
