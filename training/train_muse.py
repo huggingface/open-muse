@@ -1150,6 +1150,7 @@ def generate_images(
                     predict_all_tokens=config.training.get("predict_all_tokens", False),
                 )
                 low_res_gen_token_id = torch.clamp(low_res_gen_token_id, max=low_res_model.config.codebook_size - 1)
+                print(low_res_gen_token_id.shape)
                 low_res_gen_token_ids.append(low_res_gen_token_id)
             gen_token_id = accelerator.unwrap_model(model).generate2(
                 encoder_hidden_states=encoder_hidden_states[i][None],
