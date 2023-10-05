@@ -521,7 +521,6 @@ def main():
         min_size=dataset_config.get("min_size", 256),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
-    print("eval dataloader ", eval_dataloader)
     lr_scheduler = get_scheduler(
         config.lr_scheduler.scheduler,
         optimizer=optimizer,
@@ -1126,16 +1125,6 @@ def generate_images(
         for i in range(encoder_hidden_states.shape[0]):
             low_res_gen_token_id = None
             if config.training.is_second_stage_training:
-                print(encoder_hidden_states[i][None].shape,clip_embeds and clip_embeds[i][None],empty_embeds,
-                    empty_clip_embeds,
-                    micro_conds and micro_conds[i][None],
-                    config.training.guidance_scale,
-                    config.training.get("generation_temperature", 1.0),
-                    config.training.generation_timesteps,
-                    mask_schedule,
-                    config.training.get("noise_type", "mask"),
-                    config.training.get("predict_all_tokens", False),
-                )
                 low_res_gen_token_id = low_res_model.generate2(
                     encoder_hidden_states=encoder_hidden_states[i][None],
                     cond_embeds=clip_embeds and clip_embeds[i][None],
@@ -1150,7 +1139,6 @@ def generate_images(
                     predict_all_tokens=config.training.get("predict_all_tokens", False),
                 )
                 low_res_gen_token_id = torch.clamp(low_res_gen_token_id, max=low_res_model.config.codebook_size - 1)
-                print(low_res_gen_token_id.shape)
                 low_res_gen_token_ids.append(low_res_gen_token_id)
             gen_token_id = accelerator.unwrap_model(model).generate2(
                 encoder_hidden_states=encoder_hidden_states[i][None],
