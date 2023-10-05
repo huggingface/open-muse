@@ -12,7 +12,7 @@
 
 set -x -e
 
-source /p/scratch/ccstdl/muse/miniconda3/etc/profile.d/conda.sh
+source /p/scratch/ccstdl/muse/minconda3/etc/profile.d/conda.sh
 conda activate muse
 
 echo "START TIME: $(date)"
