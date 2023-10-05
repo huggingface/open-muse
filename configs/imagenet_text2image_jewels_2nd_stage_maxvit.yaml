@@ -24,8 +24,7 @@ model:
         type: "movq"
     text_encoder:
         type: "clip"
-        pretrained: "openMUSE/clip-vit-large-patch14-text-enc"
-        pad_token_id: 49407
+        pretrained: "openMUSE/CLIP-ViT-L-14-DataComp.XL-s13B-b90K-penultimate"
     low_res_vq_model:
         pretrained: "openMUSE/muse-laiona6-uvit-clip-220k"
         type: "vqgan"
