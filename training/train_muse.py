@@ -302,6 +302,7 @@ def main():
             id=run_id,
             resume=resume_wandb_run,
             entity=config.wandb.get("entity", None),
+            mode=config.wandb.get("mode", None),
             config_exclude_keys=[],
         )
         wandb_config = {k: v for k, v in flatten_omega_conf(config, resolve=True)}
