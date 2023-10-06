@@ -503,6 +503,7 @@ def main():
         max_pwatermark=dataset_config.get("max_pwatermark", 0.5),
         min_aesthetic_score=dataset_config.get("min_aesthetic_score", 4.75),
         min_size=dataset_config.get("min_size", 256),
+        is_sdxl_synthetic_dataset=dataset_config.get("is_sdxl_synthetic_dataset", False),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
@@ -1251,7 +1252,7 @@ def validation_masks_to_latent_tensors(validation_masks):
         mask[mask < 0.5] = 0
         mask[mask >= 0.5] = 1
         mask = mask.reshape(-1)
-        mask = mask.astype(np.bool)
+        mask = mask.astype(bool)
         validation_masks_.append(mask)
 
     validation_masks_ = np.stack(validation_masks_)

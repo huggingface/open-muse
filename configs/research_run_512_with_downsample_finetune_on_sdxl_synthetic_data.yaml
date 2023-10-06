@@ -1,0 +1,134 @@
+wandb:
+  entity: williamberman
+
+experiment:
+    project: "muse"
+    name: "research-run-512-with-downsample-finetune-on-sdxl-synthetic-data"
+    output_dir: "/fsx/william/research-run-512-with-downsample-finetune-on-sdxl-synthetic-data"
+    max_train_examples: 1000000000
+    max_eval_examples: 5000
+    save_every: 2000
+    eval_every: 1000
+    generate_every: 1000
+    log_every: 50
+    log_grad_norm_every: 500
+    resume_from_checkpoint: latest
+    resume_lr_scheduler: True
+    checkpoints_total_limit: 10
+
+model:
+    vq_model:
+        type: "vqgan"
+        pretrained: "openMUSE/vqgan-f16-8192-laion"
+    
+    text_encoder:
+        type: "clip"
+        pretrained: "openMUSE/clip-vit-large-patch14-text-enc"
+        pad_token_id: 49407
+    
+    architecture: "uvit"
+
+    transformer:
+        vocab_size: 8256 # (8192 + 1 for <mask> = 8193 but 8256 is the next multiple of 8)
+        hidden_size: 1024
+        intermediate_size: 2816
+        num_hidden_layers: 22
+        num_attention_heads: 16
+        in_channels: 768
+        block_out_channels:
+            - 768
+        block_has_attention:
+            - True
+        block_num_heads: 12
+        num_res_blocks: 3
+        res_ffn_factor: 4
+        patch_size: 1
+        encoder_hidden_size: 768
+        add_cross_attention: True
+        project_encoder_hidden_states: True
+        codebook_size: 8192
+        num_vq_tokens: 1024
+        initializer_range: 0.02
+        norm_type: "rmsnorm"
+        layer_norm_eps: 1e-6
+        ln_elementwise_affine: True
+        use_encoder_layernorm: False
+        use_bias: False
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
+        use_codebook_size_for_output: True
+        use_empty_embeds_for_uncond: True
+        add_cond_embeds: True
+        cond_embed_dim: 768
+        add_micro_cond_embeds: True
+        micro_cond_encode_dim: 256
+        micro_cond_embed_dim: 1280
+        force_down_up_sample: True
+
+    gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: True
+    pretrained_model_path: "/fsx/william/research-run-512-checkpoints/research-run-512-with-downsample-checkpoint-554000/unwrapped_model"
+
+
+dataset:
+    type: "text2image"
+    params:
+        train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/sdxl-synthetic-dataset/{0..32}/{00000..00019}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/coco/2014/val/{00000..00010}.tar -"
+        validation_prompts_file: "validation_prompts/dalle_mini_prompts.txt"
+        batch_size: ${training.batch_size}
+        shuffle_buffer_size: 1000
+        num_workers: 4
+        resolution: 512
+        pin_memory: True
+        persistent_workers: True
+        use_filtered_dataset: False
+        is_sdxl_synthetic_dataset: True
+    preprocessing:
+        max_seq_length: 77
+        resolution: 512
+        center_crop: False
+        random_flip: False
+
+
+optimizer:
+    name: fused_adamw
+    params: # default adamw params
+        learning_rate: 1e-4
+        scale_lr: False # scale learning rate by total batch size
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.01
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "constant_with_warmup"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 2000
+
+
+training:
+    gradient_accumulation_steps: 1
+    batch_size: 64
+    mixed_precision: "fp16"
+    enable_tf32: True
+    use_ema: True
+    ema_decay: 0.9999
+    ema_update_after_step: 0
+    ema_update_every: 1
+    seed: 9345104
+    max_train_steps: 1000000
+    overfit_one_batch: False
+    cond_dropout_prob: 0.1
+    min_masking_rate: 0.0
+    label_smoothing: 0.1
+    max_grad_norm: null
+    guidance_scale: 8
+    generation_timesteps: 16
+    # related to vae code sampling
+    use_soft_code_target: False
+    use_stochastic_code: False
+    soft_code_temp: 1.0
+    mask_contiguous_region_prob: 0.15

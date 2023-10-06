@@ -408,6 +408,36 @@ class WebdatasetSelect:
 
         return True
 
+def sdxl_synthetic_dataset_map(sample):
+    clip_scores = sample['clip_scores.txt'].decode('utf-8')
+    clip_scores = clip_scores.split(',')
+    clip_scores = [float(x) for x in clip_scores]
+
+    index_of_max = 0
+
+    for i in range(1, len(clip_scores)):
+        if clip_scores[i] > clip_scores[index_of_max]:
+            index_of_max = i
+
+    key_of_best_clip_score_image = f"{index_of_max}.png"
+
+    if key_of_best_clip_score_image not in sample:
+        raise ValueError(f"{key_of_best_clip_score_image} was not found in sample. The dataset should have files <sample key>.<x>.png where <x> coresponds to an index of the clip scores in clip_scores.txt")
+
+    return {
+        "__key__": sample["__key__"],
+        "__url__": sample["__url__"],
+        "txt": sample["txt"],
+        "png": sample[key_of_best_clip_score_image], # only include the image with the best clip score
+
+        # For other datasets, we rely on the following for micro conditioning.
+        # The original height and width are known because we create the dataset with
+        # sdxl. The laion aesthetic score of 5 seems like a reasonable approximation
+        # NOTE: we unfortunately have to serialize and encode the json so it looks like
+        # it was read out of a file since wds decoders will need to decode it. There
+        # is probably some way to avoid this but it is not obvious with the wds apis.
+        "json": json.dumps({"aesthetic": 5, "original_width": 1024, "original_height": 1024 }).encode(),
+    }
 
 class Text2ImageDataset:
     def __init__(
@@ -436,6 +466,7 @@ class Text2ImageDataset:
         max_pwatermark: Optional[float] = 0.5,
         min_aesthetic_score: Optional[float] = 4.75,
         min_size: Optional[int] = 256,
+        is_sdxl_synthetic_dataset: bool=False
     ):
         yaml_serialized_shard_paths = [
             "m4_shards",
@@ -497,6 +528,11 @@ class Text2ImageDataset:
                 wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
+        if is_sdxl_synthetic_dataset:
+            map = wds.map(sdxl_synthetic_dataset_map)
+        else:
+            map = None
+
         if use_filtered_dataset:
             select = wds.select(
                 WebdatasetSelect(
@@ -516,6 +552,7 @@ class Text2ImageDataset:
             wds.ResampledShards(train_shards_path_or_url),
             tarfile_to_samples_nothrow,
             *([select] if select is not None else []),
+            *([map] if map is not None else []),
             wds.shuffle(shuffle_buffer_size),
             *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
