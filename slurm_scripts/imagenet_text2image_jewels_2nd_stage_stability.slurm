@@ -7,6 +7,7 @@
 #SBATCH --exclusive
 #SBATCH --partition=g40x
 #SBATCH --output=/admin/home-isamu/output_muse/%x-%j.out
+#SBATCH -A laion
 
 set -x -e
 source /admin/home-isamu/muse/bin/activate

@@ -7,7 +7,7 @@
 #SBATCH --exclusive
 #SBATCH -A cstdl
 #SBATCH --partition booster
-#SBATCH --output=/p/scratch/ccstdl/muse/isamu/%x-%j.out
+#SBATCH --output=/p/scratch/ccstdl/muse/isamu/home/%x-%j.out
 #SBATCH --time=6:00:00
 
 set -x -e
@@ -17,8 +17,8 @@ conda activate muse
 
 echo "START TIME: $(date)"
 
-MUSE_REPO=/p/scratch/ccstdl/muse/isamu/open-muse
-OUTPUT_DIR=/p/scratch/ccstdl/muse/isamu/muse
+MUSE_REPO=/p/scratch/ccstdl/muse/isamu/home/open-muse
+OUTPUT_DIR=/p/scratch/ccstdl/muse/isamu/home/muse
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
