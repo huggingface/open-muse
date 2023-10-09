@@ -6,9 +6,9 @@
 #SBATCH --gres=gpu:4
 #SBATCH --exclusive
 #SBATCH -A cstdl
-#SBATCH --partition booster
+#SBATCH --partition develbooster
 #SBATCH --output=/p/scratch/ccstdl/muse/isamu/home/%x-%j.out
-#SBATCH --time=6:00:00
+#SBATCH --time=0:30:00
 
 set -x -e
 
