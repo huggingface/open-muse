@@ -60,7 +60,6 @@ from muse import (
 )
 from muse.modeling_transformer_v2 import MaskGiTUViT_v2
 from muse.lr_schedulers import get_scheduler
-from accelerate import DistributedDataParallelKwargs
 
 try:
     import apex
@@ -260,7 +259,6 @@ def main():
         torch.backends.cudnn.deterministic = False
 
     config.experiment.logging_dir = str(Path(config.experiment.output_dir) / "logs")
-    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
 
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
@@ -268,7 +266,6 @@ def main():
         log_with="wandb",
         project_dir=config.experiment.logging_dir,
         split_batches=True,  # It's important to set this to True when using webdataset to get the right number of steps for lr scheduling. If set to False, the number of steps will be devide by the number of processes assuming batches are multiplied by the number of processes
-        kwargs_handlers=[ddp_kwargs]
     )
 
     if accelerator.distributed_type == DistributedType.DEEPSPEED:
@@ -794,6 +791,9 @@ def main():
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
 
                 accelerator.backward(loss)
+                for name, param in model.named_parameters():
+                    if not param.requires_grad:
+                        print(name)
 
                 if config.training.max_grad_norm is not None and accelerator.sync_gradients:
                     accelerator.clip_grad_norm_(model.parameters(), config.training.max_grad_norm)
