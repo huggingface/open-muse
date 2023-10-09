@@ -82,13 +82,12 @@ model:
     offline: True
     architecture: "transformer"
 
-
 dataset:
     type: "classification"
     params:
-        train_shards_path_or_url: "/p/scratch/ccstdl/muse/muse-imagenet/imagenet-train-{000000..000320}.tar"
-        eval_shards_path_or_url: "/p/scratch/ccstdl/muse/muse-imagenet/imagenet-val-{000000..000012}.tar"
-        imagenet_class_mapping_path: "/p/scratch/ccstdl/muse/imagenet-class-mapping.json"
+        train_shards_path_or_url: "pipe:aws s3 cp s3://laion-west/muse-imagenet/imagenet-train-{000000..000320}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://laion-west/muse-imagenet/imagenet-val-{000000..000012}.tar -"
+        imagenet_class_mapping_path: "/admin/home-isamu/imagenet-class-mapping.json"
         validation_prompts_file: null
         batch_size: ${training.batch_size}
         shuffle_buffer_size: 1000
@@ -122,9 +121,9 @@ lr_scheduler:
 
 
 training:
-    gradient_accumulation_steps: 1
-    batch_size: 2
-    mixed_precision: "no"
+    gradient_accumulation_steps: 16
+    batch_size: 1
+    mixed_precision: "bf16"
     enable_tf32: True
     use_ema: False
     seed: 9345104
