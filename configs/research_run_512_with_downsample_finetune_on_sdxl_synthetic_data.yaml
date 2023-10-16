@@ -73,7 +73,7 @@ model:
 dataset:
     type: "text2image"
     params:
-        train_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/sdxl-synthetic-dataset/{0..32}/{00000..00019}.tar -"
+        train_shards_path_or_url: "sdxl_synthetic_dataset_shards"
         eval_shards_path_or_url: "pipe:aws s3 cp s3://muse-datasets/coco/2014/val/{00000..00010}.tar -"
         validation_prompts_file: "validation_prompts/dalle_mini_prompts.txt"
         batch_size: ${training.batch_size}
