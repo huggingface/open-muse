@@ -471,6 +471,7 @@ class Text2ImageDataset:
         yaml_serialized_shard_paths = [
             "m4_shards",
             "laion-aesthetic-475-max-1024-joined-with-stability-metadata-laicov2_shards",
+            "sdxl_synthetic_dataset_shards"
         ]
         if train_shards_path_or_url in yaml_serialized_shard_paths:
             with open(f"./configs/{train_shards_path_or_url}.yaml") as f:
