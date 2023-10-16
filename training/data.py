@@ -528,12 +528,9 @@ class Text2ImageDataset:
                 wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
-        if is_sdxl_synthetic_dataset:
-            map = wds.map(sdxl_synthetic_dataset_map,  handler=wds.warn_and_continue)
-        else:
-            map = None
-
         if use_filtered_dataset:
+            select = wds.select(lambda sample: 'clip_scores.txt' in sample)
+        elif use_filtered_dataset:
             select = wds.select(
                 WebdatasetSelect(
                     require_marked_as_ok_by_spawning=require_marked_as_ok_by_spawning,
@@ -546,6 +543,11 @@ class Text2ImageDataset:
             )
         else:
             select = None
+
+        if is_sdxl_synthetic_dataset:
+            map = wds.map(sdxl_synthetic_dataset_map)
+        else:
+            map = None
 
         # Create train dataset and loader
         pipeline = [
