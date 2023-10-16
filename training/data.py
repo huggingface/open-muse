@@ -529,7 +529,7 @@ class Text2ImageDataset:
             ]
 
         if is_sdxl_synthetic_dataset:
-            map = wds.map(sdxl_synthetic_dataset_map)
+            map = wds.map(sdxl_synthetic_dataset_map,  handler=wds.warn_and_continue)
         else:
             map = None
 
