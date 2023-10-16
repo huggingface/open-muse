@@ -621,7 +621,7 @@ def main():
         else:
             if config.training.use_soft_code_target and is_train:
                 soft_targets, image_tokens = vq_model.get_soft_code(
-                    pixel_values, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
+                    pixel_values_or_image_ids, temp=config.training.soft_code_temp, stochastic=config.training.use_stochastic_code
                 )
             else:
                 soft_targets = None
@@ -629,16 +629,16 @@ def main():
                 if config.training.get("split_vae_encode", False):
                     split_batch_size = config.training.split_vae_encode
                     # Use a batch of at most split_vae_encode images to encode and then concat the results
-                    batch_size = pixel_values.shape[0]
+                    batch_size = pixel_values_or_image_ids.shape[0]
                     num_splits = math.ceil(batch_size / split_batch_size)
                     image_tokens = []
                     for i in range(num_splits):
                         start_idx = i * split_batch_size
                         end_idx = min((i + 1) * split_batch_size, batch_size)
-                        image_tokens.append(vq_model.get_code(pixel_values[start_idx:end_idx]))
+                        image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
                     image_tokens = torch.cat(image_tokens, dim=0)
                 else:
-                    image_tokens = vq_model.get_code(pixel_values)
+                    image_tokens = vq_model.get_code(pixel_values_or_image_ids)
 
         if not is_pre_encode:
             if config.model.transformer.get("add_cond_embeds", False):
