@@ -1083,7 +1083,7 @@ def generate_images(
     # so we clamp them to the correct range.
     gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
     
-    if config.training.get("split_vae_encode", True):
+    if config.training.get("split_vae_encode", False):
         split_batch_size = config.training.split_vae_encode
         # Use a batch of at most split_vae_encode images to encode and then concat the results
         batch_size = gen_token_ids.shape[0]
