@@ -464,14 +464,21 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
                 torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len),
             )
 
-            selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
-            selected_probs = selected_probs.squeeze(-1)
-            # Ignores the tokens given in the input by overwriting their confidence.
-            selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
-            temperature = temperatures[step]
-            masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
-            # Masks tokens with lower confidence.
-            input_ids = torch.where(masking, self.config.mask_token_id, sampled_ids)
+            if not predict_all_tokens:
+                selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
+                selected_probs = selected_probs.squeeze(-1)
+                # Ignores the tokens given in the input by overwriting their confidence.
+                selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
+                temperature = temperatures[step]
+                masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
+                # Masks tokens with lower confidence.
+                input_ids = torch.where(masking, self.config.mask_token_id, sampled_ids)
+            else:
+                batch_size, seq_len = input_ids.shape
+                batch_randperm = torch.rand(batch_size, seq_len, device=input_ids.device).argsort(dim=-1)
+                mask = batch_randperm < mask_len
+                # mask images and create input and labels
+                input_ids = torch.where(mask, self.config.mask_token_id, sampled_ids)
 
         if return_intermediate:
             return sampled_ids, intermediate
