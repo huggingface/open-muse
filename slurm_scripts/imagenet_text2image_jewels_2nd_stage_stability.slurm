@@ -24,7 +24,6 @@ pushd $MUSE_REPO
 
 GPUS_PER_NODE=8
 NNODES=$SLURM_NNODES
-NUM_GPUS=$((NUM_GPUS_PER_NODE*SLURM_NNODES))
 
 CMD=" \
     training/train_muse.py config=configs/imagenet_text2image_jewels_2nd_stage_maxvit_stability.yaml \
