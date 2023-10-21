@@ -244,7 +244,7 @@ class Attention(nn.Module):
         attn_weights = self.dropout(attn_weights)
         attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         # re-assemble all head outputs side by side
-        attn_output = attn_output.transpose(1, 2).view(batch, seq_len, self.hidden_size)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         return attn_output
 
 
