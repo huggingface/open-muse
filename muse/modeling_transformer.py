@@ -282,7 +282,7 @@ class AttentionBlock2D(nn.Module):
         # hidden_states -> (bs, hidden_size, height, width)
         # reshape to (bs, height * width, hidden_size)
         batch_size, channels, height, width = hidden_states.shape
-        hidden_states = hidden_states.view(batch_size, channels, height * width).permute(0, 2, 1)
+        hidden_states = hidden_states.view(batch_size, channels, height * width).permute(0, 2, 1).contiguous()
 
         # map encoder hidden states to hidden size of current layer
         if self.kv_mapper is not None:
@@ -301,7 +301,7 @@ class AttentionBlock2D(nn.Module):
         hidden_states = hidden_states + residual
 
         # reshape back to (bs, hidden_size, height, width)
-        hidden_states = hidden_states.permute(0, 2, 1).view(batch_size, channels, height, width)
+        hidden_states = hidden_states.permute(0, 2, 1).contiguous().view(batch_size, channels, height, width)
 
         return hidden_states.contiguous()
 
@@ -315,7 +315,7 @@ class Norm2D(nn.Module):
             self.norm = RMSNorm(dim, eps, elementwise_affine=elementwise_affine)
 
     def forward(self, x):
-        return self.norm(x.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+        return self.norm(x.permute(0, 2, 3, 1).contiguous()).permute(0, 3, 1, 2).contiguous()
 
 
 class GlobalResponseNorm(nn.Module):
@@ -376,8 +376,8 @@ class ResBlock(nn.Module):
         x_res = x
         if x_skip is not None:
             x = torch.cat([x, x_skip], dim=1)
-        x = self.norm(self.depthwise(x)).permute(0, 2, 3, 1)
-        x = self.channelwise(x).permute(0, 3, 1, 2)
+        x = self.norm(self.depthwise(x)).permute(0, 2, 3, 1).contiguous()
+        x = self.channelwise(x).permute(0, 3, 1, 2).contiguous()
         x = x + x_res
         if cond_embeds is not None:
             x = self.adaLN_modulation(x, cond_embeds)
@@ -999,13 +999,13 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = self.attn_layer_norm(hidden_states)
         if cond_embeds is not None:
             hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
-        hidden_states = hidden_states.permute(0, 2, 1)
+        hidden_states = hidden_states.permute(0, 2, 1).contiguous()
         b, c, seq_length = hidden_states.shape
         h, w = int(seq_length**0.5), int(seq_length**0.5)
         hidden_states = hidden_states.view(b, c, h, w)
         attention_output = self.attention(hidden_states)
         attention_output = attention_output.view(b, c, seq_length)
-        attention_output = attention_output.permute(0, 2, 1)
+        attention_output = attention_output.permute(0, 2, 1).contiguous()
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
 
@@ -1154,12 +1154,12 @@ class ConvEmbed(nn.Module):
         input_ids = input_ids.view(-1, height, width)
         embeddings = self.embeddings(input_ids)
         embeddings = self.layer_norm(embeddings)
-        embeddings = embeddings.permute(0, 3, 1, 2)
+        embeddings = embeddings.permute(0, 3, 1, 2).contiguous()
         if self.patch_size > 1:
             embeddings = self.pixel_unshuffle(embeddings)
         embeddings = self.conv(embeddings)
         if self.use_position_embeddings:
-            embeddings = embeddings.permute(0, 2, 3, 1).view(batch_size, -1, self.hidden_size)
+            embeddings = embeddings.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.hidden_size)
             position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = embeddings + position_embeddings
@@ -1198,13 +1198,13 @@ class ConvMlmLayer(nn.Module):
     def forward(self, hidden_states):
         batch_size, seq_length, hidden_size = hidden_states.shape
         height, width = int(seq_length**0.5), int(seq_length**0.5)
-        hidden_states = hidden_states.view(batch_size, height, width, hidden_size).permute(0, 3, 1, 2)
+        hidden_states = hidden_states.view(batch_size, height, width, hidden_size).permute(0, 3, 1, 2).contiguous()
         hidden_states = self.conv1(hidden_states)
         if self.patch_size > 1:
             hidden_states = self.pixel_shuffle(hidden_states)
         hidden_states = self.layer_norm(hidden_states)
         logits = self.conv2(hidden_states)
-        logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
+        logits = logits.permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.vocab_size)
         return logits
 
 class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
@@ -1975,7 +1975,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             down_block_res_samples += res_samples
 
         batch_size, channels, height, width = hidden_states.shape
-        hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous().reshape(batch_size, height * width, channels)
 
         if self.use_projection:
             hidden_states = self.project_to_hidden_norm(hidden_states)
@@ -2012,7 +2012,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             hidden_states = self.project_from_hidden_norm(hidden_states)
             hidden_states = self.project_from_hidden(hidden_states)
 
-        hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2)
+        hidden_states = hidden_states.reshape(batch_size, height, width, channels).permute(0, 3, 1, 2).contiguous()
 
         for i, up_block in enumerate(self.up_blocks):
             num_up_blocks = len(up_block.res_blocks)
@@ -2032,7 +2032,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             hidden_states = self.layer_norm_before_mlm(hidden_states)
 
         batch_size, channels, height, width = hidden_states.shape
-        hidden_states = hidden_states.permute(0, 2, 3, 1).reshape(batch_size, height * width, channels)
+        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous().reshape(batch_size, height * width, channels)
         logits = self.mlm_layer(hidden_states)
 
         if labels is not None:
