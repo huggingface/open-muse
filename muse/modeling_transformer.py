@@ -226,7 +226,7 @@ class Attention(nn.Module):
     def attention(self, query, key, value, attention_mask=None, bias=None):
         batch, seq_len = query.shape[:2]
         kv_seq_len = key.shape[1]
-        query, key, value = map(lambda t: t.transpose(1, 2), (query, key, value))  # (B, nh, T, hs)
+        query, key, value = map(lambda t: t.transpose(1, 2).contiguous(), (query, key, value))  # (B, nh, T, hs)
 
         attn_weights = torch.baddbmm(
             input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
