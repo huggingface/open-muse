@@ -231,7 +231,7 @@ class Attention(nn.Module):
         attn_weights = torch.baddbmm(
             input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
             batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
-            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2).contiguous(),
             alpha=1 / self.scale_attn,
         )
         attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
@@ -976,21 +976,21 @@ class MaxVitTransformerLayer(TransformerLayer):
         # block like attention(local attention)
         hidden_states = rearrange(
             hidden_states, "b d (x w1) (y w2) -> b x y w1 w2 d", w1=self.window_size, w2=self.window_size
-        )
+        ).contiguous()
         hidden_states = self.norm0(hidden_states)
         hidden_states = self.attn0(hidden_states)
         hidden_states = self.norm1(hidden_states)
         hidden_states = self.ff0(hidden_states)
-        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (x w1) (y w2)")
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (x w1) (y w2)").contiguous()
         # grid-like attention(global attention)
         hidden_states = rearrange(
             hidden_states, "b d (w1 x) (w2 y) -> b x y w1 w2 d", w1=self.window_size, w2=self.window_size
-        )
+        ).contiguous()
         hidden_states = self.norm2(hidden_states)
         hidden_states = self.attn1(hidden_states)
         hidden_states = self.norm3(hidden_states)
         hidden_states = self.ff1(hidden_states)
-        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (w1 x) (w2 y)")
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> b d (w1 x) (w2 y)").contiguous()
         return hidden_states
 
     def forward(self, hidden_states, encoder_hidden_states=None, encoder_attention_mask=None, cond_embeds=None):
@@ -2475,7 +2475,7 @@ class MaxVitAttention(Attention):
         # TODO: Maybe make this more comprehensible. This is basically positional embeddings for our grid
         pos = torch.arange(window_size)
         grid = torch.stack(torch.meshgrid(pos, pos, indexing="ij"))
-        grid = rearrange(grid, "c i j -> (i j) c")
+        grid = rearrange(grid, "c i j -> (i j) c").contiguous()
         """
         grid is
         tensor([[ 0,  0],
@@ -2486,7 +2486,7 @@ class MaxVitAttention(Attention):
         with shape [window_size**2, 2]
         This is essentially 2d coordinates for window_size x window_size grid
         """
-        rel_pos = rearrange(grid, "i ... -> i 1 ...") - rearrange(grid, "j ... -> 1 j ...")
+        rel_pos = rearrange(grid, "i ... -> i 1 ...").contiguous() - rearrange(grid, "j ... -> 1 j ...").contiguous()
         rel_pos += window_size - 1
         """
         rel_pos has shape [window_size**2, window_wize**2, 2]
@@ -2509,10 +2509,10 @@ class MaxVitAttention(Attention):
         batch, height, width, window_height, window_width, _ = hidden_states.shape
         # flatten
         # Here, w1 and w2 are both window size so x will have size (b x y), window_size**2, d
-        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> (b x y) (w1 w2) d")
+        hidden_states = rearrange(hidden_states, "b x y w1 w2 d -> (b x y) (w1 w2) d").contiguous()
         bias = self.rel_pos_bias(self.rel_pos_indices)
         # shape is [window_size**2, window_size**2, self.num_heads]
-        bias = rearrange(bias, "i j h -> h i j")
+        bias = rearrange(bias, "i j h -> h i j").contiguous()
         # shape is [self.num_heads, window_size**2, window_size**2]
         # the bias adds positional embeddings for each window size segment
         out = super().forward(
@@ -2521,7 +2521,7 @@ class MaxVitAttention(Attention):
             encoder_attention_mask=encoder_attention_mask,
             bias=bias,
         )
-        out = rearrange(out, "b (w1 w2) d -> b w1 w2 d", w1=window_height, w2=window_width)
+        out = rearrange(out, "b (w1 w2) d -> b w1 w2 d", w1=window_height, w2=window_width).contiguous()
 
         # combine heads out
-        return rearrange(out, "(b x y) ... -> b x y ...", x=height, y=width)
+        return rearrange(out, "(b x y) ... -> b x y ...", x=height, y=width).contiguous()
