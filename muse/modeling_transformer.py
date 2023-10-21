@@ -199,9 +199,9 @@ class Attention(nn.Module):
         key = self.key(context)
         value = self.value(context)
 
-        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
-        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim)  # (B, T, nh, hs)
+        query = query.view(batch, q_seq_len, self.num_heads, self.head_dim).contiguous()  # (B, T, nh, hs)
+        key = key.view(batch, kv_seq_len, self.num_heads, self.head_dim).contiguous()  # (B, T, nh, hs)
+        value = value.view(batch, kv_seq_len, self.num_heads, self.head_dim).contiguous()  # (B, T, nh, hs)
 
         if self.use_memory_efficient_attention_xformers:
             attn_output = xops.memory_efficient_attention(
@@ -212,7 +212,7 @@ class Attention(nn.Module):
                 p=self.attention_dropout if self.training else 0.0,
                 attn_bias=bias,
             )
-            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size)
+            attn_output = attn_output.view(batch, q_seq_len, self.hidden_size).contiguous()
         else:
             attention_mask = None
             if encoder_attention_mask is not None:
@@ -230,11 +230,11 @@ class Attention(nn.Module):
 
         attn_weights = torch.baddbmm(
             input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
-            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
+            batch1=query.view(batch * self.num_heads, seq_len, self.head_dim).contiguous(),
             batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2).contiguous(),
             alpha=1 / self.scale_attn,
         )
-        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
+        attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len).contiguous()  # -1 is kv_seq_len
         if bias is not None:
             attn_weights += bias
         # Apply the attention mask
@@ -244,7 +244,7 @@ class Attention(nn.Module):
         attn_weights = self.dropout(attn_weights)
         attn_output = torch.matmul(attn_weights, value)  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         # re-assemble all head outputs side by side
-        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size).contiguous()
         return attn_output
 
 
@@ -282,7 +282,7 @@ class AttentionBlock2D(nn.Module):
         # hidden_states -> (bs, hidden_size, height, width)
         # reshape to (bs, height * width, hidden_size)
         batch_size, channels, height, width = hidden_states.shape
-        hidden_states = hidden_states.view(batch_size, channels, height * width).permute(0, 2, 1)
+        hidden_states = hidden_states.view(batch_size, channels, height * width).contiguous().permute(0, 2, 1)
 
         # map encoder hidden states to hidden size of current layer
         if self.kv_mapper is not None:
@@ -301,7 +301,7 @@ class AttentionBlock2D(nn.Module):
         hidden_states = hidden_states + residual
 
         # reshape back to (bs, hidden_size, height, width)
-        hidden_states = hidden_states.permute(0, 2, 1).view(batch_size, channels, height, width)
+        hidden_states = hidden_states.permute(0, 2, 1).view(batch_size, channels, height, width).contiguous()
 
         return hidden_states
 
@@ -1002,9 +1002,9 @@ class MaxVitTransformerLayer(TransformerLayer):
         hidden_states = hidden_states.permute(0, 2, 1)
         b, c, seq_length = hidden_states.shape
         h, w = int(seq_length**0.5), int(seq_length**0.5)
-        hidden_states = hidden_states.view(b, c, h, w)
+        hidden_states = hidden_states.view(b, c, h, w).contiguous()
         attention_output = self.attention(hidden_states)
-        attention_output = attention_output.view(b, c, seq_length)
+        attention_output = attention_output.view(b, c, seq_length).contiguous()
         attention_output = attention_output.permute(0, 2, 1)
         if self.use_normformer:
             attention_output = self.post_attn_layer_norm(attention_output)
@@ -1151,7 +1151,7 @@ class ConvEmbed(nn.Module):
     def forward(self, input_ids):
         batch_size, seq_length = input_ids.shape
         height, width = int(seq_length**0.5), int(seq_length**0.5)
-        input_ids = input_ids.view(-1, height, width)
+        input_ids = input_ids.view(-1, height, width).contiguous()
         embeddings = self.embeddings(input_ids)
         embeddings = self.layer_norm(embeddings)
         embeddings = embeddings.permute(0, 3, 1, 2)
@@ -1159,7 +1159,7 @@ class ConvEmbed(nn.Module):
             embeddings = self.pixel_unshuffle(embeddings)
         embeddings = self.conv(embeddings)
         if self.use_position_embeddings:
-            embeddings = embeddings.permute(0, 2, 3, 1).view(batch_size, -1, self.hidden_size)
+            embeddings = embeddings.permute(0, 2, 3, 1).view(batch_size, -1, self.hidden_size).contiguous()
             position_ids = torch.arange(embeddings.shape[1])[None, :].to(input_ids.device)
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = embeddings + position_embeddings
@@ -1198,13 +1198,13 @@ class ConvMlmLayer(nn.Module):
     def forward(self, hidden_states):
         batch_size, seq_length, hidden_size = hidden_states.shape
         height, width = int(seq_length**0.5), int(seq_length**0.5)
-        hidden_states = hidden_states.view(batch_size, height, width, hidden_size).permute(0, 3, 1, 2)
+        hidden_states = hidden_states.view(batch_size, height, width, hidden_size).contiguous().permute(0, 3, 1, 2)
         hidden_states = self.conv1(hidden_states)
         if self.patch_size > 1:
             hidden_states = self.pixel_shuffle(hidden_states)
         hidden_states = self.layer_norm(hidden_states)
         logits = self.conv2(hidden_states)
-        logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size)
+        logits = logits.permute(0, 2, 3, 1).view(batch_size, -1, self.vocab_size).contiguous()
         return logits
 
 class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
@@ -1413,7 +1413,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
 
         if labels is not None:
             loss = F.cross_entropy(
-                logits.view(-1, self.output_size), labels.view(-1), ignore_index=-100, label_smoothing=label_smoothing
+                logits.view(-1, self.output_size).contiguous(), labels.view(-1).contiguous(), ignore_index=-100, label_smoothing=label_smoothing
             )
             return logits, loss
         return logits
@@ -1562,7 +1562,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin, TransformerAdapterMixin):
             # Samples the ids using categorical sampling: [batch_size, seq_length].
             probs = logits.softmax(dim=-1)
             sampled = probs.reshape(-1, logits.size(-1))
-            sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
+            sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1]).contiguous()
 
             # Just updates the masked tokens.
             unknown_map = input_ids == mask_token_id
@@ -2038,14 +2038,14 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
         if labels is not None:
             reduction = "none" if loss_weight is not None else "mean"
             loss = F.cross_entropy(
-                logits.view(-1, self.output_size),
-                labels.view(-1),
+                logits.view(-1, self.output_size).contiguous(),
+                labels.view(-1).contiguous(),
                 ignore_index=-100,
                 label_smoothing=label_smoothing,
                 reduction=reduction,
             )
             if loss_weight is not None:
-                loss_weight = loss_weight.view(-1)
+                loss_weight = loss_weight.view(-1).contiguous()
                 loss = ((loss * loss_weight).sum(dim=-1) / loss_weight.sum(dim=-1)).mean()
             return logits, loss
         return logits
@@ -2307,7 +2307,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
                     probs = logits.softmax(dim=-1)
 
                 sampled = probs.reshape(-1, logits.size(-1))
-                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
+                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1]).contiguous()
 
                 if return_intermediate:
                     intermediate.append(sampled_ids)
@@ -2350,7 +2350,7 @@ class MaskGiTUViT(ModelMixin, ConfigMixin, TransformerAdapterMixin):
                 probs = logits.div(temperatures[step]).softmax(dim=-1)
                 # probs = logits.softmax(dim=-1)
                 sampled = probs.reshape(-1, logits.size(-1))
-                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1])
+                sampled_ids = torch.multinomial(sampled, 1, generator=generator)[:, 0].view(*logits.shape[:-1]).contiguous()
 
                 if return_intermediate:
                     intermediate.append(sampled_ids)
