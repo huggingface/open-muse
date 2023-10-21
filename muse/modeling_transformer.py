@@ -231,7 +231,7 @@ class Attention(nn.Module):
         attn_weights = torch.baddbmm(
             input=torch.zeros(batch * self.num_heads, seq_len, kv_seq_len, dtype=query.dtype, device=query.device),
             batch1=query.view(batch * self.num_heads, seq_len, self.head_dim),
-            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2),
+            batch2=key.view(batch * self.num_heads, kv_seq_len, self.head_dim).transpose(1, 2).contiguous(),
             alpha=1 / self.scale_attn,
         )
         attn_weights = attn_weights.view(batch, self.num_heads, seq_len, kv_seq_len)  # -1 is kv_seq_len
@@ -630,7 +630,7 @@ class UpsampleBlock(nn.Module):
                     x = self.attention_blocks[i](x, encoder_hidden_states)
 
         if self.add_upsample:
-            x = self.upsample(x)
+            x = self.upsample(x).contiguous()
         return x
 
 
@@ -2391,9 +2391,9 @@ class SqueezeExcitation(nn.Module):
         )
 
     def forward(self, x):
-        hidden = reduce(x, "b c h w -> b c", "mean")
+        hidden = reduce(x, "b c h w -> b c", "mean").contiguous()
         hidden = self.gate(hidden)
-        hidden = rearrange(hidden, "b c -> b c 1 1")
+        hidden = rearrange(hidden, "b c -> b c 1 1").contiguous()
         return x * hidden
 
 
