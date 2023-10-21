@@ -726,8 +726,8 @@ def main():
             else:
                 pixel_values, input_ids = batch["image"], batch["input_ids"]
 
-            pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
-            input_ids = input_ids.to(accelerator.device, non_blocking=True)
+            pixel_values = pixel_values.to(accelerator.device, non_blocking=True).contiguous()
+            input_ids = input_ids.to(accelerator.device, non_blocking=True).contiguous()
             data_time_m.update(time.time() - end)
 
             # encode images to image tokens, mask them and create input and labels
