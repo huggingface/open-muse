@@ -599,7 +599,7 @@ class TransformerLayer(nn.Module):
 
         hidden_states, residual = self.pre_mlp_layer_norm(hidden_states, residual=residual)
         hidden_states = self.mlp_adaln_modulation(hidden_states, cond_embeds)
-        hidden_states, residual = self.mlp(hidden_states)
+        hidden_states = self.mlp(hidden_states)
 
         return hidden_states, residual
 
