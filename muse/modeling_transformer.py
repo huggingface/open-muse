@@ -468,7 +468,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                 selected_probs = torch.gather(probs, -1, sampled_ids.long()[..., None])
                 selected_probs = selected_probs.squeeze(-1)
                 # Ignores the tokens given in the input by overwriting their confidence.
-                selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
+                # selected_probs = torch.where(unknown_map, selected_probs, torch.finfo(selected_probs.dtype).max)
                 temperature = temperatures[step]
                 masking = mask_by_random_topk(mask_len, selected_probs, temperature, generator=generator)
                 # Masks tokens with lower confidence.
