@@ -15,6 +15,8 @@
 
 # This file is heavily inspired by https://github.com/mlfoundations/open_clip/blob/main/src/training/data.py
 
+import os
+import io
 import itertools
 import json
 import math
@@ -23,6 +25,7 @@ import re
 from functools import partial
 from typing import List, Optional, Union
 
+import PIL
 import webdataset as wds
 import yaml
 from braceexpand import braceexpand
@@ -442,7 +445,45 @@ def sdxl_synthetic_dataset_map(sample):
         "json": json.dumps({"aesthetic": 5, "original_width": 1024, "original_height": 1024}).encode(),
     }
 
+
+def ds_clean_upscaled_map(sample):
+    with io.BytesIO(sample["png"]) as stream:
+        image = PIL.Image.open(stream)
+        image.load()
+
+    return {
+        "__key__": sample["__key__"],
+        "__url__": sample["__url__"],
+        "txt": sample["txt"],
+        "png": sample["png"],
+        "json": json.dumps({"aesthetic": 5, "original_width": image.width, "original_height": image.height}).encode(),
     }
+
+
+def ds_clean_map(sample):
+    with io.BytesIO(sample["png"]) as stream:
+        image = PIL.Image.open(stream)
+        image.load()
+
+    # Take only the top left image
+    height = image.height // 2
+    width = image.width // 2
+
+    image = image.crop((0, 0, width, height))
+
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format="PNG")  # You can specify the desired format (e.g., JPEG)
+
+    image = image_bytes.getvalue()
+
+    return {
+        "__key__": sample["__key__"],
+        "__url__": sample["__url__"],
+        "txt": sample["txt"],
+        "png": image,
+        "json": json.dumps({"aesthetic": 5, "original_width": width, "original_height": height}).encode(),
+    }
+
 
 class Text2ImageDataset:
     def __init__(
@@ -471,14 +512,11 @@ class Text2ImageDataset:
         max_pwatermark: Optional[float] = 0.5,
         min_aesthetic_score: Optional[float] = 4.75,
         min_size: Optional[int] = 256,
-        is_sdxl_synthetic_dataset: bool=False
+        is_sdxl_synthetic_dataset: bool = False,
+        is_ds_clean_upscaled: bool = False,
+        is_ds_clean: bool = False,
     ):
-        yaml_serialized_shard_paths = [
-            "m4_shards",
-            "laion-aesthetic-475-max-1024-joined-with-stability-metadata-laicov2_shards",
-            "sdxl_synthetic_dataset_shards"
-        ]
-        if train_shards_path_or_url in yaml_serialized_shard_paths:
+        if f"{train_shards_path_or_url}.yaml" in os.listdir('./configs'):
             with open(f"./configs/{train_shards_path_or_url}.yaml") as f:
                 train_shards_path_or_url = yaml.safe_load(f)
 
@@ -552,6 +590,10 @@ class Text2ImageDataset:
 
         if is_sdxl_synthetic_dataset:
             map = wds.map(sdxl_synthetic_dataset_map, handler=wds.ignore_and_continue)
+        elif is_ds_clean_upscaled:
+            map = wds.map(ds_clean_upscaled_map)
+        elif is_ds_clean:
+            map = wds.map(ds_clean_map)
         else:
             map = None
 
