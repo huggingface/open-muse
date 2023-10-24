@@ -66,22 +66,14 @@ codebook_size = 8192
 encoder_hidden_size = 768
 batch = 2
 
-model = MaskGiTUViT(
+model = MaskGitTransformer(
     vocab_size=codebook_size + 1,
     hidden_size=768,
-    in_channels=384,
-    block_out_channels=(384,),
     encoder_hidden_size=encoder_hidden_size,
-    add_cross_attention=True,
-    num_res_blocks=1,
-    num_hidden_layers=1,
+    num_hidden_layers=2,
     codebook_size=codebook_size,
-    num_vq_tokens=num_vq_tokens,
-    use_codebook_size_for_output=True,
-    add_micro_cond_embeds=True,
     micro_cond_encode_dim=256,
     micro_cond_embed_dim=1536,
-    add_cond_embeds=True,
     cond_embed_dim=512,
 ).eval()
 
