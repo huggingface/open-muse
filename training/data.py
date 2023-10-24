@@ -408,9 +408,10 @@ class WebdatasetSelect:
 
         return True
 
+
 def sdxl_synthetic_dataset_map(sample):
-    clip_scores = sample['clip_scores.txt'].decode('utf-8')
-    clip_scores = clip_scores.split(',')
+    clip_scores = sample["clip_scores.txt"].decode("utf-8")
+    clip_scores = clip_scores.split(",")
     clip_scores = [float(x) for x in clip_scores]
 
     index_of_max = 0
@@ -422,21 +423,25 @@ def sdxl_synthetic_dataset_map(sample):
     key_of_best_clip_score_image = f"{index_of_max}.png"
 
     if key_of_best_clip_score_image not in sample:
-        raise ValueError(f"{key_of_best_clip_score_image} was not found in sample. The dataset should have files <sample key>.<x>.png where <x> coresponds to an index of the clip scores in clip_scores.txt")
+        raise ValueError(
+            f"{key_of_best_clip_score_image} was not found in sample. The dataset should have files <sample"
+            " key>.<x>.png where <x> coresponds to an index of the clip scores in clip_scores.txt"
+        )
 
     return {
         "__key__": sample["__key__"],
         "__url__": sample["__url__"],
         "txt": sample["txt"],
-        "png": sample[key_of_best_clip_score_image], # only include the image with the best clip score
-
+        "png": sample[key_of_best_clip_score_image],  # only include the image with the best clip score
         # For other datasets, we rely on the following for micro conditioning.
         # The original height and width are known because we create the dataset with
         # sdxl. The laion aesthetic score of 5 seems like a reasonable approximation
         # NOTE: we unfortunately have to serialize and encode the json so it looks like
         # it was read out of a file since wds decoders will need to decode it. There
         # is probably some way to avoid this but it is not obvious with the wds apis.
-        "json": json.dumps({"aesthetic": 5, "original_width": 1024, "original_height": 1024 }).encode(),
+        "json": json.dumps({"aesthetic": 5, "original_width": 1024, "original_height": 1024}).encode(),
+    }
+
     }
 
 class Text2ImageDataset:
@@ -529,8 +534,8 @@ class Text2ImageDataset:
                 wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
-        if use_filtered_dataset:
-            select = wds.select(lambda sample: 'clip_scores.txt' in sample)
+        if is_sdxl_synthetic_dataset:
+            select = wds.select(lambda sample: "clip_scores.txt" in sample)
         elif use_filtered_dataset:
             select = wds.select(
                 WebdatasetSelect(
