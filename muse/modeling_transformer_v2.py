@@ -118,6 +118,11 @@ class MaskGiTUViT_v2Config:
     ln_elementwise_affine: bool = True
     use_fused_residual_norm: bool = False
 
+    # Adapter
+    use_adapter: bool = False
+    adapter_proj_dim: int = 4
+    is_adapter_shared: bool = True
+
     # Legacy: kept for compatibility with pipeline
     add_cond_embeds: bool = True
     add_micro_cond_embeds: bool = True
@@ -192,7 +197,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         )
 
         self.transformer_layers = nn.ModuleList(
-            [TransformerLayer(self.config) for _ in range(self.config.num_hidden_layers)]
+            [TransformerLayer(self.config, layer_idx=i) for i in range(self.config.num_hidden_layers)]
         )
 
         self.project_from_hidden_norm = Norm(self.config.hidden_size, self.config)
@@ -203,6 +208,12 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         self.up_blocks = nn.ModuleList([UpsampleBlock(self.config.block_out_channels[0], self.config)])
 
         self.mlm_layer = ConvMlmLayer(self.config)
+
+        self.adapter = None
+        if self.config.use_adapter:
+            self.adapter = Adapter(
+                d_emb=self.config.hidden_size, d_proj=self.config.adapter_proj_dim, n_layer=self.config.num_hidden_layers,  is_shared=self.config.is_adapter_shared
+            )
 
         self.gradient_checkpointing = False
 
@@ -248,6 +259,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         loss_weight=None,
+        use_adapter=False,
     ):
         encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
         encoder_hidden_states, _ = self.encoder_proj_layer_norm(encoder_hidden_states)
@@ -284,6 +296,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
                 encoder_hidden_states,
                 cond_embeds,
                 transformer_residual,
+                self.adapter if use_adapter else None,
             )
 
         hidden_states = hidden_states + transformer_residual
@@ -350,6 +363,9 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         topk_filter_thres=None,
         noise_type=None,
         predict_all_tokens=None,
+        use_adapter=False,
+        lambdaA=2.0,
+        lambdaB=5.0,
     ):
         batch_size = encoder_hidden_states.shape[0]
 
@@ -435,6 +451,17 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
                 cond_logits = cond_logits[..., : self.config.codebook_size]
                 uncond_logits = uncond_logits[..., : self.config.codebook_size]
                 logits = uncond_logits + guidance_scales[step] * (cond_logits - uncond_logits)
+
+                if use_adapter:
+                    adapter_logits = self(
+                        input_ids,
+                        micro_conds=micro_conds[:batch_size],
+                        cond_embeds=cond_embeds[:batch_size],
+                        encoder_hidden_states=encoder_hidden_states[:batch_size],
+                        use_adapter=True,
+                    )
+                    logits = adapter_logits + lambdaA * (adapter_logits - cond_logits) + lambdaB * (cond_logits - uncond_logits)
+
             else:
                 logits = model_output
 
@@ -755,11 +782,11 @@ class GlobalResponseNorm(nn.Module):
 
 
 class TransformerLayer(nn.Module):
-    def __init__(self, config: MaskGiTUViT_v2Config):
+    def __init__(self, config: MaskGiTUViT_v2Config, layer_idx: int):
         super().__init__()
+        self.layer_idx = layer_idx
 
         self.attn_layer_norm = Norm(config.hidden_size, config)
-
         self.self_attn_adaLN_modulation = AdaLNModulation(config.hidden_size, config)
         self.attention = Attention(config.hidden_size, config.hidden_size, config.num_attention_heads, config)
 
@@ -771,7 +798,7 @@ class TransformerLayer(nn.Module):
 
         self.ffn = FeedForward(config)
 
-    def forward(self, hidden_states, encoder_hidden_states, cond_embeds, residual=None):
+    def forward(self, hidden_states, encoder_hidden_states, cond_embeds, residual=None, adapter=None):
         hidden_states, residual = self.attn_layer_norm(hidden_states, residual=residual)
 
         hidden_states = self.self_attn_adaLN_modulation(hidden_states, cond_embeds)
@@ -786,6 +813,9 @@ class TransformerLayer(nn.Module):
             hidden_states,
             encoder_hidden_states,
         )
+
+        if adapter is not None:
+            hidden_states = adapter(hidden_states, layer_idx=self.layer_idx)
 
         hidden_states, residual = self.ffn(hidden_states, cond_embeds=cond_embeds, residual=residual)
 
@@ -1035,3 +1065,50 @@ class AdaLNModulation(nn.Module):
         else:
             scale, shift = scale[:, None], shift[:, None]
         return hidden_states * (1 + scale) + shift
+
+
+class Adapter(nn.Module):
+    def __init__(self, d_emb:int, d_prj:int, n_layer: int, is_shared: bool):
+        super().__init__()
+        self.D = d_emb
+        self.H = d_prj
+        self.L = n_layer
+        self.is_shared = is_shared
+        if self.is_shared:
+            self.DD = nn.Embedding(self.L,self.H)
+            self.DU = nn.Embedding(self.L,self.D)
+            self.WD = nn.Embedding(1,self.D*self.H)
+            self.WU = nn.Embedding(1,self.H*self.D)
+        else:
+            self.WD = nn.Embedding(self.L,self.D*self.H)
+            self.WU = nn.Embedding(self.L,self.H*self.D)
+        self.activate = nn.GELU()
+
+        self._init_weights()
+    def _init_weights(self):
+        for p in self.WU.parameters():
+            p.detach().zero_()
+        nn.init.trunc_normal_(self.WD.weight,mean=0,std=0.02)
+        
+        if self.is_shared:
+            nn.init.trunc_normal_(self.DD.weight,mean=0,std=0.02)
+            for p in self.DU.parameters():
+                p.detach().zero_()
+            
+    def forward(self, emb, layer_idx):
+        idx = torch.arange(self.L).to(emb.device)
+        layer = torch.tensor(layer_idx).to(emb.device)
+        if self.is_shared:
+            idx0 = torch.zeros_like(idx).to(emb.device)
+            dd = self.DD(idx).reshape(self.L, 1,self.H)
+            du = self.DU(idx).reshape(self.L, 1,self.D)
+            wd = self.WD(idx0).reshape(self.L, self.D,self.H) + dd
+            wu = self.WU(idx0).reshape(self.L, self.H,self.D) + du
+        else:
+            wd = self.WD(idx).reshape(self.L, self.D,self.H)
+            wu = self.WU(idx).reshape(self.L, self.H,self.D)
+        
+        prj = torch.einsum('...d,dh->...h',emb,wd[layer])
+        prj = self.activate(prj)
+        prj = torch.einsum('...h,hd->...d',prj,wu[layer])
+        return emb + prj
