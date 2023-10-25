@@ -504,6 +504,8 @@ def main():
         min_aesthetic_score=dataset_config.get("min_aesthetic_score", 4.75),
         min_size=dataset_config.get("min_size", 256),
         is_sdxl_synthetic_dataset=dataset_config.get("is_sdxl_synthetic_dataset", False),
+        is_ds_clean_upscaled=dataset_config.get("is_ds_clean_upscaled", False),
+        is_ds_clean=dataset_config.get("is_ds_clean", False),
     )
     train_dataloader, eval_dataloader = dataset.train_dataloader, dataset.eval_dataloader
 
