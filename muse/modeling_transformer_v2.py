@@ -212,7 +212,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         self.adapter = None
         if self.config.use_adapter:
             self.adapter = Adapter(
-                d_emb=self.config.hidden_size, d_proj=self.config.adapter_proj_dim, n_layer=self.config.num_hidden_layers,  is_shared=self.config.is_adapter_shared
+                d_emb=self.config.hidden_size, d_prj=self.config.adapter_proj_dim, n_layer=self.config.num_hidden_layers,  is_shared=self.config.is_adapter_shared
             )
 
         self.gradient_checkpointing = False
