@@ -91,6 +91,8 @@ class PipelineMuse:
         use_tqdm=True,
         transformer_seq_len=None,
         clip_skip:int = None,
+        use_adapter: bool = False,
+        style_guidance_scale: float = 0.0,
     ):
         if text is None and class_ids is None:
             raise ValueError("Either text or class_ids must be provided.")
@@ -223,6 +225,9 @@ class PipelineMuse:
                 return_intermediate=return_intermediate,
                 use_tqdm=use_tqdm,
                 seq_len=transformer_seq_len,
+                use_adapter=use_adapter,
+                lambdaA=style_guidance_scale,
+                lambdaB=guidance_scale,
             )
 
             if return_intermediate:
