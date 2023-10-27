@@ -578,13 +578,11 @@ class TransformerLayer(nn.Module):
         super().__init__()
 
         self.attn_layer_norm = LayerNorm(config.hidden_size, config, elementwise_affine=False)
-
         self.self_attn_adaLN_modulation = AdaLNModulation(config.hidden_size, config)
         self.attention = Attention(config.hidden_size, config.hidden_size, config.num_attention_heads, config)
 
-        self.crossattn_layer_norm = LayerNorm(config.hidden_size, config, elementwise_affine=False)
+        self.crossattn_layer_norm = LayerNorm(config.hidden_size, config, elementwise_affine=True)
         self.crossattention = Attention(config.hidden_size, config.hidden_size, config.num_attention_heads, config)
-        self.cross_attn_adaLN_modulation = AdaLNModulation(config.hidden_size, config)
 
         self.pre_mlp_layer_norm = LayerNorm(config.hidden_size, config, elementwise_affine=False)
         self.mlp_adaln_modulation = AdaLNModulation(config.hidden_size, config)
@@ -596,7 +594,6 @@ class TransformerLayer(nn.Module):
         hidden_states = self.attention(hidden_states, hidden_states)
 
         hidden_states, residual = self.crossattn_layer_norm(hidden_states, residual=residual)
-        hidden_states = self.cross_attn_adaLN_modulation(hidden_states, cond_embeds)
         hidden_states = self.crossattention(hidden_states, encoder_hidden_states)
 
         hidden_states, residual = self.pre_mlp_layer_norm(hidden_states, residual=residual)
