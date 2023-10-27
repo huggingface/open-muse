@@ -270,6 +270,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         labels=None,
         label_smoothing=0.0,
         loss_weight=None,
+        **kwargs,
     ):
         encoder_hidden_states = self.encoder_proj(encoder_hidden_states)
         encoder_hidden_states, _ = self.encoder_proj_layer_norm(encoder_hidden_states)
@@ -349,6 +350,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         topk_filter_thres=None,
         noise_type=None,
         predict_all_tokens=None,
+        **kwargs,
     ):
         batch_size = encoder_hidden_states.shape[0]
 
