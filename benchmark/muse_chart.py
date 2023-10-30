@@ -14,137 +14,103 @@ bar_width = 0.10
 def main():
     parser = ArgumentParser()
     parser.add_argument("--device", choices=["4090", "a100"], required=True)
+    parser.add_argument("--batch-size", type=int, choices=[1, 8], required=True)
 
     args = parser.parse_args()
-
-    y_axis_key = "Median"
-    y_label = "Median Time (s)"
 
     df = pd.read_csv("benchmark/artifacts/all.csv")
 
     df["Median"] = df["Median"].apply(lambda x: round(x / 1000, 2))
 
-    timesteps = [12, 20]
-    resolutions = [256, 512]
-    force_down_up_samples = [False, True]
+    fig, axs = plt.subplots(1, 1, sharey="row")
 
-    num_rows = len(timesteps) * len(force_down_up_samples)
-    num_cols = len(resolutions)
+    chart(df=df, device=args.device, batch_size=args.batch_size, plot_on=axs)
 
-    fig, axs = plt.subplots(num_rows, num_cols, sharey="row")
-
-    for row_idx_1, timesteps_ in enumerate(timesteps):
-        for row_idx_2, force_down_up_sample in enumerate(force_down_up_samples):
-            row_idx = row_idx_1 * len(timesteps) + row_idx_2
-
-            for col_idx, resolution in enumerate(resolutions):
-                plot_on = axs[row_idx, col_idx]
-
-                chart(
-                    df=df,
-                    device=args.device,
-                    resolution=resolution,
-                    force_down_up_sample=force_down_up_sample,
-                    plot_on=plot_on,
-                    y_axis_key=y_axis_key,
-                    y_label=y_label,
-                    timesteps=timesteps_,
-                )
-
-                if row_idx == 3 and col_idx == 1:
-                    plot_on.legend(bbox_to_anchor=(1, -0.1), fontsize="x-small")
-
-    plt.subplots_adjust(hspace=0.75, wspace=0.50)
+    axs.set_ylabel("Median Time (s)")
+    axs.set_title(f"{args.device} Batch size: {args.batch_size}")
 
     plt.show()
 
 
-def chart(df, device, resolution, force_down_up_sample, plot_on, y_axis_key, y_label, timesteps):
-    filter = (df["Device"] == device) & (df["Resolution"] == resolution)
+def chart(df, device, batch_size, plot_on):
+    fdf = df[
+        (df["Device"] == device)
+        & (df["Use Xformers"] == True)
+        & ((df["Use Fused Residual Norm"] == True) | (df["Use Fused Residual Norm"].isna()))
+        & (df["Batch Size"] == batch_size)
+    ]
 
-    if timesteps is not None:
-        filter = filter & (df["Timesteps"] == timesteps)
+    chart_values = {
+        # "stable diffusion 1.5; timesteps 12": fdf[
+        #     (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Timesteps"] == "12")
+        # ].iloc[0]["Median"],
+        "stable diffusion 1.5; timesteps 20": fdf[
+            (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Timesteps"] == "20")
+        ].iloc[0]["Median"],
+        "sdxl; timesteps 12": fdf[(fdf["Model Name"] == "sdxl") & (fdf["Timesteps"] == "12")].iloc[0]["Median"],
+        "sdxl; timesteps 20": fdf[(fdf["Model Name"] == "sdxl") & (fdf["Timesteps"] == "20")].iloc[0]["Median"],
+        "ssd 1b; timesteps 12": fdf[(fdf["Model Name"] == "ssd_1b") & (fdf["Timesteps"] == "12")].iloc[0]["Median"],
+        "ssd 1b; timesteps 20": fdf[(fdf["Model Name"] == "ssd_1b") & (fdf["Timesteps"] == "20")].iloc[0]["Median"],
+        "wurst": fdf[(fdf["Model Name"] == "wurst")].iloc[0]["Median"],
+        "lcm; timesteps 4": fdf[(fdf["Model Name"] == "lcm") & (fdf["Timesteps"] == "4")].iloc[0]["Median"],
+        "lcm; timesteps 8": fdf[(fdf["Model Name"] == "lcm") & (fdf["Timesteps"] == "8")].iloc[0]["Median"],
+        "muse; resolution 256; timesteps 12": fdf[
+            (fdf["Model Name"] == "muse") & (fdf["Resolution"] == 256) & (fdf["Timesteps"] == "12")
+        ].iloc[0]["Median"],
+        # "muse; resolution 256; timesteps 20": fdf[
+        #     (fdf["Model Name"] == "muse") & (fdf["Resolution"] == 256) & (fdf["Timesteps"] == "20")
+        # ].iloc[0]["Median"],
+        "muse; resolution 512; timesteps 12": fdf[
+            (fdf["Model Name"] == "muse") & (fdf["Resolution"] == 512) & (fdf["Timesteps"] == "12")
+        ].iloc[0]["Median"],
+        # "muse; resolution 512; timesteps 20": fdf[
+        #     (fdf["Model Name"] == "muse") & (fdf["Resolution"] == 512) & (fdf["Timesteps"] == "20")
+        # ].iloc[0]["Median"],
+    }
 
-    fdf = df[filter]
+    # Gives consistent colors from chart to chart
+    colors = [
+        # "b",  # Blue
+        "g",  # Green
+        "r",  # Red
+        "c",  # Cyan
+        "m",  # Magenta
+        "y",  # Yellow
+        "k",  # Black
+        "purple",
+        "#FF5733",  # Hex code for a shade of orange
+        (0.2, 0.4, 0.6),  # RGB tuple for a shade of blue
+        # "lime",  # Named color
+        "navy",  # Named color
+        # "hotpink",  # Named color
+    ]
 
-    placement = range(2)
+    colors = {x: y for x, y in zip(chart_values.keys(), colors)}
 
-    def inc_placement():
-        nonlocal placement
-        placement = [x + bar_width + 0.05 for x in placement]
+    chart_values = [x for x in chart_values.items()]
+    chart_values = sorted(chart_values, key=lambda x: x[1])
 
-    (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Use Xformers"] == False)
+    placement = 0
 
-    for use_xformers in [False, True]:
-        filter_ = (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Use Xformers"] == use_xformers)
+    for label, value in chart_values:
+        color = colors[label]
 
-        plot_one_bar(
-            fdf=fdf,
-            filter_=filter_,
-            plot_on=plot_on,
-            placement=placement,
-            label=f"stable_diffusion_1_5, use_xformers: {use_xformers}",
-            y_axis_key=y_axis_key,
-        )
+        # gross but we barely run this code
+        label = f"{label}; {value} s"
+        label = "\n".join(label.split(";"))
 
-        inc_placement()
-
-    for use_xformers, use_fused_mlp, use_fused_residual_norm in [
-        [False, False, False],
-        [True, False, False],
-        [True, True, True],
-    ]:
-        filter_ = (
-            (fdf["Model Name"] == "muse")
-            & (fdf["Use Xformers"] == use_xformers)
-            & (fdf["Use Fused MLP"] == use_fused_mlp)
-            & (fdf["Use Fused Residual Norm"] == use_fused_residual_norm)
-            & (df["Force Down Up Sample"] == force_down_up_sample)
-        )
-
-        plot_one_bar(
-            fdf=fdf,
-            filter_=filter_,
-            plot_on=plot_on,
-            placement=placement,
-            label=(
-                f"muse, use_xformers: {use_xformers}, use_fused_mlp: {use_fused_mlp}, use_fused_residual_norm:"
-                f" {use_fused_residual_norm}"
-            ),
-            y_axis_key=y_axis_key,
-        )
-
-        inc_placement()
-
-    plot_on.set_xlabel("Batch Size")
-    plot_on.set_ylabel(y_label)
-    plot_on.set_xticks([r + bar_width for r in range(2)], [1, 8])
-    plot_on.set_title(
-        f"{device}, timesteps: {timesteps}, resolution: {resolution} muse downsampled {force_down_up_sample}"
-    )
-
-
-def plot_one_bar(fdf, filter_, plot_on, placement, label, y_axis_key):
-    ffdf = fdf[filter_]
-
-    y_axis = ffdf[y_axis_key].tolist()
-
-    for _ in range(2 - len(y_axis)):
-        y_axis.append(0)
-
-    bars = plot_on.bar(placement, y_axis, width=bar_width, label=label)
-
-    for bar in bars:
+        bars = plot_on.bar(placement, value, width=bar_width, label=label, color=color)
+        bar = bars[0]
         yval = bar.get_height()
         plot_on.text(
             bar.get_x() + bar.get_width() / 2,
             yval + 0.05,
-            yval,
+            label,  # f"{label}; {value}", # yval,
             ha="center",
             va="bottom",
-            rotation=80,
             fontsize="small",
         )
+        placement = placement + bar_width + 0.05
 
 
 if __name__ == "__main__":
