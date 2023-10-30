@@ -128,6 +128,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 class MaskGitTransformerConfig:
     # global config
     hidden_size: int = 1024
+    in_channels: int = 256
     fmap_size: int = 16
     patch_size: int = 2
     use_bias: bool = False
@@ -212,10 +213,10 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.encoder_proj_layer_norm = LayerNorm(config.hidden_size, config=config, elementwise_affine=True)
 
         self.in_mapper = nn.Sequential(
-            nn.Embedding(config.vocab_size, self.config.hidden_size),
-            LayerNorm(config.hidden_size, config=config, elementwise_affine=True),
+            nn.Embedding(config.vocab_size, self.config.in_channels),
+            LayerNorm(config.in_channels, config=config, elementwise_affine=True),
         )
-        self.embed = PatchEmbed(img_size=config.fmap_size, patch_size=config.patch_size, embed_dim=config.hidden_size, bias=config.use_bias)
+        self.embed = PatchEmbed(config=self.config)
 
         self.cond_embed = nn.Sequential(
             nn.Linear(
@@ -265,8 +266,8 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
                     nn.init.constant_(m.mapper.bias, 0)
 
         # Zero-out output layers:
-        nn.init.constant_(self.mlm_layer.linear.weight, 0)
-        nn.init.constant_(self.mlm_layer.linear.bias, 0)
+        nn.init.constant_(self.mlm_layer.linear1.weight, 0)
+        self.mlm_layer.linear2.weight.data = self.in_mapper[0].weight.data[: self.config.codebook_size, :].clone()
 
     def forward(
         self,
@@ -503,13 +504,19 @@ class PatchEmbed(nn.Module):
     2D Image to Patch Embedding + Position Embedding
     """
 
-    def __init__(self, img_size=16, patch_size=2, embed_dim=1024, bias=False):
+    def __init__(self, config: MaskGitTransformerConfig):
         super().__init__()
-        self.img_size = img_size
-        grid_size = (img_size // patch_size, img_size // patch_size)
-        self.proj = nn.Conv2d(embed_dim, embed_dim, kernel_size=patch_size, stride=(patch_size, patch_size), bias=bias)
+        self.config = config
+        self.img_size = config.fmap_size
+        self.patch_size = config.patch_size
+
+        grid_size = (config.fmap_size // config.patch_size, config.fmap_size // config.patch_size)
+        
+        self.proj = nn.Conv2d(
+            config.in_channels, config.hidden_size, kernel_size=config.patch_size, stride=(config.patch_size, config.patch_size), bias=config.use_bias
+        )
         pos_embed = (
-            torch.from_numpy(get_2d_sincos_pos_embed(embed_dim, grid_size, base_size=grid_size[0]))
+            torch.from_numpy(get_2d_sincos_pos_embed(config.hidden_size, grid_size, base_size=grid_size[0]))
             .float()
             .unsqueeze(0)
         )
@@ -763,24 +770,32 @@ class FinalLayer(nn.Module):
     def __init__(self, config: MaskGitTransformerConfig):
         super().__init__()
         self.config = config
+        
         self.adaLN_modulation = AdaLNModulation(config.hidden_size, use_bias=config.use_bias)
-        self.norm_final = LayerNorm(config.hidden_size, config=config, elementwise_affine=False)
-        self.linear = nn.Linear(
-            config.hidden_size, config.patch_size * config.patch_size * config.codebook_size, bias=True
+        self.norm1 = LayerNorm(config.hidden_size, config=config, elementwise_affine=False)
+        self.linear1 = nn.Linear(
+            config.hidden_size, config.patch_size * config.patch_size * config.in_channels, bias=True
         )
+        
+        self.norm2 = LayerNorm(config.in_channels, config=config)
+        self.linear2 = nn.Linear(config.in_channels, config.codebook_size, bias=False)
 
     def forward(self, hidden_states, cond_embeds):
-        hidden_states, _ = self.norm_final(hidden_states)
+        hidden_states, _ = self.norm1(hidden_states)
         hidden_states = self.adaLN_modulation(hidden_states, cond_embeds)
-        hidden_states = self.linear(hidden_states)
-        return self.unpatchify(hidden_states)
+        hidden_states = self.linear1(hidden_states)
+
+        hidden_states = self.unpatchify(hidden_states)
+        hidden_states, _ = self.norm2(hidden_states)
+        hidden_states = self.linear2(hidden_states)
+        return hidden_states
 
     def unpatchify(self, x):
         """
         x: (N, T, patch_size**2 * C)
         imgs: (N, H*W, C)
         """
-        c = self.config.codebook_size
+        c = self.config.in_channels
         p = self.config.patch_size
         h = w = int(x.shape[1] ** 0.5)
         assert h * w == x.shape[1]
