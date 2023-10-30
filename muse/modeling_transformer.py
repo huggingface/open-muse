@@ -196,6 +196,13 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             )
             self.register_to_config(use_fused_residual_norm=False)
 
+        if self.config.use_fused_mlp and fused_mlp_func is None:
+            warnings.warn(
+                "Cannot use fused MLP. Please install flash_attn. Falling back to unfused MLP",
+                UserWarning,
+            )
+            self.register_to_config(use_fused_mlp=False)
+
         # Legacy: kept for compatibility with pipeline
         self.output_size = self.config.codebook_size
 
@@ -208,7 +215,7 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
             nn.Embedding(config.vocab_size, self.config.hidden_size),
             LayerNorm(config.hidden_size, config=config, elementwise_affine=True),
         )
-        self.embed = PatchEmbed(img_size=config.fmap_size, embed_dim=config.hidden_size, bias=config.use_bias)
+        self.embed = PatchEmbed(img_size=config.fmap_size, patch_size=config.patch_size, embed_dim=config.hidden_size, bias=config.use_bias)
 
         self.cond_embed = nn.Sequential(
             nn.Linear(
