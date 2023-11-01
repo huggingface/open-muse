@@ -549,10 +549,10 @@ class LayerNorm(nn.Module):
         else:
             # fused layer norm does not support elementwise_affine=False
             # so we initialize weight to 1 and freeze it
-            if self.config.use_fused_residual_norm:
-                self.weight = nn.Parameter(torch.ones(dim), requires_grad=False)
-            else:
-                self.weight = None
+            # if self.config.use_fused_residual_norm:
+            #     self.weight = nn.Parameter(torch.ones(dim), requires_grad=False)
+            # else:
+            self.weight = nn.Parameter(torch.ones(dim), requires_grad=False)
             self.bias = None
 
     def forward(self, input, residual=None):

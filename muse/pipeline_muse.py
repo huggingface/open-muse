@@ -199,7 +199,9 @@ class PipelineMuse:
             }
 
         if self.transformer.config.add_micro_cond_embeds:
-            micro_conds = list(orig_size) + list(crop_coords) + [aesthetic_score]
+            micro_conds = list(orig_size) + list(crop_coords)
+            if aesthetic_score is not None:
+                micro_conds += [aesthetic_score]
             micro_conds = torch.tensor(micro_conds, device=self.device, dtype=encoder_hidden_states.dtype)
             micro_conds = micro_conds.unsqueeze(0)
             model_inputs["micro_conds"] = micro_conds
