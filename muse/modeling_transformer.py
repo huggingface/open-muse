@@ -210,11 +210,11 @@ class MaskGitTransformer(ModelMixin, ConfigMixin):
         self.encoder_proj = nn.Linear(
             self.config.encoder_hidden_size, self.config.hidden_size, bias=self.config.use_bias
         )
-        self.encoder_proj_layer_norm = LayerNorm(config.hidden_size, config=config, elementwise_affine=True)
+        self.encoder_proj_layer_norm = LayerNorm(config.hidden_size, config=self.config, elementwise_affine=True)
 
         self.in_mapper = nn.Sequential(
             nn.Embedding(config.vocab_size, self.config.in_channels),
-            LayerNorm(config.in_channels, config=config, elementwise_affine=True),
+            LayerNorm(config.in_channels, config=self.config, elementwise_affine=True),
         )
         self.embed = PatchEmbed(config=self.config)
 
