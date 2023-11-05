@@ -20,7 +20,7 @@ import math
 import numbers
 import warnings
 from dataclasses import dataclass
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -346,7 +346,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         return_intermediate=False,
         seq_len=None,
         use_tqdm=None,
-        min_masking_len: Optional[int, Tuple[int, int]] = None,
+        min_masking_len: Optional[Union[int, Tuple[int, int]]] = None,
         # Legacy: kept for compatibility with pipeline
         topk_filter_thres=None,
         noise_type=None,

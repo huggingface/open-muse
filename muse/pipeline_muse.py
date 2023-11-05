@@ -532,7 +532,7 @@ class PipelineMuseEditing(PipelineMuse):
         orig_size=(256, 256),
         crop_coords=(0, 0),
         aesthetic_score=6.0,
-        min_masking_len: Optional[int, Tuple[int, int]] = None,
+        min_masking_len: Optional[Union[int, Tuple[int, int]]] = None,
     ):
         assert use_maskgit_generate
         if text is None and class_ids is None:
