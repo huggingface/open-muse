@@ -17,6 +17,7 @@ from typing import List, Optional, Union, Tuple
 
 import numpy as np
 import torch
+from torchvision import transforms
 from PIL import Image
 from transformers import (
     AutoTokenizer,
@@ -502,6 +503,144 @@ class PipelineMuseInpainting(PipelineMuse):
                 temperature=temperature,
                 topk_filter_thres=topk_filter_thres,
                 generator=generator,
+            )
+        images = self.vae.decode_code(generated_tokens)
+
+        # Convert to PIL images
+        images = [self.to_pil_image(image) for image in images]
+        return images
+
+
+class PipelineMuseEditing(PipelineMuse):
+    @torch.no_grad()
+    def __call__(
+        self,
+        image: Image,
+        text: Optional[Union[str, List[str]]] = None,
+        negative_text: Optional[Union[str, List[str]]] = None,
+        class_ids: torch.LongTensor = None,
+        timesteps: int = 8,
+        guidance_scale: float = 8.0,
+        guidance_schedule=None,
+        temperature: float = 1.0,
+        topk_filter_thres: float = 0.9,
+        num_images_per_prompt: int = 1,
+        use_maskgit_generate: bool = True,
+        generator: Optional[torch.Generator] = None,
+        use_fp16: bool = False,
+        image_size: int = 256,
+        orig_size=(256, 256),
+        crop_coords=(0, 0),
+        aesthetic_score=6.0,
+        min_masking_len: Optional[int, Tuple[int, int]] = None,
+    ):
+        assert use_maskgit_generate
+        if text is None and class_ids is None:
+            raise ValueError("Either text or class_ids must be provided.")
+
+        if text is not None and class_ids is not None:
+            raise ValueError("Only one of text or class_ids may be provided.")
+
+        encode_transform = transforms.Compose(
+            [
+                transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(image_size),
+                transforms.ToTensor(),
+            ]
+        )
+        pixel_values = encode_transform(image).unsqueeze(0).to(self.device)
+        _, image_tokens = self.vae.encode(pixel_values)
+
+        image_tokens = image_tokens.repeat(num_images_per_prompt, 1)
+        if class_ids is not None:
+            if isinstance(class_ids, int):
+                class_ids = [class_ids]
+
+            class_ids = torch.tensor(class_ids, device=self.device, dtype=torch.long)
+            # duplicate class ids for each generation per prompt
+            class_ids = class_ids.repeat_interleave(num_images_per_prompt, dim=0)
+            model_inputs = {"class_ids": class_ids}
+        else:
+            if isinstance(text, str):
+                text = [text]
+
+            input_ids = self.tokenizer(
+                text,
+                return_tensors="pt",
+                padding="max_length",
+                truncation=True,
+                max_length=self.tokenizer.model_max_length,
+            ).input_ids  # TODO: remove hardcode
+            input_ids = input_ids.to(self.device)
+
+            if self.transformer.config.add_cond_embeds:
+                outputs = self.text_encoder(input_ids, return_dict=True, output_hidden_states=True)
+                pooled_embeds, encoder_hidden_states = outputs.text_embeds, outputs.hidden_states[-2]
+            else:
+                encoder_hidden_states = self.text_encoder(input_ids).last_hidden_state
+                pooled_embeds = None
+
+            if negative_text is not None:
+                if isinstance(negative_text, str):
+                    negative_text = [negative_text]
+
+                negative_input_ids = self.tokenizer(
+                    negative_text,
+                    return_tensors="pt",
+                    padding="max_length",
+                    truncation=True,
+                    max_length=self.tokenizer.model_max_length,
+                ).input_ids
+                negative_input_ids = negative_input_ids.to(self.device)
+                negative_encoder_hidden_states = self.text_encoder(negative_input_ids).last_hidden_state
+            else:
+                negative_encoder_hidden_states = None
+
+            # duplicate text embeddings for each generation per prompt, using mps friendly method
+            bs_embed, seq_len, _ = encoder_hidden_states.shape
+            encoder_hidden_states = encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+            encoder_hidden_states = encoder_hidden_states.view(bs_embed * num_images_per_prompt, seq_len, -1)
+            if negative_encoder_hidden_states is not None:
+                bs_embed, seq_len, _ = negative_encoder_hidden_states.shape
+                negative_encoder_hidden_states = negative_encoder_hidden_states.repeat(1, num_images_per_prompt, 1)
+                negative_encoder_hidden_states = negative_encoder_hidden_states.view(
+                    bs_embed * num_images_per_prompt, seq_len, -1
+                )
+
+            empty_input = self.tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(
+                self.text_encoder.device
+            )
+            outputs = self.text_encoder(empty_input, output_hidden_states=True)
+            empty_embeds = outputs.hidden_states[-2]
+            empty_cond_embeds = outputs[0]
+
+            model_inputs = {
+                "encoder_hidden_states": encoder_hidden_states,
+                "negative_embeds": negative_encoder_hidden_states,
+                "empty_embeds": empty_embeds,
+                "empty_cond_embeds": empty_cond_embeds,
+                "cond_embeds": pooled_embeds,
+            }
+
+        if self.transformer.config.add_micro_cond_embeds:
+            micro_conds = list(orig_size) + list(crop_coords) + [aesthetic_score]
+            micro_conds = torch.tensor(micro_conds, device=self.device, dtype=encoder_hidden_states.dtype)
+            micro_conds = micro_conds.unsqueeze(0)
+            model_inputs["micro_conds"] = micro_conds
+
+        generate = self.transformer.generate2
+        with torch.autocast("cuda", enabled=use_fp16):
+            generated_tokens = generate(
+                input_ids=image_tokens,
+                **model_inputs,
+                timesteps=timesteps,
+                guidance_scale=guidance_scale,
+                guidance_schedule=guidance_schedule,
+                temperature=temperature,
+                topk_filter_thres=topk_filter_thres,
+                generator=generator,
+                use_tqdm=True,
+                min_masking_len=min_masking_len
             )
         images = self.vae.decode_code(generated_tokens)
 

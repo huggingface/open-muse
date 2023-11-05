@@ -346,6 +346,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
         return_intermediate=False,
         seq_len=None,
         use_tqdm=None,
+        min_masking_len: Optional[int, Tuple[int, int]] = None,
         # Legacy: kept for compatibility with pipeline
         topk_filter_thres=None,
         noise_type=None,
@@ -418,7 +419,7 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
             timesteps_iter = tqdm(range(timesteps))
         else:
             timesteps_iter = range(timesteps)
-        
+
         for step in timesteps_iter:
             if guidance_scale > 0:
                 model_input = torch.cat([input_ids] * 2)
@@ -459,8 +460,14 @@ class MaskGiTUViT_v2(ModelMixin, ConfigMixin):
             mask_len = (seq_len * mask_ratio).floor().unsqueeze(0).to(logits.device)
             # Keeps at least one of prediction in this round and also masks out at least
             # one and for the next iteration
+            min_length = 1
+            if min_masking_len is not None:
+                if isinstance(min_masking_len, int):
+                    min_length = min_masking_len
+                else:
+                    min_length = np.random.randint(min_masking_len[0], min_masking_len[1])
             mask_len = torch.max(
-                torch.tensor([1], device=logits.device),
+                torch.tensor([min_length], device=logits.device),
                 torch.min(unknown_map.sum(dim=-1, keepdim=True) - 1, mask_len),
             )
 
