@@ -58,10 +58,6 @@ model:
     use_empty_embeds_for_uncond: True
     add_cond_embeds: True
     cond_embed_dim: 768
-    add_micro_cond_embeds: True
-    micro_cond_encode_dim: 256
-    micro_cond_embed_dim: 1280
-    force_down_up_sample: True
 
   architecture: "uvit"
   gradient_checkpointing: True
