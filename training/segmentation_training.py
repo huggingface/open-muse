@@ -249,6 +249,8 @@ def validate_model(
         accelerator,
         global_step,
         prepare_inputs_and_labels,
+        tokenzier,
+        max_seq_length,
         max_eval_examples=None,
 ):
     logger.info("Evaluating...")
@@ -259,7 +261,15 @@ def validate_model(
     samples_taken = 0
 
     for i, batch in enumerate(eval_dataloader):
-        pixel_values, input_ids = batch["image"], batch["input_ids"]
+        pixel_values, captions = batch['masks'], batch['captions']
+        captions = [f'Generate face segmentation | {c[random.randint(0, 10)]}' for c in captions]
+        input_ids = tokenzier(
+            captions,
+            max_length=max_seq_length.max_seq_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt"
+        ).input_ids
         pixel_values = pixel_values.to(accelerator.device, non_blocking=True)
         input_ids = input_ids.to(accelerator.device, non_blocking=True)
         (
@@ -1081,7 +1091,7 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
-            pixel_values, captions = batch['image'], batch['captions']
+            pixel_values, captions = batch['masks'], batch['captions']
             captions = [f'Generate face segmentation | {c[epoch % 10]}' for c in captions]
             input_ids = tokenizer(
                 captions,
@@ -1264,6 +1274,8 @@ def main():
                         global_step + 1,
                         prepare_inputs_and_labels,
                         config.experiment.get("max_eval_examples", None),
+                        tokenizer=tokenizer,
+                        max_seq_length=config.dataset.preprocessing.max_seq_length
                     )
 
                     if config.training.get("use_ema", False):
@@ -1326,6 +1338,8 @@ def main():
             global_step,
             prepare_inputs_and_labels,
             config.experiment.get("max_eval_examples", None),
+            tokenizer=tokenizer,
+            max_seq_length=config.dataset.preprocessing.max_seq_length
         )
     save_checkpoint(model, config, accelerator, global_step)
 
