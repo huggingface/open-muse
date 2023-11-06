@@ -1059,9 +1059,12 @@ def main():
 
             if config.model.transformer.get("add_micro_cond_embeds", False):
                 bs = len(batch['masks'])
-                original_sizes = list(torch.full((bs, 2), 256))
-                crop_coords = list(torch.full((bs, 2), 0))
-                aesthetic_scores = torch.tensor([6.0] * bs)
+                batch['orig_size'] = [torch.tensor(bs * [256]),torch.tensor(bs * [256])]
+                batch['crop_coords'] = [torch.tensor(bs * [0]),torch.tensor(bs * [0])]
+                batch['aesthetic_score'] = torch.tensor(bs * [6.0])
+                original_sizes = list(map(list, zip(*batch["orig_size"])))
+                crop_coords = list(map(list, zip(*batch["crop_coords"])))
+                aesthetic_scores = batch["aesthetic_score"]
                 micro_conds = torch.cat(
                     [torch.tensor(original_sizes), torch.tensor(crop_coords), aesthetic_scores.unsqueeze(-1)], dim=-1
                 )
