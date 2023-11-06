@@ -29,8 +29,9 @@ import PIL
 import webdataset as wds
 import yaml
 from braceexpand import braceexpand
-from torch.utils.data import default_collate
+from torch.utils.data import default_collate, DataLoader
 from torchvision import transforms
+from datasets import load_dataset
 from transformers import PreTrainedTokenizer
 from webdataset.tariterators import (
     base_plus_ext,
@@ -656,6 +657,48 @@ class Text2ImageDataset:
     @property
     def eval_dataset(self):
         return self._eval_dataset
+
+    @property
+    def eval_dataloader(self):
+        return self._eval_dataloader
+
+
+class SegmentationDataset:
+    def __init__(
+            self,
+            per_gpu_batch_size: int,
+            dataset_name: str = 'reza-alipour/MM-CelebA-HQ-Dataset-256'):
+        self.ds = load_dataset(dataset_name)
+
+        def custom_collate_fn(batch):
+            masks = [sample['mask'] for sample in batch]
+            captions = [sample['captions'] for sample in batch]
+            # image = transforms.Resize(resolution, interpolation=transforms.InterpolationMode.BILINEAR)(image)
+            # get crop coordinates
+            # if random.random() < 0.3:
+            #     c_top, c_left, _, _ = transforms.RandomCrop.get_params(mask, output_size=(resolution, resolution))
+            #     mask = transforms.functional.crop(mask, c_top, c_left, resolution, resolution)
+            masks = [transforms.ToTensor()(mask) for mask in masks]
+
+            return {'masks': masks, 'captions': captions}
+
+        self._train_dataloader = DataLoader(
+            self.ds['train'],
+            batch_size=per_gpu_batch_size,
+            shuffle=True,
+            collate_fn=custom_collate_fn
+        )
+
+        self._eval_dataloader = DataLoader(
+            self.ds['test'],
+            batch_size=per_gpu_batch_size,
+            shuffle=False,
+            collate_fn=custom_collate_fn
+        )
+
+    @property
+    def train_dataloader(self):
+        return self._train_dataloader
 
     @property
     def eval_dataloader(self):
