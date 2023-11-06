@@ -26,6 +26,7 @@ from functools import partial
 from typing import List, Optional, Union
 
 import PIL
+import torch
 import webdataset as wds
 import yaml
 from braceexpand import braceexpand
@@ -678,7 +679,7 @@ class SegmentationDataset:
             # if random.random() < 0.3:
             #     c_top, c_left, _, _ = transforms.RandomCrop.get_params(mask, output_size=(resolution, resolution))
             #     mask = transforms.functional.crop(mask, c_top, c_left, resolution, resolution)
-            masks = [transforms.ToTensor()(mask) for mask in masks]
+            masks = torch.tensor([transforms.ToTensor()(mask) for mask in masks])
 
             return {'masks': masks, 'captions': captions}
 
