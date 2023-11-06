@@ -1060,7 +1060,7 @@ def main():
             if config.model.transformer.get("add_micro_cond_embeds", False):
                 batch['orig_size'] = len(batch) * [(256, 256)]
                 batch['crop_coords'] = len(batch) * [(0, 0)]
-                batch['aesthetic_score'] = len(batch) * [5.0]
+                batch['aesthetic_score'] = torch.tensor(len(batch) * [5.0])
                 original_sizes = list(map(list, zip(*batch["orig_size"])))
                 crop_coords = list(map(list, zip(*batch["crop_coords"])))
                 aesthetic_scores = batch["aesthetic_score"]
