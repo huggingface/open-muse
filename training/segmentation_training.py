@@ -1058,9 +1058,10 @@ def main():
                 clip_embeds = None
 
             if config.model.transformer.get("add_micro_cond_embeds", False):
-                batch['orig_size'] = len(batch) * [(256, 256)]
-                batch['crop_coords'] = len(batch) * [(0, 0)]
-                batch['aesthetic_score'] = torch.tensor(len(batch) * [5.0])
+                bs = len(batch['masks'])
+                batch['orig_size'] = bs * [(256, 256)]
+                batch['crop_coords'] = bs * [(0, 0)]
+                batch['aesthetic_score'] = torch.tensor(bs * [6.0])
                 original_sizes = list(map(list, zip(*batch["orig_size"])))
                 crop_coords = list(map(list, zip(*batch["crop_coords"])))
                 aesthetic_scores = batch["aesthetic_score"]
