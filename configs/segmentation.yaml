@@ -105,8 +105,8 @@ training:
   guidance_scale: 8
   generation_timesteps: 20
   # related to vae code sampling
-  use_soft_code_target: False
+  use_soft_code_target: True
   use_stochastic_code: False
   soft_code_temp: 1.0
-#  mask_schedule: "cosine"
+  mask_schedule: "cosine"
   mask_contiguous_region_prob: 0.15
