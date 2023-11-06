@@ -946,8 +946,9 @@ def main():
     if config.training.overfit_one_batch:
         train_dataloader = [next(iter(train_dataloader))]
 
+    num_batches = math.ceil(len(train_dataloader.dataset) / train_dataloader.batch_size)
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    num_update_steps_per_epoch = math.ceil(train_dataloader.num_batches / config.training.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.ceil(num_batches / config.training.gradient_accumulation_steps)
     # Afterwards we recalculate our number of training epochs.
     # Note: We are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
