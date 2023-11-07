@@ -75,7 +75,7 @@ dataset:
         resolution: 256
 
 optimizer:
-  name: lion
+  name: fused_adamw
   params: # default adamw params
     learning_rate: 1e-4
     scale_lr: False # scale learning rate by total batch size
