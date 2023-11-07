@@ -5,13 +5,13 @@ experiment:
   name: "muse-seg"
   project: "face-segmentation"
   output_dir: "output/"
-  max_train_examples: 1000
-  max_eval_examples: 300
-  save_every: 5000
-  eval_every: 100
-  generate_every: 2000
-  log_every: 300
-  log_grad_norm_every: 2000
+  max_train_examples: 28500
+  max_eval_examples: 1000
+  save_every: 3000
+  eval_every: 200
+  generate_every: 200
+  log_every: 200
+  log_grad_norm_every: 1000
   resume_from_checkpoint: latest
   resume_lr_scheduler: True
   checkpoints_total_limit: 3
@@ -77,7 +77,7 @@ dataset:
 optimizer:
   name: lion
   params: # default adamw params
-    learning_rate: 1e-3
+    learning_rate: 1e-4
     scale_lr: False # scale learning rate by total batch size
     beta1: 0.9
     beta2: 0.999
@@ -91,8 +91,8 @@ lr_scheduler:
     warmup_steps: 100
 
 training:
-  gradient_accumulation_steps: 8
-  batch_size: 2
+  gradient_accumulation_steps: 2
+  batch_size: 10
   mixed_precision: "no"
   enable_tf32: True
   use_ema: True
