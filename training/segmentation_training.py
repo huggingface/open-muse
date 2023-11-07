@@ -1094,7 +1094,10 @@ def main():
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
+        ii = 0
         for batch in train_dataloader:
+            ii += 1
+            print(f'Batch Number: {ii}')
             pixel_values, captions = batch['masks'], batch['captions']
             captions = [f'Generate face segmentation | {c[epoch % 10]}' for c in captions]
             input_ids = tokenizer(
