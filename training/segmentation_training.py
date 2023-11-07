@@ -265,7 +265,7 @@ def validate_model(
         captions = [f'Generate face segmentation | {c[random.randint(0, 10)]}' for c in captions]
         input_ids = tokenizer(
             captions,
-            max_length=max_seq_length.max_seq_length,
+            max_length=max_seq_length,
             padding="max_length",
             truncation=True,
             return_tensors="pt"
