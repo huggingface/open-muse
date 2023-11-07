@@ -6,12 +6,12 @@ experiment:
   project: "face-segmentation"
   output_dir: "output/"
   max_train_examples: 1000
-  max_eval_examples: 50
-  save_every: 500
+  max_eval_examples: 300
+  save_every: 5000
   eval_every: 100
   generate_every: 2000
-  log_every: 50
-  log_grad_norm_every: 500
+  log_every: 300
+  log_grad_norm_every: 2000
   resume_from_checkpoint: latest
   resume_lr_scheduler: True
   checkpoints_total_limit: 3
