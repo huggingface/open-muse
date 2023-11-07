@@ -27,7 +27,6 @@ import numpy as np
 import plotly.express as px
 import torch
 import torch.nn.functional as F
-import torchvision.transforms.functional as TF
 import wandb
 from PIL import Image
 from accelerate import Accelerator
@@ -321,13 +320,11 @@ def generate_images(
     logger.info("Generating images...")
     model.eval()
     # fmt: off
-    imagenet_class_names = ['jay', 'castle', 'coffee mug', 'desk', 'Eskimo dog,  husky', 'valley,  vale', 'red wine',
-                            'coral reef', 'mixing bowl', 'cleaver,  meat cleaver,  chopper', 'vine snake',
-                            'bloodhound,  sleuthhound', 'barbershop', 'ski', 'otter', 'snowmobile']
+    captions = ["She is wearing earrings. She has pointy nose, arched eyebrows, high cheekbones, straight hair, big lips, mouth slightly open, and blond hair."]
     # fmt: on
 
     # read validation prompts from file
-    validation_prompts = imagenet_class_names
+    validation_prompts = [f'Generate face segmentation | {c}' for c in captions]
 
     if config.training.get("pre_encode", False):
         if config.model.text_encoder.type == "clip":
@@ -426,106 +423,6 @@ def generate_images(
     # Log images
     wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
     wandb.log({"generated_images": wandb_images}, step=global_step)
-
-
-@torch.no_grad()
-def generate_inpainting_images(
-        model,
-        vq_model,
-        text_encoder,
-        tokenizer,
-        accelerator,
-        config,
-        global_step,
-        mask_schedule,
-        empty_embeds=None,
-        empty_clip_embeds=None,
-):
-    assert not config.training.get("pre_encode", False)
-
-    model.eval()
-
-    mask_token_id = config.model.transformer.vocab_size - 1
-
-    validation_prompts, validation_images, validation_masks = inpainting_validation_data()
-
-    validation_masks = validation_masks_to_latent_tensors(validation_masks).to(accelerator.device)
-
-    validation_images = torch.stack([TF.to_tensor(x) for x in validation_images])
-    validation_images = validation_images.to(accelerator.device)
-    _, validation_images = vq_model.encode(validation_images)
-    validation_images[validation_masks] = mask_token_id
-
-    token_input_ids = tokenizer(
-        validation_prompts,
-        return_tensors="pt",
-        padding="max_length",
-        truncation=True,
-        max_length=config.dataset.preprocessing.max_seq_length,
-    ).input_ids
-
-    if config.model.transformer.get("add_cond_embeds", False):
-        outputs = text_encoder(token_input_ids.to(accelerator.device), return_dict=True, output_hidden_states=True)
-        encoder_hidden_states = outputs.hidden_states[-2]
-        clip_embeds = outputs[0]
-    else:
-        encoder_hidden_states = text_encoder(token_input_ids.to(accelerator.device)).last_hidden_state
-        clip_embeds = None
-
-    if config.model.transformer.get("add_micro_cond_embeds", False):
-        resolution = config.dataset.preprocessing.resolution
-        micro_conds = torch.tensor(
-            [resolution, resolution, 0, 0, 6], device=encoder_hidden_states.device, dtype=encoder_hidden_states.dtype
-        )
-        micro_conds = micro_conds.unsqueeze(0).repeat(encoder_hidden_states.shape[0], 1)
-
-    with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
-        # Generate images
-        gen_token_ids = accelerator.unwrap_model(model).generate2(
-            input_ids=validation_images,
-            encoder_hidden_states=encoder_hidden_states,
-            cond_embeds=clip_embeds,
-            empty_embeds=empty_embeds,
-            empty_cond_embeds=empty_clip_embeds,
-            micro_conds=micro_conds,
-            guidance_scale=config.training.guidance_scale,
-            temperature=config.training.get("generation_temperature", 1.0),
-            timesteps=config.training.generation_timesteps,
-            noise_schedule=mask_schedule,
-            noise_type=config.training.get("noise_type", "mask"),
-            predict_all_tokens=config.training.get("predict_all_tokens", False),
-        )
-    # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
-    # so we clamp them to the correct range.
-    gen_token_ids = torch.clamp(gen_token_ids, max=accelerator.unwrap_model(model).config.codebook_size - 1)
-
-    if config.training.get("split_vae_encode", False):
-        split_batch_size = config.training.split_vae_encode
-        # Use a batch of at most split_vae_encode images to decode and then concat the results
-        batch_size = gen_token_ids.shape[0]
-        num_splits = math.ceil(batch_size / split_batch_size)
-        images = []
-        for i in range(num_splits):
-            start_idx = i * split_batch_size
-            end_idx = min((i + 1) * split_batch_size, batch_size)
-            images.append(vq_model.decode_code(gen_token_ids[start_idx:end_idx]))
-        images = torch.cat(images, dim=0)
-    else:
-        images = vq_model.decode_code(gen_token_ids)
-
-    # Convert to PIL images
-    images = 2.0 * images - 1.0
-    images = torch.clamp(images, -1.0, 1.0)
-    images = (images + 1.0) / 2.0
-    images *= 255.0
-    images = images.permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
-    pil_images = [Image.fromarray(image) for image in images]
-
-    # Log images
-    wandb_images = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
-    wandb.log({"generated_inpainting_images": wandb_images}, step=global_step)
-
-    model.train()
 
 
 def inpainting_validation_data():
@@ -1061,7 +958,7 @@ def main():
                 bs = len(batch['masks'])
                 batch['orig_size'] = [torch.tensor(bs * [256]), torch.tensor(bs * [256])]
                 batch['crop_coords'] = [torch.tensor(bs * [0]), torch.tensor(bs * [0])]
-                batch['aesthetic_score'] = torch.tensor(bs * [6.0])
+                batch['aesthetic_score'] = torch.tensor(bs * [6])
                 original_sizes = list(map(list, zip(*batch["orig_size"])))
                 crop_coords = list(map(list, zip(*batch["crop_coords"])))
                 aesthetic_scores = batch["aesthetic_score"]
@@ -1296,19 +1193,6 @@ def main():
                         ema.copy_to(model.parameters())
 
                     generate_images(
-                        model,
-                        vq_model,
-                        text_encoder,
-                        tokenizer,
-                        accelerator,
-                        config,
-                        global_step + 1,
-                        mask_schedule=mask_schedule,
-                        empty_embeds=empty_embeds,
-                        empty_clip_embeds=empty_clip_embeds,
-                    )
-
-                    generate_inpainting_images(
                         model,
                         vq_model,
                         text_encoder,
