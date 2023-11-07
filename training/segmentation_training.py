@@ -1059,8 +1059,8 @@ def main():
 
             if config.model.transformer.get("add_micro_cond_embeds", False):
                 bs = len(batch['masks'])
-                batch['orig_size'] = [torch.tensor(bs * [256]),torch.tensor(bs * [256])]
-                batch['crop_coords'] = [torch.tensor(bs * [0]),torch.tensor(bs * [0])]
+                batch['orig_size'] = [torch.tensor(bs * [256]), torch.tensor(bs * [256])]
+                batch['crop_coords'] = [torch.tensor(bs * [0]), torch.tensor(bs * [0])]
                 batch['aesthetic_score'] = torch.tensor(bs * [6.0])
                 original_sizes = list(map(list, zip(*batch["orig_size"])))
                 crop_coords = list(map(list, zip(*batch["crop_coords"])))
@@ -1094,10 +1094,9 @@ def main():
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
-        ii = 0
-        for batch in train_dataloader:
-            ii += 1
-            print(f'Batch Number: {ii}')
+        for i, batch in enumerate(train_dataloader):
+            if i % 200 == 0:
+                accelerator.print(f'Batch Number: {i}')
             pixel_values, captions = batch['masks'], batch['captions']
             captions = [f'Generate face segmentation | {c[epoch % 10]}' for c in captions]
             input_ids = tokenizer(
@@ -1280,7 +1279,7 @@ def main():
                         accelerator,
                         global_step + 1,
                         prepare_inputs_and_labels,
-                        config.experiment.get("max_eval_examples", None),
+                        max_eval_examples=config.experiment.get("max_eval_examples", None),
                         tokenizer=tokenizer,
                         max_seq_length=config.dataset.preprocessing.max_seq_length
                     )
@@ -1344,7 +1343,7 @@ def main():
             accelerator,
             global_step,
             prepare_inputs_and_labels,
-            config.experiment.get("max_eval_examples", None),
+            max_eval_examples=config.experiment.get("max_eval_examples", None),
             tokenizer=tokenizer,
             max_seq_length=config.dataset.preprocessing.max_seq_length
         )
