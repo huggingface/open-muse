@@ -249,7 +249,7 @@ def validate_model(
         accelerator,
         global_step,
         prepare_inputs_and_labels,
-        tokenzier,
+        tokenizer,
         max_seq_length,
         max_eval_examples=None,
 ):
@@ -263,7 +263,7 @@ def validate_model(
     for i, batch in enumerate(eval_dataloader):
         pixel_values, captions = batch['masks'], batch['captions']
         captions = [f'Generate face segmentation | {c[random.randint(0, 10)]}' for c in captions]
-        input_ids = tokenzier(
+        input_ids = tokenizer(
             captions,
             max_length=max_seq_length.max_seq_length,
             padding="max_length",
