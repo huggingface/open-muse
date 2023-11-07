@@ -9,7 +9,7 @@ experiment:
   max_eval_examples: 50
   save_every: 500
   eval_every: 100
-  generate_every: 100
+  generate_every: 2000
   log_every: 50
   log_grad_norm_every: 500
   resume_from_checkpoint: latest
