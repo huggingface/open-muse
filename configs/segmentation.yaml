@@ -91,8 +91,8 @@ lr_scheduler:
     warmup_steps: 100
 
 training:
-  gradient_accumulation_steps: 2
-  batch_size: 8
+  gradient_accumulation_steps: 8
+  batch_size: 1
   mixed_precision: "no"
   enable_tf32: True
   use_ema: True
