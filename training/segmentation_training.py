@@ -992,8 +992,6 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for i, batch in enumerate(train_dataloader):
-            if i % 200 == 0:
-                accelerator.print(f'Batch Number: {i}')
             pixel_values, captions = batch['masks'], batch['captions']
             captions = [f'Generate face segmentation | {c[epoch % 10]}' for c in captions]
             input_ids = tokenizer(
