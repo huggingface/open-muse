@@ -64,11 +64,11 @@ class Downsample(nn.Module):
 
 class ResnetBlock(nn.Module):
     def __init__(
-        self,
-        in_channels: int,
-        out_channels: int = None,
-        use_conv_shortcut: bool = False,
-        dropout_prob: float = 0.0,
+            self,
+            in_channels: int,
+            out_channels: int = None,
+            use_conv_shortcut: bool = False,
+            dropout_prob: float = 0.0,
     ):
         super().__init__()
 
@@ -512,20 +512,20 @@ class VectorQuantizer(nn.Module):
 class VQGANModel(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
-        self,
-        resolution: int = 256,
-        num_channels: int = 3,
-        hidden_channels: int = 128,
-        channel_mult: Tuple = (1, 1, 2, 2, 4),
-        num_res_blocks: int = 2,
-        attn_resolutions: int = (16,),
-        no_attn_mid_block: bool = False,
-        z_channels: int = 256,
-        num_embeddings: int = 1024,
-        quantized_embed_dim: int = 256,
-        dropout: float = 0.0,
-        resample_with_conv: bool = True,
-        commitment_cost: float = 0.25,
+            self,
+            resolution: int = 256,
+            num_channels: int = 3,
+            hidden_channels: int = 128,
+            channel_mult: Tuple = (1, 1, 2, 2, 4),
+            num_res_blocks: int = 2,
+            attn_resolutions: int = (16,),
+            no_attn_mid_block: bool = False,
+            z_channels: int = 256,
+            num_embeddings: int = 1024,
+            quantized_embed_dim: int = 256,
+            dropout: float = 0.0,
+            resample_with_conv: bool = True,
+            commitment_cost: float = 0.25,
     ):
         super().__init__()
 
