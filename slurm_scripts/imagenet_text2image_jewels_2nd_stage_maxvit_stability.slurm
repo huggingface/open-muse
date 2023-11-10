@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH --partition=g40x
-#SBATCH --output=/admin/home-isamu/output_muse/%x-%j.out
+#SBATCH --output=/admin/home-isamu/output_muse_maxvit/%x-%j.out
 #SBATCH -A laion
 
 set -x -e
@@ -15,7 +15,7 @@ source /admin/home-isamu/muse/bin/activate
 echo "START TIME: $(date)"
 
 MUSE_REPO=/admin/home-isamu/open-muse
-OUTPUT_DIR=/admin/home-isamu/output_muse
+OUTPUT_DIR=/admin/home-isamu/output_muse_maxvit
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
@@ -26,7 +26,7 @@ GPUS_PER_NODE=8
 NNODES=$SLURM_NNODES
 
 CMD=" \
-    training/train_muse.py config=configs/imagenet_text2image_jewels_2nd_stage_stability_uvit.yaml \
+    training/train_muse.py config=configs/imagenet_text2image_jewels_2nd_stage_maxvit_stability.yaml \
     wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
