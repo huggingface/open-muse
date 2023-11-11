@@ -415,8 +415,6 @@ def main():
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
-    if config.training.get("compile", True):
-        model = torch.compile(model)
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
