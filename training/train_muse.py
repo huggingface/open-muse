@@ -720,7 +720,6 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
-            print(torch.cuda.max_memory_allocated() /(1024)**3)
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
             if is_pre_encode:
                 pixel_values, input_ids = batch["image_input_ids"], batch["encoder_hidden_states"]
