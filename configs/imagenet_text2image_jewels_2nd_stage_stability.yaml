@@ -122,8 +122,8 @@ lr_scheduler:
 
 training:
     split_vae_encode: 1
-    gradient_accumulation_steps: 4
-    batch_size: 4
+    gradient_accumulation_steps: 8
+    batch_size: 2
     mixed_precision: "bf16"
     enable_tf32: True
     use_ema: False
