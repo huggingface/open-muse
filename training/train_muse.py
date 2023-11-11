@@ -354,9 +354,14 @@ def main():
             low_res_vq_class = get_vq_model_class(config.model.low_res_vq_model.type)
             low_res_vq_model = low_res_vq_class.from_pretrained(config.model.low_res_vq_model.pretrained, subfolder="vae")
             low_res_vq_model.requires_grad_(False)
+            if config.training.get("compile", True):
+                low_res_vq_model = torch.compile(low_res_vq_model)
         # Freeze the text model and VQGAN
         text_encoder.requires_grad_(False)
         vq_model.requires_grad_(False)
+        if config.training.get("compile", True):
+            text_encoder = torch.compile(text_encoder)
+            vq_model = torch.compile(vq_model)
     else:
         text_encoder = None
         tokenizer = None
@@ -410,6 +415,8 @@ def main():
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
+    if config.training.get("compile", True):
+        model = torch.compile(model)
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
@@ -720,6 +727,7 @@ def main():
     for epoch in range(first_epoch, num_train_epochs):
         model.train()
         for batch in train_dataloader:
+            print(torch.cuda.max_memory_allocated() /(1024)**3)
             # TODO(Patrick) - We could definitely pre-compute the image tokens for faster training on larger datasets
             if is_pre_encode:
                 pixel_values, input_ids = batch["image_input_ids"], batch["encoder_hidden_states"]
