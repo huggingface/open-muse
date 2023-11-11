@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH --partition=g40x
-#SBATCH --output=/admin/home-isamu/output_muse/%x-%j.out
+#SBATCH --output=/admin/home-isamu/output_muse_2nd_stage/%x-%j.out
 #SBATCH -A laion
 
 set -x -e
@@ -15,7 +15,7 @@ source /admin/home-isamu/muse/bin/activate
 echo "START TIME: $(date)"
 
 MUSE_REPO=/admin/home-isamu/open-muse
-OUTPUT_DIR=/admin/home-isamu/output_muse
+OUTPUT_DIR=/admin/home-isamu/output_muse_2nd_stage
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
