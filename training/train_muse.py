@@ -354,14 +354,9 @@ def main():
             low_res_vq_class = get_vq_model_class(config.model.low_res_vq_model.type)
             low_res_vq_model = low_res_vq_class.from_pretrained(config.model.low_res_vq_model.pretrained, subfolder="vae")
             low_res_vq_model.requires_grad_(False)
-            if config.training.get("compile", True):
-                low_res_vq_model = torch.compile(low_res_vq_model)
         # Freeze the text model and VQGAN
         text_encoder.requires_grad_(False)
         vq_model.requires_grad_(False)
-        if config.training.get("compile", True):
-            text_encoder = torch.compile(text_encoder)
-            vq_model = torch.compile(vq_model)
     else:
         text_encoder = None
         tokenizer = None

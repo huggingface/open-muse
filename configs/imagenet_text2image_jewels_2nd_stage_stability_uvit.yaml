@@ -128,7 +128,6 @@ lr_scheduler:
 
 
 training:
-    compile: True
     split_vae_encode: 1
     gradient_accumulation_steps: 4
     batch_size: 4
