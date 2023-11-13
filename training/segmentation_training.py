@@ -261,7 +261,7 @@ def validate_model(
 
     for i, batch in enumerate(eval_dataloader):
         pixel_values, captions = batch['masks'], batch['captions']
-        captions = [f'Generate face segmentation | {c[random.randint(0, 9)]}' for c in captions]
+        captions = [f'Face segmentation | ID = {random.randint(0, 10000000000)}' for _ in captions]
         input_ids = tokenizer(
             captions,
             max_length=max_seq_length,
@@ -324,7 +324,7 @@ def generate_images(
     # fmt: on
 
     # read validation prompts from file
-    validation_prompts = [f'Generate face segmentation | {c}' for c in captions]
+    validation_prompts = [f'Face segmentation | ID = {random.randint(0, 10000000000)}' for _ in captions]
 
     if config.training.get("pre_encode", False):
         if config.model.text_encoder.type == "clip":
@@ -993,7 +993,7 @@ def main():
         model.train()
         for i, batch in enumerate(train_dataloader):
             pixel_values, captions = batch['masks'], batch['captions']
-            captions = [f'Generate face segmentation | {c[epoch % 10]}' for c in captions]
+            captions = [f'Face segmentation | ID = {random.randint(0, 10000000000)}' for _ in captions]
             input_ids = tokenizer(
                 captions,
                 max_length=config.dataset.preprocessing.max_seq_length,
