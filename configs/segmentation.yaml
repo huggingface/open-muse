@@ -71,7 +71,7 @@ model:
 
 dataset:
     preprocessing:
-        max_seq_length: 25
+        max_seq_length: 77
         resolution: 256
 
 optimizer:
