@@ -2,24 +2,24 @@ wandb:
   entity: r-ap
 
 experiment:
-  name: "muse-seg"
+  name: "muse-seg-trim"
   project: "face-segmentation"
   output_dir: "output/"
   max_train_examples: 28500
   max_eval_examples: 1000
   save_every: 3000
   eval_every: 200
-  generate_every: 200
-  log_every: 200
+  generate_every: 300
+  log_every: 150
   log_grad_norm_every: 1000
   resume_from_checkpoint: latest
   resume_lr_scheduler: True
-  checkpoints_total_limit: 3
+  checkpoints_total_limit: 2
 
 model:
   vq_model:
     type: "vqgan"
-    pretrained: "openMUSE/vqgan-f16-8192-laion"
+    pretrained: "reza-alipour/vqgan-segmentation"
 
   text_encoder:
     type: "clip"
@@ -65,7 +65,7 @@ model:
 
   architecture: "uvit"
   gradient_checkpointing: True
-  enable_xformers_memory_efficient_attention: True
+  enable_xformers_memory_efficient_attention: False
   pretrained_model_path: "reza-alipour/open-muse-seg256"
 
 
@@ -91,8 +91,8 @@ lr_scheduler:
     warmup_steps: 100
 
 training:
-  gradient_accumulation_steps: 2
-  batch_size: 8
+  gradient_accumulation_steps: 8
+  batch_size: 2
   mixed_precision: "no"
   enable_tf32: True
   use_ema: True
