@@ -22,7 +22,7 @@ model:
     
     text_encoder:
         type: "clip"
-        pretrained: "openMUSE/clip-vit-large-patch14-text-enc"
+        pretrained: "openMUSE/CLIP-ViT-L-14-DataComp.XL-s13B-b90K-penultimate"
     
     architecture: "uvit"
 
