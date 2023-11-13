@@ -41,7 +41,7 @@ from transformers import (
     T5EncoderModel,
     T5Tokenizer,
 )
-
+from transformers import Adafactor
 import muse
 import muse.training_utils
 from data import SegmentationDataset
@@ -753,6 +753,8 @@ def main():
             optimizer_cls = apex.optimizers.FusedAdam
         else:
             raise ImportError("Please install apex to use fused_adam")
+    elif optimizer_type == "adafactor":
+        optimizer_cls = Adafactor
     elif optimizer_type == "8bit_adamw":
         try:
             import bitsandbytes as bnb
@@ -779,13 +781,23 @@ def main():
         },
     ]
 
-    optimizer = optimizer_cls(
-        optimizer_grouped_parameters,
-        lr=optimizer_config.learning_rate,
-        betas=(optimizer_config.beta1, optimizer_config.beta2),
-        weight_decay=optimizer_config.weight_decay,
-        eps=optimizer_config.epsilon,
-    )
+    if optimizer_cls == Adafactor:
+        optimizer = Adafactor(
+            model.parameters(),
+            scale_parameter=False,
+            relative_step=False,
+            warmup_init=False,
+            clip_threshold=0.5,
+            lr=optimizer_config.learning_rate
+        )
+    else:
+        optimizer = optimizer_cls(
+            optimizer_grouped_parameters,
+            lr=optimizer_config.learning_rate,
+            betas=(optimizer_config.beta1, optimizer_config.beta2),
+            weight_decay=optimizer_config.weight_decay,
+            eps=optimizer_config.epsilon,
+        )
 
     # Cretae mask scheduler
     if config.get("mask_schedule", None) is not None:
