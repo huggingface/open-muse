@@ -66,7 +66,7 @@ model:
   architecture: "uvit"
   gradient_checkpointing: True
   enable_xformers_memory_efficient_attention: False
-  pretrained_model_path: "reza-alipour/open-muse-seg256"
+  pretrained_model_path: "valhalla/research-run"
 
 
 dataset:
