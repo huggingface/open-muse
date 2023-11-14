@@ -507,6 +507,16 @@ def save_checkpoint(model, config, accelerator, global_step):
             save_function=accelerator.save,
             state_dict=state_dict,
         )
+
+        fp16_model = model.half()
+        fp16_state_dict = accelerator.get_state_dict(fp16_model)
+        fp16_model = accelerator.unwrap_model(fp16_model)
+        fp16_model.save_pretrained(
+            save_path / "unwrapped_model_fp16",
+            save_function=accelerator.save,
+            state_dict=fp16_state_dict,
+        )
+
         json.dump({"global_step": global_step}, (save_path / "metadata.json").open("w+"))
         logger.info(f"Saved state to {save_path}")
 
@@ -700,7 +710,7 @@ def main():
 
     model_cls = MaskGitTransformer if config.model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
     if config.model.get("pretrained_model_path", None) is not None:
-        model = model_cls.from_pretrained(config.model.pretrained_model_path, torch_dtype=torch.float16)
+        model = model_cls.from_pretrained(config.model.pretrained_model_path)
     else:
         model = model_cls(**config.model.transformer)
     mask_id = model.config.mask_token_id
