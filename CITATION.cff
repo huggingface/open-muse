@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+title: 'Amused: An open MUSE model'
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Suraj
+    family-names: Patil
+  - given-names: Berman
+    family-names: William
+  - given-names: Patrick
+    family-names: von Platen
+repository-code: 'https://github.com/huggingface/open-muse'
+keywords:
+  - deep-learning
+  - pytorch
+  - image-generation
+  - text2image
+  - image2image
+  - language-modeling
+  - masked-language-modeling
+license: Apache-2.0
+version: 0.12.1
