@@ -1,6 +1,14 @@
 These are a set of script to generate performance benchmarks of open muse compared 
-to stable diffusion 1.5
+to other models
 
 ### A100
 
-![full_12](./artifacts/a100.png)
+![a100](./artifacts/a100_bs_1.png)
+
+![a100](./artifacts/a100_bs_8.png)
+
+### 4090
+
+![4090](./artifacts/4090_bs_1.png)
+
+![4090](./artifacts/4090_bs_8.png)
