@@ -112,7 +112,7 @@ dataset:
 optimizer:
     name: 8bit_adamw
     params: # default adamw params
-        learning_rate: 1e-4
+        learning_rate: 1e-5
         scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999

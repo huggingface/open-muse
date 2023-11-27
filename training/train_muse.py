@@ -259,7 +259,6 @@ def main():
         torch.backends.cudnn.deterministic = False
 
     config.experiment.logging_dir = str(Path(config.experiment.output_dir) / "logs")
-    # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     ddp_kwargs = DistributedDataParallelKwargs()
 
     accelerator = Accelerator(
