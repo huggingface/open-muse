@@ -29,14 +29,14 @@ torch.set_float32_matmul_precision("high")
 num_threads = torch.get_num_threads()
 prompt = "A high tech solarpunk utopia in the Amazon rainforest"
 
-do_sd15 = False
-do_sdxl = False
-do_ssd_1b = False
+do_sd15       = True 
+do_sdxl       = True 
+do_ssd_1b     = True 
 do_sdxl_turbo = True
-do_sd_turbo = True
-do_muse = False
-do_wurst = False
-do_lcm = False
+do_sd_turbo   = True
+do_muse       = True 
+do_wurst      = True 
+do_lcm        = True 
 
 def main():
     args = ArgumentParser()
