@@ -112,50 +112,6 @@ def main():
                         ]
                     )
 
-                if do_sdxl_turbo:
-                    out, mem_bytes = sdxl_turbo_benchmark(
-                        batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers
-                    )
-
-                    Compare([out]).print()
-                    print("*******")
-
-                    csv_data.append(
-                        [
-                            batch_size,
-                            "sdxl_turbo",
-                            out.median * 1000,
-                            args.device,
-                            timesteps,
-                            mem_bytes,
-                            1024,
-                            use_xformers,
-                            None,
-                        ]
-                    )
-
-                if do_sd_turbo:
-                    out, mem_bytes = sd_turbo_benchmark(
-                        batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers
-                    )
-
-                    Compare([out]).print()
-                    print("*******")
-
-                    csv_data.append(
-                        [
-                            batch_size,
-                            "sd_turbo",
-                            out.median * 1000,
-                            args.device,
-                            timesteps,
-                            mem_bytes,
-                            512,
-                            use_xformers,
-                            None,
-                        ]
-                    )
-
                 if do_muse:
                     for resolution in [256, 512]:
                         for use_fused_residual_norm in [False, True]:
@@ -183,6 +139,56 @@ def main():
                                     use_fused_residual_norm,
                                 ]
                             )
+
+        if do_sdxl_turbo:
+            for use_xformers in [True, False]:
+                timesteps = 1
+
+                out, mem_bytes = sdxl_turbo_benchmark(
+                    batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers
+                )
+
+                Compare([out]).print()
+                print("*******")
+
+                csv_data.append(
+                    [
+                        batch_size,
+                        "sdxl_turbo",
+                        out.median * 1000,
+                        args.device,
+                        timesteps,
+                        mem_bytes,
+                        1024,
+                        use_xformers,
+                        None,
+                    ]
+                )
+
+        if do_sd_turbo:
+            for use_xformers in [True, False]:
+                timesteps = 1
+
+                out, mem_bytes = sd_turbo_benchmark(
+                    batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers
+                )
+
+                Compare([out]).print()
+                print("*******")
+
+                csv_data.append(
+                    [
+                        batch_size,
+                        "sd_turbo",
+                        out.median * 1000,
+                        args.device,
+                        timesteps,
+                        mem_bytes,
+                        512,
+                        use_xformers,
+                        None,
+                    ]
+                )
 
         if do_wurst:
             for use_xformers in [False, True]:
