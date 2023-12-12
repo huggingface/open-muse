@@ -91,6 +91,7 @@ if __name__ == "__main__":
     args = argparse.ArgumentParser()
     args.add_argument("--fid", action="store_true")
     args.add_argument("--isc", action="store_true")
+    args.add_argument("--clip", action="store_true")
     args = args.parse_args()
 
     if args.fid:
@@ -103,6 +104,11 @@ if __name__ == "__main__":
         plt.ylabel("Inception Score (10k)")
         plt.plot(cfg, isc_256, marker="o", label="muse-256")
         plt.plot(cfg, isc_512, marker="o", label="muse-512")
+    elif args.clip:
+        plt.title(f"CLIP Score")
+        plt.ylabel("CLIP Score (10k)")
+        plt.plot(cfg, clip_256, marker="o", label="muse-256")
+        plt.plot(cfg, clip_512, marker="o", label="muse-512")
     else:
         assert False
 
@@ -115,5 +121,9 @@ if __name__ == "__main__":
     # Display the plot
     if args.fid:
         plt.savefig("./benchmark/artifacts/fid.png")
-    else:
+    elif args.isc: 
         plt.savefig("./benchmark/artifacts/isc.png")
+    elif args.clip: 
+        plt.savefig("./benchmark/artifacts/clip.png")
+    else:
+        assert False
