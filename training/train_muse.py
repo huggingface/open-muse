@@ -44,6 +44,7 @@ from transformers import (
     CLIPTokenizer,
     T5EncoderModel,
     T5Tokenizer,
+    CLIPVisionModelWithProjection,
 )
 
 import muse
@@ -59,6 +60,8 @@ from muse import (
     get_mask_chedule,
 )
 from muse.lr_schedulers import get_scheduler
+from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, OPENAI_CLIP_MEAN, OPENAI_CLIP_STD
+from torchvision import transforms
 
 try:
     import apex
@@ -68,6 +71,12 @@ except ImportError:
     is_apex_available = False
 
 logger = get_logger(__name__, log_level="INFO")
+
+
+def spherical_distance(x, y):
+    x = F.normalize(x, dim=-1)
+    y = F.normalize(y, dim=-1)
+    return (x - y).norm(dim=-1).div(2).arcsin().pow(2).mul(2)
 
 
 def get_config():
@@ -391,6 +400,9 @@ def main():
     # Enable flash attention if asked
     if config.model.enable_xformers_memory_efficient_attention:
         model.enable_xformers_memory_efficient_attention()
+    
+    image_encoder = CLIPVisionModelWithProjection.from_pretrained("laion/CLIP-ViT-bigG-14-laion2B-39B-b160k", projection_dim=1280)
+    image_encoder.requires_grad_(False)
 
     optimizer_config = config.optimizer.params
     learning_rate = optimizer_config.learning_rate
@@ -533,6 +545,8 @@ def main():
         vq_model.to(device=accelerator.device)
     if config.training.get("use_ema", False):
         ema.to(accelerator.device)
+    
+    image_encoder.to(device=accelerator.device, dtype=weight_dtype)
 
     if not is_pre_encode and config.model.transformer.get("use_empty_embeds_for_uncond", False):
         empty_input = tokenizer("", padding="max_length", return_tensors="pt").input_ids.to(accelerator.device)
@@ -746,9 +760,38 @@ def main():
                         loss_weight=loss_weight,
                         micro_conds=micro_conds,
                     )
+                
+                codebook_size = accelerator.unwrap_model(model).config.codebook_size
+                logits = logits[..., : codebook_size]
+                generated_ids = torch.argmax(logits, dim=-1)
+                unknown_map = input_ids == mask_id
+                generated_ids = torch.where(unknown_map, generated_ids, input_ids)
+
+                # convert the generated ids to images
+                generated_images = vq_model.decode_code(generated_ids)
+                generated_images = 2.0 * generated_images - 1.0
+                generated_images = torch.clamp(generated_images, -1.0, 1.0)
+                generated_images = (generated_images + 1) / 2.0
+
+                # get clip embeds for generated images
+                clip_input = transforms.Resize((224, 224))(generated_images)
+                clip_input = transforms.Normalize(OPENAI_CLIP_MEAN, OPENAI_CLIP_STD)(clip_input)
+                image_embeds = image_encoder(clip_input.to(dtype=weight_dtype)).image_embeds
+                image_embeds = F.normalize(image_embeds, dim=-1)
+
+                # get clip embeds for target images
+                with torch.no_grad():
+                    clip_input = transforms.Resize((224, 224))(pixel_values)
+                    clip_input = transforms.Normalize(OPENAI_CLIP_MEAN, OPENAI_CLIP_STD)(clip_input)
+                    target_image_embeds = image_encoder(clip_input.to(dtype=weight_dtype)).image_embeds
+                    target_image_embeds = F.normalize(target_image_embeds, dim=-1)
+                
+                clip_loss = spherical_distance(image_embeds, target_image_embeds).mean()
+                loss = loss + clip_loss
 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
+                avg_clip_loss = accelerator.gather(clip_loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
 
                 accelerator.backward(loss)
@@ -787,6 +830,7 @@ def main():
                     )
                     logs = {
                         "step_loss": avg_loss.item(),
+                        "step_clip_loss": avg_clip_loss.item(),
                         "lr": lr_scheduler.get_last_lr()[0],
                         "avg_masking_rate": avg_masking_rate.item(),
                         "samples/sec/gpu": samples_per_second_per_gpu,
