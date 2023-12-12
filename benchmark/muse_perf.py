@@ -29,6 +29,14 @@ torch.set_float32_matmul_precision("high")
 num_threads = torch.get_num_threads()
 prompt = "A high tech solarpunk utopia in the Amazon rainforest"
 
+do_sd15       = True 
+do_sdxl       = True 
+do_ssd_1b     = True 
+do_sdxl_turbo = True
+do_sd_turbo   = True
+do_muse       = True 
+do_wurst      = True 
+do_lcm        = True 
 
 def main():
     args = ArgumentParser()
@@ -40,7 +48,105 @@ def main():
     for batch_size in [1, 8]:
         for timesteps in [12, 20]:
             for use_xformers in [False, True]:
-                out, mem_bytes = sd_benchmark(batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers)
+                if do_sd15:
+                    out, mem_bytes = sd_benchmark(batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers)
+
+                    Compare([out]).print()
+                    print("*******")
+
+                    csv_data.append(
+                        [
+                            batch_size,
+                            "stable_diffusion_1_5",
+                            out.median * 1000,
+                            args.device,
+                            timesteps,
+                            mem_bytes,
+                            512,
+                            use_xformers,
+                            None,
+                        ]
+                    )
+
+                if do_sdxl:
+                    out, mem_bytes = sdxl_benchmark(
+                        batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers, gpu_type=args.device
+                    )
+
+                    Compare([out]).print()
+                    print("*******")
+
+                    csv_data.append(
+                        [
+                            batch_size,
+                            "sdxl",
+                            out.median * 1000,
+                            args.device,
+                            timesteps,
+                            mem_bytes,
+                            1024,
+                            use_xformers,
+                            None,
+                        ]
+                    )
+
+                if do_ssd_1b:
+                    out, mem_bytes = ssd_1b_benchmark(
+                        batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers, gpu_type=args.device
+                    )
+
+                    Compare([out]).print()
+                    print("*******")
+
+                    csv_data.append(
+                        [
+                            batch_size,
+                            "ssd_1b",
+                            out.median * 1000,
+                            args.device,
+                            timesteps,
+                            mem_bytes,
+                            1024,
+                            use_xformers,
+                            None,
+                        ]
+                    )
+
+                if do_muse:
+                    for resolution in [256, 512]:
+                        for use_fused_residual_norm in [False, True]:
+                            out, mem_bytes = muse_benchmark(
+                                resolution=resolution,
+                                batch_size=batch_size,
+                                timesteps=timesteps,
+                                use_xformers=use_xformers,
+                                use_fused_residual_norm=use_fused_residual_norm,
+                            )
+
+                            Compare([out]).print()
+                            print("*******")
+
+                            csv_data.append(
+                                [
+                                    batch_size,
+                                    "muse",
+                                    out.median * 1000,
+                                    args.device,
+                                    timesteps,
+                                    mem_bytes,
+                                    resolution,
+                                    use_xformers,
+                                    use_fused_residual_norm,
+                                ]
+                            )
+
+        if do_sdxl_turbo:
+            for use_xformers in [True, False]:
+                timesteps = 1
+
+                out, mem_bytes = sdxl_turbo_benchmark(
+                    batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers
+                )
 
                 Compare([out]).print()
                 print("*******")
@@ -48,7 +154,32 @@ def main():
                 csv_data.append(
                     [
                         batch_size,
-                        "stable_diffusion_1_5",
+                        "sdxl_turbo",
+                        out.median * 1000,
+                        args.device,
+                        timesteps,
+                        mem_bytes,
+                        1024,
+                        use_xformers,
+                        None,
+                    ]
+                )
+
+        if do_sd_turbo:
+            for use_xformers in [True, False]:
+                timesteps = 1
+
+                out, mem_bytes = sd_turbo_benchmark(
+                    batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers
+                )
+
+                Compare([out]).print()
+                print("*******")
+
+                csv_data.append(
+                    [
+                        batch_size,
+                        "sd_turbo",
                         out.median * 1000,
                         args.device,
                         timesteps,
@@ -59,98 +190,9 @@ def main():
                     ]
                 )
 
-                out, mem_bytes = sdxl_benchmark(
-                    batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers, gpu_type=args.device
-                )
-
-                Compare([out]).print()
-                print("*******")
-
-                csv_data.append(
-                    [
-                        batch_size,
-                        "sdxl",
-                        out.median * 1000,
-                        args.device,
-                        timesteps,
-                        mem_bytes,
-                        1024,
-                        use_xformers,
-                        None,
-                    ]
-                )
-
-                out, mem_bytes = ssd_1b_benchmark(
-                    batch_size=batch_size, timesteps=timesteps, use_xformers=use_xformers, gpu_type=args.device
-                )
-
-                Compare([out]).print()
-                print("*******")
-
-                csv_data.append(
-                    [
-                        batch_size,
-                        "ssd_1b",
-                        out.median * 1000,
-                        args.device,
-                        timesteps,
-                        mem_bytes,
-                        1024,
-                        use_xformers,
-                        None,
-                    ]
-                )
-
-                for resolution in [256, 512]:
-                    for use_fused_residual_norm in [False, True]:
-                        out, mem_bytes = muse_benchmark(
-                            resolution=resolution,
-                            batch_size=batch_size,
-                            timesteps=timesteps,
-                            use_xformers=use_xformers,
-                            use_fused_residual_norm=use_fused_residual_norm,
-                        )
-
-                        Compare([out]).print()
-                        print("*******")
-
-                        csv_data.append(
-                            [
-                                batch_size,
-                                "muse",
-                                out.median * 1000,
-                                args.device,
-                                timesteps,
-                                mem_bytes,
-                                resolution,
-                                use_xformers,
-                                use_fused_residual_norm,
-                            ]
-                        )
-
-        for use_xformers in [False, True]:
-            out, mem_bytes = wurst_benchmark(batch_size, use_xformers)
-
-            Compare([out]).print()
-            print("*******")
-
-            csv_data.append(
-                [
-                    batch_size,
-                    "wurst",
-                    out.median * 1000,
-                    args.device,
-                    "default",
-                    mem_bytes,
-                    1024,
-                    use_xformers,
-                    None,
-                ]
-            )
-
-        for timesteps in [4, 8]:
+        if do_wurst:
             for use_xformers in [False, True]:
-                out, mem_bytes = lcm_benchmark(batch_size, timesteps, use_xformers)
+                out, mem_bytes = wurst_benchmark(batch_size, use_xformers)
 
                 Compare([out]).print()
                 print("*******")
@@ -158,16 +200,38 @@ def main():
                 csv_data.append(
                     [
                         batch_size,
-                        "lcm",
+                        "wurst",
                         out.median * 1000,
                         args.device,
-                        timesteps,
+                        "default",
                         mem_bytes,
                         1024,
                         use_xformers,
                         None,
                     ]
                 )
+
+        if do_lcm:
+            for timesteps in [4, 8]:
+                for use_xformers in [False, True]:
+                    out, mem_bytes = lcm_benchmark(batch_size, timesteps, use_xformers)
+
+                    Compare([out]).print()
+                    print("*******")
+
+                    csv_data.append(
+                        [
+                            batch_size,
+                            "lcm",
+                            out.median * 1000,
+                            args.device,
+                            timesteps,
+                            mem_bytes,
+                            1024,
+                            use_xformers,
+                            None,
+                        ]
+                    )
 
     with open("benchmark/artifacts/all.csv", "a", newline="") as csvfile:
         writer = csv.writer(csvfile)
@@ -383,6 +447,64 @@ def sd_benchmark(batch_size, timesteps, use_xformers):
         tokenizer=tokenizer,
         safety_checker=None,
     )
+
+    if use_xformers:
+        pipe.enable_xformers_memory_efficient_attention()
+
+    def benchmark_fn():
+        pipe(
+            prompt,
+            num_images_per_prompt=batch_size,
+            num_inference_steps=timesteps,
+        )
+
+    pipe(prompt, num_images_per_prompt=batch_size, num_inference_steps=2)
+
+    def fn():
+        return Timer(
+            stmt="benchmark_fn()",
+            globals={"benchmark_fn": benchmark_fn},
+            num_threads=num_threads,
+            label=f"batch_size: {batch_size}, dtype: {dtype}, timesteps {timesteps}, use_xformers: {use_xformers}",
+            description=model,
+        ).blocked_autorange(min_run_time=1)
+
+    return measure_max_memory_allocated(fn)
+
+def sd_turbo_benchmark(batch_size, timesteps, use_xformers):
+    model = "stabilityai/sd-turbo"
+    dtype = torch.float16
+    pipe = AutoPipelineForText2Image.from_pretrained(model, torch_dtype=torch.float16, variant="fp16", safety_checker=None)
+    pipe.to("cuda")
+
+    if use_xformers:
+        pipe.enable_xformers_memory_efficient_attention()
+
+    def benchmark_fn():
+        pipe(
+            prompt,
+            num_images_per_prompt=batch_size,
+            num_inference_steps=timesteps,
+        )
+
+    pipe(prompt, num_images_per_prompt=batch_size, num_inference_steps=2)
+
+    def fn():
+        return Timer(
+            stmt="benchmark_fn()",
+            globals={"benchmark_fn": benchmark_fn},
+            num_threads=num_threads,
+            label=f"batch_size: {batch_size}, dtype: {dtype}, timesteps {timesteps}, use_xformers: {use_xformers}",
+            description=model,
+        ).blocked_autorange(min_run_time=1)
+
+    return measure_max_memory_allocated(fn)
+
+def sdxl_turbo_benchmark(batch_size, timesteps, use_xformers):
+    model = "stabilityai/sdxl-turbo"
+    dtype = torch.float16
+    pipe = AutoPipelineForText2Image.from_pretrained(model, torch_dtype=torch.float16, variant="fp16", safety_checker=None)
+    pipe.to("cuda")
 
     if use_xformers:
         pipe.enable_xformers_memory_efficient_attention()

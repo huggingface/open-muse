@@ -44,16 +44,16 @@ def chart(df, device, batch_size, plot_on):
         # "stable diffusion 1.5; timesteps 12": fdf[
         #     (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Timesteps"] == "12")
         # ].iloc[0]["Median"],
-        "stable diffusion 1.5; timesteps 20": fdf[
+        "stable diffusion 1.5; resolution 512; timesteps 20": fdf[
             (fdf["Model Name"] == "stable_diffusion_1_5") & (fdf["Timesteps"] == "20")
         ].iloc[0]["Median"],
-        "sdxl; timesteps 12": fdf[(fdf["Model Name"] == "sdxl") & (fdf["Timesteps"] == "12")].iloc[0]["Median"],
-        "sdxl; timesteps 20": fdf[(fdf["Model Name"] == "sdxl") & (fdf["Timesteps"] == "20")].iloc[0]["Median"],
-        "ssd 1b; timesteps 12": fdf[(fdf["Model Name"] == "ssd_1b") & (fdf["Timesteps"] == "12")].iloc[0]["Median"],
-        "ssd 1b; timesteps 20": fdf[(fdf["Model Name"] == "ssd_1b") & (fdf["Timesteps"] == "20")].iloc[0]["Median"],
-        "wurst": fdf[(fdf["Model Name"] == "wurst")].iloc[0]["Median"],
-        "lcm; timesteps 4": fdf[(fdf["Model Name"] == "lcm") & (fdf["Timesteps"] == "4")].iloc[0]["Median"],
-        "lcm; timesteps 8": fdf[(fdf["Model Name"] == "lcm") & (fdf["Timesteps"] == "8")].iloc[0]["Median"],
+        "sdxl; resolution 1024; timesteps 12": fdf[(fdf["Model Name"] == "sdxl") & (fdf["Timesteps"] == "12")].iloc[0]["Median"],
+        "sdxl; resolution 1024; timesteps 20": fdf[(fdf["Model Name"] == "sdxl") & (fdf["Timesteps"] == "20")].iloc[0]["Median"],
+        "ssd 1b; resolution 1024; timesteps 12": fdf[(fdf["Model Name"] == "ssd_1b") & (fdf["Timesteps"] == "12")].iloc[0]["Median"],
+        "ssd 1b; resolution 1024; timesteps 20": fdf[(fdf["Model Name"] == "ssd_1b") & (fdf["Timesteps"] == "20")].iloc[0]["Median"],
+        "wurst; resolution 1024": fdf[(fdf["Model Name"] == "wurst")].iloc[0]["Median"],
+        "lcm; resolution 512; timesteps 4": fdf[(fdf["Model Name"] == "lcm") & (fdf["Timesteps"] == "4")].iloc[0]["Median"],
+        "lcm; resolution 512; timesteps 8": fdf[(fdf["Model Name"] == "lcm") & (fdf["Timesteps"] == "8")].iloc[0]["Median"],
         "muse; resolution 256; timesteps 12": fdf[
             (fdf["Model Name"] == "muse") & (fdf["Resolution"] == 256) & (fdf["Timesteps"] == "12")
         ].iloc[0]["Median"],
@@ -66,6 +66,12 @@ def chart(df, device, batch_size, plot_on):
         # "muse; resolution 512; timesteps 20": fdf[
         #     (fdf["Model Name"] == "muse") & (fdf["Resolution"] == 512) & (fdf["Timesteps"] == "20")
         # ].iloc[0]["Median"],
+        "sd-turbo; resolution 512; timesteps 1": fdf[
+            (fdf["Model Name"] == "sd_turbo")
+        ].iloc[0]['Median'],
+        "sdxl-turbo; resolution 1024; timesteps 1": fdf[
+            (fdf["Model Name"] == "sdxl_turbo")
+        ].iloc[0]['Median'],
     }
 
     # Gives consistent colors from chart to chart
@@ -80,9 +86,9 @@ def chart(df, device, batch_size, plot_on):
         "purple",
         "#FF5733",  # Hex code for a shade of orange
         (0.2, 0.4, 0.6),  # RGB tuple for a shade of blue
-        # "lime",  # Named color
+        "lime",  # Named color
         "navy",  # Named color
-        # "hotpink",  # Named color
+        "hotpink",  # Named color
     ]
 
     colors = {x: y for x, y in zip(chart_values.keys(), colors)}
