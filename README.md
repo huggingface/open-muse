@@ -1,5 +1,5 @@
 # open-muse
-An open-reproduction effortto reproduce the transformer based [MUSE](https://muse-model.github.io/) model for fast text2image generation.
+An open-reproduction effort to reproduce the transformer based [MUSE](https://muse-model.github.io/) model for fast text2image generation.
 
 ## Demo
 
