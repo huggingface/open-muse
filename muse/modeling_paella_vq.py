@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
+from .modeling_lfq import LFQ
 
 # TODO: This model only supports inference, not training. Make it trainable.
 
@@ -148,7 +149,7 @@ class ResBlock(nn.Module):
 class PaellaVQModel(ModelMixin, ConfigMixin):
     @register_to_config
     def __init__(
-        self, levels=2, bottleneck_blocks=12, c_hidden=384, c_latent=4, codebook_size=8192, scale_factor=0.3764
+        self, levels=2, bottleneck_blocks=12, c_hidden=384, c_latent=4, codebook_size=8192, scale_factor=0.3764, use_lfq = False, entropy_cost = 0.1, diversity_gamma = 1,
     ):  # 1.0
         super().__init__()
         self.c_latent = c_latent
@@ -172,7 +173,12 @@ class PaellaVQModel(ModelMixin, ConfigMixin):
         self.down_blocks = nn.Sequential(*down_blocks)
 
         self.codebook_size = codebook_size
-        self.vquantizer = VectorQuantizer(codebook_size, c_latent)
+        if self.config.use_lfq:
+            self.quantize = LFQ(c_latent)
+        else:
+            self.quantize = VectorQuantizer(
+                codebook_size, c_latent
+            )
 
         # Decoder blocks
         up_blocks = [nn.Sequential(nn.Conv2d(c_latent, c_levels[-1], kernel_size=1))]

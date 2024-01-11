@@ -20,8 +20,8 @@ import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
-
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
+from .modeling_lfq import LFQ
 
 
 class Upsample(nn.Module):
@@ -526,6 +526,9 @@ class VQGANModel(ModelMixin, ConfigMixin):
         dropout: float = 0.0,
         resample_with_conv: bool = True,
         commitment_cost: float = 0.25,
+        use_lfq = False,
+        entropy_cost = 0.1,
+        diversity_gamma = 1,
     ):
         super().__init__()
 
@@ -535,9 +538,12 @@ class VQGANModel(ModelMixin, ConfigMixin):
 
         self.encoder = Encoder(self.config)
         self.decoder = Decoder(self.config)
-        self.quantize = VectorQuantizer(
-            self.config.num_embeddings, self.config.quantized_embed_dim, self.config.commitment_cost
-        )
+        if self.config.use_lfq:
+            self.quantize = LFQ(self.config.quantized_embed_dim, self.config.entropy_cost, self.config.commitment_cost, self.config.diversity_gamma)
+        else:
+            self.quantize = VectorQuantizer(
+                self.config.num_embeddings, self.config.quantized_embed_dim, self.config.commitment_cost
+            )
         self.quant_conv = nn.Conv2d(
             self.config.z_channels,
             self.config.quantized_embed_dim,

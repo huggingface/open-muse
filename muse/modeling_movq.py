@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .modeling_utils import ConfigMixin, ModelMixin, register_to_config
-
+from .modeling_lfq import LFQ
 try:
     import xformers.ops as xops
 
@@ -570,6 +570,9 @@ class MOVQ(ModelMixin, ConfigMixin):
         dropout=0.0,
         resample_with_conv: bool = True,
         commitment_cost: float = 0.25,
+        use_lfq = False,
+        entropy_cost = 0.1,
+        diversity_gamma = 1,
     ):
         super().__init__()
 
@@ -579,7 +582,12 @@ class MOVQ(ModelMixin, ConfigMixin):
 
         self.encoder = Encoder(self.config)
         self.decoder = MoVQDecoder(self.config)
-        self.quantize = VectorQuantizer(num_embeddings, quantized_embed_dim, commitment_cost=commitment_cost)
+        if self.config.use_lfq:
+            self.quantize = LFQ(quantized_embed_dim, entropy_cost, commitment_cost, diversity_gamma)
+        else:
+            self.quantize = VectorQuantizer(
+                num_embeddings, quantized_embed_dim, commitment_cost
+            )
         self.quant_conv = torch.nn.Conv2d(z_channels, quantized_embed_dim, 1)
         self.post_quant_conv = torch.nn.Conv2d(quantized_embed_dim, z_channels, 1)
 
