@@ -61,6 +61,10 @@ from muse import (
 from muse.modeling_transformer_v2 import MaskGiTUViT_v2
 from muse.lr_schedulers import get_scheduler
 from accelerate import DistributedDataParallelKwargs
+import cProfile, pstats, io
+from pstats import SortKey
+pr = cProfile.Profile()
+
 try:
     import apex
 
@@ -301,7 +305,7 @@ def main():
             config.wandb.run_id = run_id
 
         wandb_init_kwargs = dict(
-            name=config.experiment.name,
+            name=config.experiment.name+f" {config.experiment.num_nodes} nodes",
             id=run_id,
             resume=resume_wandb_run,
             entity=config.wandb.get("entity", None),
@@ -714,8 +718,12 @@ def main():
         return input_ids, encoder_hidden_states, labels, soft_targets, mask_prob, loss_weight, clip_embeds, micro_conds
 
     batch_time_m = AverageMeter()
+    model_time_m = AverageMeter()
+    backprop_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+    pr.enable()
+
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
     for epoch in range(first_epoch, num_train_epochs):
@@ -731,7 +739,6 @@ def main():
             pixel_values = pixel_values.to(accelerator.device, non_blocking=True).contiguous()
             input_ids = input_ids.to(accelerator.device, non_blocking=True).contiguous()
             data_time_m.update(time.time() - end)
-
             # encode images to image tokens, mask them and create input and labels
             (
                 input_ids,
@@ -771,6 +778,8 @@ def main():
 
             # Train Step
             with accelerator.accumulate(model):
+                if accelerator.sync_gradients:
+                    model_time = time.time()
                 if config.training.use_soft_code_target:
                     logits = model(
                         input_ids=input_ids,
@@ -788,7 +797,9 @@ def main():
                         micro_conds=micro_conds,
                         **additional_args
                     )
-
+                if accelerator.sync_gradients:
+                    model_time_m.update(time.time()-model_time)
+                    backprop_time=time.time()
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(config.training.batch_size)).mean()
                 avg_masking_rate = accelerator.gather(mask_prob.repeat(config.training.batch_size)).mean()
@@ -803,6 +814,8 @@ def main():
 
                 optimizer.step()
                 lr_scheduler.step()
+                if accelerator.sync_gradients:
+                    backprop_time_m.update(time.time()-backprop_time)
 
                 # log gradient norm before zeroing it
                 if (
@@ -822,6 +835,11 @@ def main():
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
 
+                pr.disable()
+                sortby = SortKey.CUMULATIVE
+                ps = pstats.Stats(pr).sort_stats(sortby)
+                ps.print_stats(10)
+                pr.enable()
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
@@ -837,6 +855,8 @@ def main():
                         "samples/sec/gpu": samples_per_second_per_gpu,
                         "data_time": data_time_m.val,
                         "batch_time": batch_time_m.val,
+                        "model_time": model_time_m.val,
+                        "backprop_time": backprop_time_m.val,
                     }
                     accelerator.log(logs, step=global_step + 1)
 

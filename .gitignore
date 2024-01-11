@@ -4,10 +4,16 @@ real
 output.jpg
 segmented.jpg
 
+vqgan-f16-8192-laion-movq
+output.jpg
+imagenet-vqgan-training
+wandb
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.jpg
+real
+generated
 # C extensions
 *.so
 

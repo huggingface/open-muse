@@ -1,42 +1,36 @@
 #!/bin/bash
-#SBATCH --job-name=t2i_testing
+#SBATCH --job-name=vqgan_testing
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1          # crucial - only 1 task per dist per node!
-#SBATCH --cpus-per-task=48
-#SBATCH --gres=gpu:4
+#SBATCH --cpus-per-task=96
+#SBATCH --gres=gpu:8
 #SBATCH --exclusive
-#SBATCH -A cstdl
-#SBATCH --partition booster
-#SBATCH --output=/p/home/jusers/isozaki1/juwels/%x-%j.out
-#SBATCH --time=0:10:00
+#SBATCH --partition=g40
+#SBATCH --output=/fsx/Isamu/logs/maskgit-imagenet/%x-%j.out
 
 set -x -e
 
-source /p/home/jusers/isozaki1/juwels/miniconda3/etc/profile.d/conda.sh
-conda activate muse
-
 echo "START TIME: $(date)"
 
-MUSE_REPO=/p/home/jusers/isozaki1/juwels/open-muse
-OUTPUT_DIR=/p/home/jusers/isozaki1/juwels/muse
+MUSE_REPO=/fsx/Isamu/open-muse
+OUTPUT_DIR=/fsx/Isamu
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
 touch $LOG_PATH
 pushd $MUSE_REPO
 
-GPUS_PER_NODE=4
-NNODES=$SLURM_NNODES
-
 CMD=" \
-    training/train_muse.py config=configs/imagenet_text2image_jewels.yaml \
+    training/train_vqgan.py config=configs/imagenet_vqgan_training.yaml \
     wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \
-    experiment.num_nodes=$SLURM_NNODES
-
+    training.batch_size=160 \
     "
+
+GPUS_PER_NODE=8
+NNODES=$SLURM_NNODES
 
 # so processes know who to talk to
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
@@ -57,24 +51,22 @@ echo $CMD
 # export TORCHELASTIC_ERROR_FILE=/tmp/torch-elastic-error.json
 
 # force crashing on nccl issues like hanging broadcast
-# export NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_ASYNC_ERROR_HANDLING=1
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=COLL
 # export NCCL_SOCKET_NTHREADS=1
 # export NCCL_NSOCKS_PERTHREAD=1
 # export CUDA_LAUNCH_BLOCKING=1
 
-# # AWS specific
-# export NCCL_PROTO=simple
-# export RDMAV_FORK_SAFE=1
-# export FI_EFA_FORK_SAFE=1
-# export FI_EFA_USE_DEVICE_RDMA=1
-# export FI_PROVIDER=efa
-# export FI_LOG_LEVEL=1
-# export NCCL_IB_DISABLE=1
-# # # export NCCL_SOCKET_IFNAME=ens
-# export PYTHONWARNINGS="ignore"
-# export CXX=g++
+# AWS specific
+export NCCL_PROTO=simple
+export RDMAV_FORK_SAFE=1
+export FI_EFA_FORK_SAFE=1
+export FI_EFA_USE_DEVICE_RDMA=1
+export FI_PROVIDER=efa
+export FI_LOG_LEVEL=1
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_IFNAME=ens
 
 
 # srun error handling:
