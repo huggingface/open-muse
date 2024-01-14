@@ -25,8 +25,8 @@ All the artifacts of this project will be uploaded to the [openMUSE](https://hug
 First create a virtual environment and install the repo using:
 
 ```bash
-git clone https://github.com/huggingface/muse
-cd muse
+git clone https://github.com/huggingface/open-muse.git
+cd open-muse
 pip install -e ".[extra]"
 ```
 
