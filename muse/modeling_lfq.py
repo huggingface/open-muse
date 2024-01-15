@@ -23,9 +23,9 @@ class LFQ(nn.Module):
 
         codebook_size = 2**codebook_dim
         self.codebook_size = codebook_size
-        has_projections = quantized_embed_dim != codebook_size
-        self.project_in = nn.Linear(quantized_embed_dim, codebook_size) if has_projections else nn.Identity()
-        self.project_out = nn.Linear(codebook_size, quantized_embed_dim) if has_projections else nn.Identity()
+        has_projections = quantized_embed_dim != codebook_dim
+        self.project_in = nn.Linear(quantized_embed_dim, codebook_dim) if has_projections else nn.Identity()
+        self.project_out = nn.Linear(codebook_dim, quantized_embed_dim) if has_projections else nn.Identity()
         self.has_projections = has_projections
 
 
