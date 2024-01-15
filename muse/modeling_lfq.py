@@ -22,7 +22,6 @@ class LFQ(nn.Module):
         super().__init__()
 
         codebook_size = 2**codebook_dim
-        self.codebook_size = codebook_size
         has_projections = quantized_embed_dim != codebook_dim
         self.project_in = nn.Linear(quantized_embed_dim, codebook_dim) if has_projections else nn.Identity()
         self.project_out = nn.Linear(codebook_dim, quantized_embed_dim) if has_projections else nn.Identity()
@@ -42,8 +41,8 @@ class LFQ(nn.Module):
         # codes
 
         all_codes = torch.arange(codebook_size)
-        bits = ((all_codes[..., None].int() & self.mask) != 0).to(self.dtype)
-        codebook = self.bits_to_codes(bits)
+        bits = ((all_codes[..., None].int() & self.mask) != 0).float()
+        codebook = bits*2-1
 
         self.register_buffer('codebook', codebook, persistent = False)
     @property
@@ -54,7 +53,7 @@ class LFQ(nn.Module):
         batch, channel, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
         hidden_states = self.project_in(hidden_states)
-        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_size))
+        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_dim))
 
         codebook_value = torch.ones_like(flattened_hidden_state)
         quantized = torch.where(flattened_hidden_state > 0, codebook_value, -codebook_value)
@@ -85,12 +84,12 @@ class LFQ(nn.Module):
         batch, _, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
         hidden_states = self.project_in(hidden_states)
-        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_size))
+        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_dim))
 
         codebook_value = torch.ones_like(flattened_hidden_state)
         quantized = torch.where(flattened_hidden_state > 0, codebook_value, -codebook_value)
         z_q = hidden_states
-        z_q = z_q + (quantized.reshape((batch, height, width, self.codebook_size)) - z_q).detach()
+        z_q = z_q + (quantized.reshape((batch, height, width, self.codebook_dim)) - z_q).detach()
         z_q = self.project_out(z_q)
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
         # calculate indices

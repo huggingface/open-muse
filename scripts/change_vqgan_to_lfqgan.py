@@ -6,6 +6,13 @@ from muse.modeling_lfq import LFQ
 
 def switch_to_lfq(args):
     vae = VQGANModel.from_pretrained(args.vae)
+    vae.config["use_lfq"] = True
+    vae.config["commitment_cost"] = args.commitment_cost
+    vae.config["entropy_cost"] = args.entropy_cost
+    vae.config["diversity_gamma"] = args.diversity_gamma
+    vae.config["codebook_dim"] = args.codebook_dim
+
+
     vae_with_lfq = VQGANModel.from_config(
         vae.config,
         use_lfq=True,
@@ -16,9 +23,8 @@ def switch_to_lfq(args):
     )
     vae_with_lfq.load_state_dict(vae.state_dict(), strict=False)
     print(f"Saving to {args.lfq_vae_output_path}")
-    vae.save_pretrained(args.lfq_vae_output_path)
+    vae_with_lfq.save_pretrained(args.lfq_vae_output_path)
 
-    # print(vae_with_spectral.decoder)
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--vae", type=str, default="amused/vqgan-f16-8192-laion")
