@@ -15,6 +15,8 @@
 
 # This file is heavily inspired by https://github.com/mlfoundations/open_clip/blob/main/src/training/data.py
 
+import os
+import io
 import itertools
 import json
 import math
@@ -23,6 +25,7 @@ import re
 from functools import partial
 from typing import List, Optional, Union
 
+import PIL
 import webdataset as wds
 import yaml
 from braceexpand import braceexpand
@@ -408,6 +411,79 @@ class WebdatasetSelect:
         return True
 
 
+def sdxl_synthetic_dataset_map(sample):
+    clip_scores = sample["clip_scores.txt"].decode("utf-8")
+    clip_scores = clip_scores.split(",")
+    clip_scores = [float(x) for x in clip_scores]
+
+    index_of_max = 0
+
+    for i in range(1, len(clip_scores)):
+        if clip_scores[i] > clip_scores[index_of_max]:
+            index_of_max = i
+
+    key_of_best_clip_score_image = f"{index_of_max}.png"
+
+    if key_of_best_clip_score_image not in sample:
+        raise ValueError(
+            f"{key_of_best_clip_score_image} was not found in sample. The dataset should have files <sample"
+            " key>.<x>.png where <x> coresponds to an index of the clip scores in clip_scores.txt"
+        )
+
+    return {
+        "__key__": sample["__key__"],
+        "__url__": sample["__url__"],
+        "txt": sample["txt"],
+        "png": sample[key_of_best_clip_score_image],  # only include the image with the best clip score
+        # For other datasets, we rely on the following for micro conditioning.
+        # The original height and width are known because we create the dataset with
+        # sdxl. The laion aesthetic score of 5 seems like a reasonable approximation
+        # NOTE: we unfortunately have to serialize and encode the json so it looks like
+        # it was read out of a file since wds decoders will need to decode it. There
+        # is probably some way to avoid this but it is not obvious with the wds apis.
+        "json": json.dumps({"aesthetic": 5, "original_width": 1024, "original_height": 1024}).encode(),
+    }
+
+
+def ds_clean_upscaled_map(sample):
+    with io.BytesIO(sample["png"]) as stream:
+        image = PIL.Image.open(stream)
+        image.load()
+
+    return {
+        "__key__": sample["__key__"],
+        "__url__": sample["__url__"],
+        "txt": sample["txt"],
+        "png": sample["png"],
+        "json": json.dumps({"aesthetic": 5, "original_width": image.width, "original_height": image.height}).encode(),
+    }
+
+
+def ds_clean_map(sample):
+    with io.BytesIO(sample["png"]) as stream:
+        image = PIL.Image.open(stream)
+        image.load()
+
+    # Take only the top left image
+    height = image.height // 2
+    width = image.width // 2
+
+    image = image.crop((0, 0, width, height))
+
+    image_bytes = io.BytesIO()
+    image.save(image_bytes, format="PNG")  # You can specify the desired format (e.g., JPEG)
+
+    image = image_bytes.getvalue()
+
+    return {
+        "__key__": sample["__key__"],
+        "__url__": sample["__url__"],
+        "txt": sample["txt"],
+        "png": image,
+        "json": json.dumps({"aesthetic": 5, "original_width": width, "original_height": height}).encode(),
+    }
+
+
 class Text2ImageDataset:
     def __init__(
         self,
@@ -435,12 +511,11 @@ class Text2ImageDataset:
         max_pwatermark: Optional[float] = 0.5,
         min_aesthetic_score: Optional[float] = 4.75,
         min_size: Optional[int] = 256,
+        is_sdxl_synthetic_dataset: bool = False,
+        is_ds_clean_upscaled: bool = False,
+        is_ds_clean: bool = False,
     ):
-        yaml_serialized_shard_paths = [
-            "m4_shards",
-            "laion-aesthetic-475-max-1024-joined-with-stability-metadata-laicov2_shards",
-        ]
-        if train_shards_path_or_url in yaml_serialized_shard_paths:
+        if f"{train_shards_path_or_url}.yaml" in os.listdir('./configs'):
             with open(f"./configs/{train_shards_path_or_url}.yaml") as f:
                 train_shards_path_or_url = yaml.safe_load(f)
 
@@ -496,7 +571,9 @@ class Text2ImageDataset:
                 wds.map(filter_keys(set(["image_input_ids", "encoder_hidden_states"]))),
             ]
 
-        if use_filtered_dataset:
+        if is_sdxl_synthetic_dataset:
+            select = wds.select(lambda sample: "clip_scores.txt" in sample)
+        elif use_filtered_dataset:
             select = wds.select(
                 WebdatasetSelect(
                     require_marked_as_ok_by_spawning=require_marked_as_ok_by_spawning,
@@ -510,11 +587,21 @@ class Text2ImageDataset:
         else:
             select = None
 
+        if is_sdxl_synthetic_dataset:
+            map = wds.map(sdxl_synthetic_dataset_map, handler=wds.ignore_and_continue)
+        elif is_ds_clean_upscaled:
+            map = wds.map(ds_clean_upscaled_map)
+        elif is_ds_clean:
+            map = wds.map(ds_clean_map)
+        else:
+            map = None
+
         # Create train dataset and loader
         pipeline = [
             wds.ResampledShards(train_shards_path_or_url),
             tarfile_to_samples_nothrow,
             *([select] if select is not None else []),
+            *([map] if map is not None else []),
             wds.shuffle(shuffle_buffer_size),
             *processing_pipeline,
             wds.batched(per_gpu_batch_size, partial=False, collation_fn=default_collate),
