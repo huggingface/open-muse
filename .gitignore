@@ -3,6 +3,7 @@ generated
 real
 output.jpg
 segmented.jpg
+checkpoints
 
 vqgan-f16-8192-laion-movq
 output.jpg

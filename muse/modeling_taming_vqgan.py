@@ -581,9 +581,10 @@ class VQGANModel(ModelMixin, ConfigMixin):
         dropout: float = 0.0,
         resample_with_conv: bool = True,
         commitment_cost: float = 0.25,
-        use_lfq = False,
-        entropy_cost = 0.1,
-        diversity_gamma = 1,
+        use_lfq: bool = False,
+        entropy_cost: float = 0.1,
+        diversity_gamma: float = 1,
+        codebook_dim: int=16,
         use_z_channels: bool = False,
     ):
         super().__init__()
@@ -598,7 +599,10 @@ class VQGANModel(ModelMixin, ConfigMixin):
         self.config.z_channels = z_channels
         self.config.num_embeddings = num_embeddings
         self.config.quantized_embed_dim = quantized_embed_dim
-
+        self.config.use_lfq = use_lfq
+        self.config.entropy_cost = entropy_cost
+        self.config.diversity_gamma = diversity_gamma
+        self.config.codebook_dim = codebook_dim
 
         self.encoder = Encoder(self.config)
         if use_z_channels:
@@ -606,7 +610,7 @@ class VQGANModel(ModelMixin, ConfigMixin):
         else:
             self.decoder = Decoder(self.config)
         if self.config.use_lfq:
-            self.quantize = LFQ(self.config.quantized_embed_dim, self.config.entropy_cost, self.config.commitment_cost, self.config.diversity_gamma)
+            self.quantize = LFQ(self.config.quantized_embed_dim, self.config.entropy_cost, self.config.commitment_cost, self.config.diversity_gamma, self.config.codebook_dim)
         else:
             self.quantize = VectorQuantizer(
                 self.config.num_embeddings, self.config.quantized_embed_dim, self.config.commitment_cost

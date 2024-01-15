@@ -573,6 +573,7 @@ class MOVQ(ModelMixin, ConfigMixin):
         use_lfq = False,
         entropy_cost = 0.1,
         diversity_gamma = 1,
+        codebook_dim=16
     ):
         super().__init__()
 
@@ -583,7 +584,7 @@ class MOVQ(ModelMixin, ConfigMixin):
         self.encoder = Encoder(self.config)
         self.decoder = MoVQDecoder(self.config)
         if self.config.use_lfq:
-            self.quantize = LFQ(quantized_embed_dim, entropy_cost, commitment_cost, diversity_gamma)
+            self.quantize = LFQ(quantized_embed_dim, entropy_cost, commitment_cost, diversity_gamma, codebook_dim)
         else:
             self.quantize = VectorQuantizer(
                 num_embeddings, quantized_embed_dim, commitment_cost

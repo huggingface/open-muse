@@ -17,11 +17,16 @@ def entropy(prob):
 
 class LFQ(nn.Module):
     def __init__(
-        self, codebook_dim, entropy_cost = 0.1, commitment_cost = 0.25, diversity_gamma=1
+        self, quantized_embed_dim, entropy_cost = 0.1, commitment_cost = 0.25, diversity_gamma=1, codebook_dim=16
     ):
         super().__init__()
 
         codebook_size = 2**codebook_dim
+        self.codebook_size = codebook_size
+        has_projections = quantized_embed_dim != codebook_size
+        self.project_in = nn.Linear(quantized_embed_dim, codebook_size) if has_projections else nn.Identity()
+        self.project_out = nn.Linear(codebook_size, quantized_embed_dim) if has_projections else nn.Identity()
+        self.has_projections = has_projections
 
 
         self.codebook_dim = codebook_dim
@@ -48,12 +53,14 @@ class LFQ(nn.Module):
         # reshape z -> (batch, height, width, channel)
         batch, channel, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
-        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_dim))
+        hidden_states = self.project_in(hidden_states)
+        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_size))
 
         codebook_value = torch.ones_like(flattened_hidden_state)
         quantized = torch.where(flattened_hidden_state > 0, codebook_value, -codebook_value)
         z_q = hidden_states
-        z_q = z_q + (quantized.reshape((batch, height, width, channel)).permute(0, 3, 1, 2) - z_q).detach()
+        z_q = z_q + (quantized.reshape((batch, height, width, channel)) - z_q).detach()
+        z_q = self.project_out(z_q)
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
         # calculate indices
         # (B*H*W,C) * (C)
@@ -65,7 +72,9 @@ class LFQ(nn.Module):
         batch, num_tokens = indices.shape
         bits = ((indices[..., None].int() & self.mask) != 0).to(self.dtype)
         z_q = bits * 2 - 1
-        z_q = z_q.reshape(batch, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens)), -1).permute(0, 3, 1, 2)
+        z_q = z_q.reshape(batch, int(math.sqrt(num_tokens)), int(math.sqrt(num_tokens)), -1)
+        z_q = self.project_out(z_q)
+        z_q = z_q.permute(0, 3, 1, 2).contiguous()
         return z_q
     def forward(
         self,
@@ -73,14 +82,16 @@ class LFQ(nn.Module):
         return_loss = True,
         inv_temperature = 100.,
     ):
-        batch, channel, height, width = hidden_states.shape
+        batch, _, height, width = hidden_states.shape
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
-        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_dim))
+        hidden_states = self.project_in(hidden_states)
+        flattened_hidden_state = hidden_states.reshape((-1, self.codebook_size))
 
         codebook_value = torch.ones_like(flattened_hidden_state)
         quantized = torch.where(flattened_hidden_state > 0, codebook_value, -codebook_value)
         z_q = hidden_states
-        z_q = z_q + (quantized.reshape((batch, height, width, channel)).permute(0, 3, 1, 2) - z_q).detach()
+        z_q = z_q + (quantized.reshape((batch, height, width, self.codebook_size)) - z_q).detach()
+        z_q = self.project_out(z_q)
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
         # calculate indices
         # (B*H*W,C) * (C)
