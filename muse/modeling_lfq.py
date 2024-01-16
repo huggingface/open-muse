@@ -95,7 +95,10 @@ class LFQ(nn.Module):
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
         # calculate indices
         # (B*H*W,C) * (C)
-        indices = (quantized > 0).int() * self.mask.int()
+        print(quantized.shape, self.mask.shape)
+        indices = torch.sum((quantized > 0).int() * self.mask.int(), dim=-1)
+        print(indices.shape)
+        indices = indices.reshape((batch, -1))
         loss = None
         if return_loss:
 

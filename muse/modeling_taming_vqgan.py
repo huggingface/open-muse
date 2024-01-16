@@ -490,7 +490,6 @@ class VectorQuantizer(nn.Module):
         """
         # reshape z -> (batch, height, width, channel) and flatten
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
-
         distances = self.compute_distances(hidden_states)
         min_encoding_indices = torch.argmin(distances, axis=1).unsqueeze(1)
         min_encodings = torch.zeros(min_encoding_indices.shape[0], self.num_embeddings).to(hidden_states)
@@ -501,7 +500,6 @@ class VectorQuantizer(nn.Module):
 
         # reshape to (batch, num_tokens)
         min_encoding_indices = min_encoding_indices.reshape(hidden_states.shape[0], -1)
-
         # compute loss for embedding
         loss = None
         if return_loss:
