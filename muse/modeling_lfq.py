@@ -103,7 +103,7 @@ class LFQ(nn.Module):
             if self.training:
                 # the same as euclidean distance up to a constant
                 distance = flattened_hidden_state
-                distance = -2 * einsum('bc, jc -> bj', distance, self.codebook)
+                distance = -2 * einsum(distance, self.codebook, 'bc, jc -> bj')
 
                 prob = (-distance * inv_temperature).softmax(dim = -1)
 
