@@ -6,6 +6,7 @@ from muse.modeling_lfq import LFQ
 
 def switch_to_lfq(args):
     vae = VQGANModel.from_pretrained(args.vae)
+    vae.config["num_embeddings"] = 2**args.codebook_dim
     vae.config["use_lfq"] = True
     vae.config["commitment_cost"] = args.commitment_cost
     vae.config["entropy_cost"] = args.entropy_cost
