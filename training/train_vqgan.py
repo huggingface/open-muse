@@ -576,12 +576,6 @@ def main():
                         log_grad_norm(discriminator, accelerator, global_step + 1)
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients and not generator_step:
-                print("sync gradients")
-                pr.disable()
-                sortby = SortKey.CUMULATIVE
-                ps = pstats.Stats(pr).sort_stats(sortby)
-                ps.print_stats(10)
-                pr.enable()
                 if config.training.use_ema:
                     ema_model.step(model.parameters())
                 # wait for both generator and discriminator to settle
@@ -629,7 +623,10 @@ def main():
             if global_step >= config.training.max_train_steps:
                 break
         # End for
-
+    pr.disable()
+    sortby = SortKey.CUMULATIVE
+    ps = pstats.Stats(pr).sort_stats(sortby)
+    ps.print_stats(10)
     accelerator.wait_for_everyone()
 
     # Evaluate and save checkpoint at the end of training
