@@ -68,6 +68,7 @@ lr_scheduler:
 
 
 training:
+    profile: False
     gradient_accumulation_steps: 8
     batch_size: 4
     mixed_precision: "bf16"
