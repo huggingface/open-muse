@@ -318,6 +318,7 @@ def main():
 
     vq_class = get_vq_model_class(config.model.vq_model.type)
     model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+    print(model.quantize)
     if config.training.use_ema:
         ema_model = EMAModel(model.parameters(), model_cls=vq_class, model_config=model.config)
     discriminator_class = get_discriminator_class(config.discriminator.discriminator_type)
