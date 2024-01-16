@@ -19,7 +19,7 @@ experiment:
 model:
     vq_model:
         type: "taming_vqgan"
-        pretrained: "openMUSE/vqgan-f16-8192-laion"
+        pretrained: "checkpoints/lfqgan-f16-2-to-16-laion"
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: True
 
