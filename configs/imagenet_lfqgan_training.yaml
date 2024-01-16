@@ -53,7 +53,7 @@ discriminator:
 optimizer:
     name: adamw
     params: # default adamw params
-        learning_rate: 1e-4
+        learning_rate: 5e-5
         scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999
@@ -82,7 +82,6 @@ training:
     min_masking_rate: 0.0
     label_smoothing: 0.0
     max_grad_norm: null
-    guidance_scale: 2.0
     generation_timesteps: 8
     # related to vae code sampling
     use_soft_code_target: False
