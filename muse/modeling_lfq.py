@@ -42,6 +42,7 @@ class LFQ(nn.Module):
 
         all_codes = torch.arange(codebook_size)
         bits = ((all_codes[..., None].int() & self.mask) != 0).float()
+        # this makes all codes made out of -1 and 1
         codebook = bits*2-1
 
         self.register_buffer('codebook', codebook, persistent = False)
@@ -103,7 +104,7 @@ class LFQ(nn.Module):
             if self.training:
                 # the same as euclidean distance up to a constant
                 distance = flattened_hidden_state
-                distance = -2 * einsum(distance, self.codebook, 'bc, jc -> bj')
+                distance = -2 * einsum(distance, self.codebook, 'b c, j c -> b j')
 
                 prob = (-distance * inv_temperature).softmax(dim = -1)
 
@@ -111,7 +112,7 @@ class LFQ(nn.Module):
 
                 # distribution over all available tokens in the batch
 
-                avg_prob = reduce(prob, 'bc -> c', 'mean')
+                avg_prob = reduce(prob, 'b j -> j', 'mean')
                 codebook_entropy = entropy(avg_prob).mean()
 
                 # 1. entropy will be nudged to be low for each code, to encourage the network to output confident predictions
