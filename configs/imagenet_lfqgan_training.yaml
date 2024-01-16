@@ -4,8 +4,8 @@ wandb:
 
 experiment:
     project: "muse"
-    name: "imagenet-vqgan-training"
-    output_dir: "imagenet-vqgan-training"
+    name: "imagenet-lfqgan-training"
+    output_dir: "imagenet-lfqgan-training"
     max_train_examples: 1281167 # total number of imagenet examples
     max_eval_examples: 12800
     save_every: 1000
