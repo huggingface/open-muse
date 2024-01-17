@@ -451,33 +451,35 @@ def main():
     # Potentially load in the weights and states from a previous save
     resume_from_checkpoint = config.experiment.resume_from_checkpoint
     if resume_from_checkpoint:
-        if resume_from_checkpoint != "latest":
-            path = resume_from_checkpoint
-        else:
-            # Get the most recent checkpoint
-            dirs = os.listdir(config.experiment.output_dir)
-            dirs = [d for d in dirs if d.startswith("checkpoint")]
-            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
-            path = dirs[-1] if len(dirs) > 0 else None
-            path = os.path.join(config.experiment.output_dir, path)
+        try:
+            if resume_from_checkpoint != "latest":
+                path = resume_from_checkpoint
+            else:
+                # Get the most recent checkpoint
+                dirs = os.listdir(config.experiment.output_dir)
+                dirs = [d for d in dirs if d.startswith("checkpoint")]
+                dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+                path = dirs[-1] if len(dirs) > 0 else None
+                path = os.path.join(config.experiment.output_dir, path)
 
-        if path is None:
-            accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
-            resume_from_checkpoint = None
-        else:
-            accelerator.print(f"Resuming from checkpoint {path}")
+            if path is None:
+                accelerator.print(f"Checkpoint '{resume_from_checkpoint}' does not exist. Starting a new training run.")
+                resume_from_checkpoint = None
+            else:
+                accelerator.print(f"Resuming from checkpoint {path}")
 
-            resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
-            if not resume_lr_scheduler:
-                logger.info("Not resuming the lr scheduler.")
-                accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
-            accelerator.load_state(path)
-            accelerator.wait_for_everyone()
-            if not resume_lr_scheduler:
-                accelerator._schedulers = [lr_scheduler]
-            global_step = int(os.path.basename(path).split("-")[1])
-            first_epoch = global_step // num_update_steps_per_epoch
-
+                resume_lr_scheduler = config.experiment.get("resume_lr_scheduler", True)
+                if not resume_lr_scheduler:
+                    logger.info("Not resuming the lr scheduler.")
+                    accelerator._schedulers = []  # very hacky, but we don't want to resume the lr scheduler
+                accelerator.load_state(path)
+                accelerator.wait_for_everyone()
+                if not resume_lr_scheduler:
+                    accelerator._schedulers = [lr_scheduler]
+                global_step = int(os.path.basename(path).split("-")[1])
+                first_epoch = global_step // num_update_steps_per_epoch
+        except Exception as e:
+            print(f"Failed to resume checkpoint with exception: {e}")
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()

@@ -13,7 +13,7 @@ experiment:
     generate_every: 1000
     log_every: 30
     log_grad_norm_every: 500
-    resume_from_checkpoint: True
+    resume_from_checkpoint: "latest"
     resume_lr_scheduler: True
 
 model:
