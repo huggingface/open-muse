@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:8
 #SBATCH --exclusive
 #SBATCH --partition=a40x
-#SBATCH --output=/admin/home-isamu/output_muse_lfq/%x-%j.out
+#SBATCH --output=/admin/home-isamu/output_muse_lfq_17/%x-%j.out
 #SBATCH -A laion
 
 set -x -e
@@ -15,7 +15,7 @@ source /admin/home-isamu/muse/bin/activate
 echo "START TIME: $(date)"
 
 MUSE_REPO=/admin/home-isamu/open-muse
-OUTPUT_DIR=/admin/home-isamu/output_muse_lfq
+OUTPUT_DIR=/admin/home-isamu/output_muse_lfq_17
 LOG_PATH=$OUTPUT_DIR/main_log.txt
 
 mkdir -p $OUTPUT_DIR
@@ -26,7 +26,7 @@ GPUS_PER_NODE=8
 NNODES=$SLURM_NNODES
 
 CMD=" \
-    training/train_vqgan.py config=configs/imagenet_lfqgan_training.yaml \
+    training/train_vqgan.py config=configs/imagenet_lfqgan_training_17.yaml \
     wandb.entity=isamu \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
