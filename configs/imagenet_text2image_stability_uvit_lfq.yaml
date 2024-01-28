@@ -33,6 +33,7 @@ model:
     enable_xformers_memory_efficient_attention: False
     offline: True
     architecture: "uvit"
+    pretrained_model_path: "amused/muse-laiona6-uvit-clip-220k"
 
 dataset:
     type: "classification"
