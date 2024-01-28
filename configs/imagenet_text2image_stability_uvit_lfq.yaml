@@ -1,0 +1,94 @@
+wandb:
+  entity: null
+  mode: "offline"
+
+experiment:
+    project: "muse"
+    name: "imagenet-text2image"
+    output_dir: "imagenet-text2image"
+    max_train_examples: 1281167 # total number of imagenet examples
+    max_eval_examples: 12800
+    save_every: 1000
+    eval_every: 1000000000000
+    generate_every: 1000
+    log_every: 50
+    log_grad_norm_every: 500
+    resume_from_checkpoint: "latest"
+    resume_lr_scheduler: True
+    num_nodes: null
+    num_gpus_per_node: null
+
+model:
+    vq_model:
+        pretrained: "/admin/home-isamu/output_muse_lfq_17/checkpoint-35000/unwrapped_model"
+        type: "vqgan"
+    text_encoder:
+        type: "clip"
+        pretrained: "amused/CLIP-ViT-L-14-DataComp.XL-s13B-b90K-penultimate"
+    transformer:
+        pretrained: "amused/muse-laiona6-uvit-clip-220k"
+        use_empty_embeds_for_uncond: false
+        architecture: "uvit"
+    gradient_checkpointing: True
+    enable_xformers_memory_efficient_attention: False
+    offline: True
+    architecture: "uvit"
+
+dataset:
+    type: "classification"
+    params:
+        train_shards_path_or_url: "pipe:aws s3 cp s3://laion-west/muse-imagenet/imagenet-train-{000000..000320}.tar -"
+        eval_shards_path_or_url: "pipe:aws s3 cp s3://laion-west/muse-imagenet/imagenet-val-{000000..000012}.tar -"
+        imagenet_class_mapping_path: "/admin/home-isamu/imagenet-class-mapping.json"
+        validation_prompts_file: null
+        batch_size: ${training.batch_size}
+        shuffle_buffer_size: 1000
+        num_workers: 2
+        resolution: 256
+        pin_memory: True
+        persistent_workers: True
+    preprocessing:
+        max_seq_length: 77
+        resolution: 256
+        center_crop: True
+        random_flip: False
+
+
+optimizer:
+    name: 8bit_adamw
+    params: # default adamw params
+        learning_rate: 5e-5
+        scale_lr: False # scale learning rate by total batch size
+        beta1: 0.9
+        beta2: 0.999
+        weight_decay: 0.01
+        epsilon: 1e-8
+
+
+lr_scheduler:
+    scheduler: "constant_with_warmup"
+    params:
+        learning_rate: ${optimizer.params.learning_rate}
+        warmup_steps: 2000
+
+
+training:
+    split_vae_encode: 1
+    gradient_accumulation_steps: 8
+    batch_size: 4
+    mixed_precision: "bf16"
+    enable_tf32: True
+    use_ema: False
+    seed: 9345104
+    max_train_steps: 600000
+    overfit_one_batch: False
+    cond_dropout_prob: 0.0
+    min_masking_rate: 0.0
+    label_smoothing: 0.0
+    max_grad_norm: null
+    guidance_scale: 4.0
+    generation_timesteps: 12
+    # related to vae code sampling
+    use_soft_code_target: False
+    use_stochastic_code: False
+    soft_code_temp: 1.0

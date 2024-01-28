@@ -372,7 +372,10 @@ def main():
         model_cls = MaskGiTUViT_v2
 
     if config.model.get("pretrained_model_path", None) is not None:
-        model = model_cls.from_pretrained(config.model.pretrained_model_path)
+        try:
+            model = model_cls.from_pretrained(config.model.pretrained_model_path, subfolder="transformer")
+        except:
+            model = model_cls.from_pretrained(config.model.pretrained_model_path)
     else:
         model = model_cls(**config.model.transformer)
 
