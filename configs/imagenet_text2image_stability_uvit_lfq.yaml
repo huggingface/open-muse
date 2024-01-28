@@ -26,8 +26,34 @@ model:
         type: "clip"
         pretrained: "amused/CLIP-ViT-L-14-DataComp.XL-s13B-b90K-penultimate"
     transformer:
-        pretrained: "amused/muse-laiona6-uvit-clip-220k"
-        use_empty_embeds_for_uncond: false
+        vocab_size: 131080
+        hidden_size: 1024
+        num_hidden_layers: 22
+        num_attention_heads: 16
+        max_position_embeddings: 256
+        intermediate_size: 4096
+        add_cross_attention: True
+        encoder_hidden_size: 768
+        project_encoder_hidden_states: False
+        codebook_size: 131072
+        num_vq_tokens: 256
+        initializer_range: 0.02
+        norm_type: "rmsnorm"
+        layer_norm_eps: 1e-6
+        use_normformer: False
+        use_encoder_layernorm: True
+        use_bias: False
+        in_channels: 512
+        block_out_channels:
+            - 1024
+        num_res_blocks: 3
+        patch_size: 1
+        hidden_dropout: 0.0
+        attention_dropout: 0.0
+        use_codebook_size_for_output: True
+        mask_token_id: 131079
+        use_position_embeddings: False
+        use_empty_embeds_for_uncond: False
         architecture: "uvit"
     gradient_checkpointing: True
     enable_xformers_memory_efficient_attention: False
