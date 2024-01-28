@@ -50,21 +50,22 @@ class LFQ(nn.Module):
     def dtype(self):
         return self.codebook.dtype
     def get_code(self, hidden_states):
-        # reshape z -> (batch, height, width, channel)
-        batch, channel, height, width = hidden_states.shape
+        batch, _, height, width = hidden_states.shape
+        print(hidden_states.shape)
         hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
         hidden_states = self.project_in(hidden_states)
+        print(hidden_states.shape)
+
         flattened_hidden_state = hidden_states.reshape((-1, self.codebook_dim))
+        print(flattened_hidden_state.shape)
 
         codebook_value = torch.ones_like(flattened_hidden_state)
         quantized = torch.where(flattened_hidden_state > 0, codebook_value, -codebook_value)
-        z_q = hidden_states
-        z_q = z_q + (quantized.reshape((batch, height, width, channel)) - z_q).detach()
-        z_q = self.project_out(z_q)
-        z_q = z_q.permute(0, 3, 1, 2).contiguous()
         # calculate indices
         # (B*H*W,C) * (C)
-        indices = (quantized > 0).int() * self.mask.int()
+        indices = torch.sum((quantized > 0).int() * self.mask.int(), dim=-1)
+        print(indices.shape)
+
         return indices
     def get_codebook_entry(self, indices):
         # indices are expected to be of shape (batch, num_tokens)

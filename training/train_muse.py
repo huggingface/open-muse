@@ -683,6 +683,7 @@ def main():
                     for i in range(num_splits):
                         start_idx = i * split_batch_size
                         end_idx = min((i + 1) * split_batch_size, batch_size)
+                        print(pixel_values_or_image_ids[start_idx:end_idx].shape)
                         image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
                     image_tokens = torch.cat(image_tokens, dim=0)
                 else:
