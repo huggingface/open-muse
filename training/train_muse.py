@@ -379,7 +379,7 @@ def main():
     else:
         model = model_cls(**config.model.transformer)
 
-    if config.training.is_second_stage_training:
+    if config.training.get("is_second_stage_training", False):
         adapter_model_cls = MaskGitTransformer if config.model.adapter_model.get("architecture", "transformer") == "transformer" else MaskGiTUViT
         assert config.model.adapter_model.num_vq_tokens == config.model.adapter_model.max_position_embeddings *16
         if config.model.adapter_model.get("pretrained_model_path", None) is not None:
@@ -563,7 +563,7 @@ def main():
         vq_model.to(device=accelerator.device)
         logger.info(f"Vqmodel has {sum(p.numel() for p in vq_model.parameters())} parameters")
 
-        if config.training.is_second_stage_training:
+        if config.training.get("is_second_stage_training", False):
             low_res_vq_model.to(device=accelerator.device)
             logger.info(f"low-res vqmodel has {sum(p.numel() for p in low_res_vq_model.parameters())} parameters")
 
@@ -757,7 +757,7 @@ def main():
                 micro_conds,
             ) = prepare_inputs_and_labels(pixel_values, input_ids, config.training.min_masking_rate, batch=batch)
             additional_args = {}
-            if config.training.is_second_stage_training:
+            if config.training.get("is_second_stage_training", False):
                 low_res_input_ids = prepare_low_res_image_tokens(pixel_values)
                 additional_args['low_res_input_ids'] = low_res_input_ids
             # log the inputs for the first step of the first epoch
@@ -959,7 +959,7 @@ def main():
                         low_res_vq_model=low_res_vq_model
                     )
                     # TODO: Support inpainting generation for second stage training
-                    if not config.training.is_second_stage_training:
+                    if not config.training.get("is_second_stage_training", False):
                         generate_inpainting_images(
                             model,
                             vq_model,
@@ -997,7 +997,7 @@ def main():
             prepare_inputs_and_labels,
             prepare_low_res_image_tokens,
             config.experiment.get("max_eval_examples", None),
-            is_second_stage_training=config.training.is_second_stage_training
+            is_second_stage_training=config.training.get("is_second_stage_training", False)
         )
     save_checkpoint(model, config, accelerator, global_step)
 
@@ -1118,7 +1118,7 @@ def generate_images(
 
         text_encoder.to(device=accelerator.device, dtype=weight_dtype)
         vq_model.to(accelerator.device)
-    if config.training.is_second_stage_training:
+    if config.training.get("is_second_stage_training", False):
         low_res_model_cls = MaskGitTransformer if config.model.low_res_transformer.get("architecture", "transformer") == "transformer" else MaskGiTUViT
         if config.model.low_res_transformer.get("architecture", "transformer") == "uvit_v2":
             low_res_model_cls = MaskGiTUViT_v2
@@ -1152,13 +1152,13 @@ def generate_images(
     # Reformatted to allow big model trainings
     gen_token_ids = []
     low_res_gen_token_ids = None
-    if config.training.is_second_stage_training:
+    if config.training.get("is_second_stage_training", False):
         low_res_gen_token_ids = []
     with torch.autocast("cuda", dtype=encoder_hidden_states.dtype, enabled=accelerator.mixed_precision != "no"):
         # Generate images
         for i in range(encoder_hidden_states.shape[0]):
             low_res_gen_token_id = None
-            if config.training.is_second_stage_training:
+            if config.training.get("is_second_stage_training", False):
                 low_res_gen_token_id = low_res_model.generate2(
                     encoder_hidden_states=encoder_hidden_states[i][None],
                     cond_embeds=clip_embeds and clip_embeds[i][None],
@@ -1191,7 +1191,7 @@ def generate_images(
             )
             gen_token_ids.append(gen_token_id)
     gen_token_ids = torch.cat(gen_token_ids, dim=0)
-    if config.training.is_second_stage_training:
+    if config.training.get("is_second_stage_training", False):
         low_res_gen_token_ids = torch.cat(low_res_gen_token_ids, dim=0)
     # In the beginning of training, the model is not fully trained and the generated token ids can be out of range
     # so we clamp them to the correct range.
@@ -1213,7 +1213,7 @@ def generate_images(
 
     if config.training.get("pre_encode", False):
         del vq_model
-    if config.training.is_second_stage_training:
+    if config.training.get("is_second_stage_training", False):
         del low_res_model
     # Convert to PIL images
     images = torch.clamp(images, 0.0, 1.0)
@@ -1222,7 +1222,7 @@ def generate_images(
     pil_images = [Image.fromarray(image) for image in images]
     output_dict = {}
     output_dict["generated_images"] = [wandb.Image(image, caption=validation_prompts[i]) for i, image in enumerate(pil_images)]
-    if config.training.is_second_stage_training:
+    if config.training.get("is_second_stage_training", False):
         low_res_images = low_res_vq_model.decode_code(low_res_gen_token_ids)
         low_res_images = torch.clamp(low_res_images, 0.0, 1.0)
         low_res_images *= 255.0
