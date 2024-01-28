@@ -64,6 +64,8 @@ class LFQ(nn.Module):
         # calculate indices
         # (B*H*W,C) * (C)
         indices = torch.sum((quantized > 0).int() * self.mask.int(), dim=-1)
+        indices = indices.reshape((batch, -1))
+
         print(indices.shape)
 
         return indices
