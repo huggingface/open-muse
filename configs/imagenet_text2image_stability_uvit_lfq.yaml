@@ -54,9 +54,8 @@ dataset:
         center_crop: True
         random_flip: False
 
-
 optimizer:
-    name: 8bit_adamw
+    name: adamw
     params: # default adamw params
         learning_rate: 5e-5
         scale_lr: False # scale learning rate by total batch size
@@ -64,7 +63,6 @@ optimizer:
         beta2: 0.999
         weight_decay: 0.01
         epsilon: 1e-8
-
 
 lr_scheduler:
     scheduler: "constant_with_warmup"
