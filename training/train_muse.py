@@ -1278,7 +1278,7 @@ def generate_inpainting_images(
     else:
         encoder_hidden_states = text_encoder(token_input_ids.to(accelerator.device)).last_hidden_state
         clip_embeds = None
-
+    micro_conds = None
     if config.model.transformer.get("add_micro_cond_embeds", False):
         resolution = config.dataset.preprocessing.resolution
         micro_conds = torch.tensor(
