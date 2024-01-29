@@ -89,7 +89,6 @@ optimizer:
         weight_decay: 0.01
         epsilon: 1e-8
 
-
 lr_scheduler:
     scheduler: "constant_with_warmup"
     params:
