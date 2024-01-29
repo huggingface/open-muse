@@ -683,7 +683,6 @@ def main():
                     for i in range(num_splits):
                         start_idx = i * split_batch_size
                         end_idx = min((i + 1) * split_batch_size, batch_size)
-                        print(pixel_values_or_image_ids[start_idx:end_idx].shape)
                         image_tokens.append(vq_model.get_code(pixel_values_or_image_ids[start_idx:end_idx]))
                     image_tokens = torch.cat(image_tokens, dim=0)
                 else:
@@ -729,7 +728,7 @@ def main():
     backprop_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
-    pr.enable()
+    # pr.enable()
 
     # As stated above, we are not doing epoch based training here, but just using this for book keeping and being able to
     # reuse the same training loop with other datasets/loaders.
@@ -842,11 +841,11 @@ def main():
                 if config.training.get("use_ema", False):
                     ema.step(model.parameters())
 
-                pr.disable()
-                sortby = SortKey.CUMULATIVE
-                ps = pstats.Stats(pr).sort_stats(sortby)
-                ps.print_stats(10)
-                pr.enable()
+                # pr.disable()
+                # sortby = SortKey.CUMULATIVE
+                # ps = pstats.Stats(pr).sort_stats(sortby)
+                # ps.print_stats(10)
+                # pr.enable()
                 batch_time_m.update(time.time() - end)
                 end = time.time()
 
