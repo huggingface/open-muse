@@ -355,6 +355,7 @@ def main():
 
         vq_class = get_vq_model_class(config.model.vq_model.type)
         vq_model = vq_class.from_pretrained(config.model.vq_model.pretrained)
+        low_res_vq_model = None
         if config.training.get("is_second_stage_training", False):
             low_res_vq_class = get_vq_model_class(config.model.low_res_vq_model.type)
             low_res_vq_model = low_res_vq_class.from_pretrained(config.model.low_res_vq_model.pretrained, subfolder="vae")

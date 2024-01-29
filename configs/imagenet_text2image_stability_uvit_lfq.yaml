@@ -80,9 +80,9 @@ dataset:
         random_flip: False
 
 optimizer:
-    name: 8bit_adamw
+    name: adamw
     params: # default adamw params
-        learning_rate: 1e-5
+        learning_rate: 5e-5
         scale_lr: False # scale learning rate by total batch size
         beta1: 0.9
         beta2: 0.999
