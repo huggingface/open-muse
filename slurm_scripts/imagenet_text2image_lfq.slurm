@@ -31,7 +31,7 @@ CMD=" \
     experiment.name=$(basename $OUTPUT_DIR) \
     experiment.output_dir=$OUTPUT_DIR \
     training.seed=9345104 \
-    dataset.params.num_workers=2
+    dataset.params.num_workers=4
     "
 # so processes know who to talk to
 MASTER_ADDR=$(scontrol show hostnames $SLURM_JOB_NODELIST | head -n 1)
