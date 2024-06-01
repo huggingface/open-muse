@@ -3,7 +3,7 @@ An open-reproduction effort to reproduce the transformer based [MUSE](https://mu
 
 ## Demo
 
-👉 https://huggingface.co/spaces/openMUSE/MUSE
+👉 https://huggingface.co/spaces/amused/amused
 
 ## Goal
 This repo is for reproduction of the [MUSE](https://arxiv.org/abs/2301.00704) model. The goal is to create a simple and scalable repo, to reproduce MUSE and build knowedge about VQ + transformers at scale.
@@ -16,7 +16,7 @@ Project stages:
 4. Train the full (base-256) model on LAION + COYO.
 5. Train the full (base-512) model on LAION + COYO.
 
-All the artifacts of this project will be uploaded to the [openMUSE](https://huggingface.co/openMUSE) organization on the huggingface hub.
+All the artifacts of this project will be uploaded to the [amused](https://huggingface.co/amused) organization on the Hugging Face Hub.
 
 ## Usage
 
