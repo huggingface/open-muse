@@ -28,6 +28,7 @@ _deps = [
     "webdataset>=0.2.39",
     "datasets",
     "wandb",
+    "Pillow",
     "sentencepiece",  # for T5 tokenizer
     "plotly",
     "pandas",
