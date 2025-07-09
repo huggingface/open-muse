@@ -36,7 +36,7 @@ For distributed data parallel training we use `accelerate` library, although thi
 
 ### Models
 
-At the momemnt we support following models:
+At the moment we support following models:
 - `MaskGitTransformer` - The main transformer model from the paper.
 - `MaskGitVQGAN` - The VQGAN model from the [maskgit](https://github.com/google-research/maskgit) repo.
 - `VQGANModel` - The VQGAN model from the [taming transformers](https://github.com/CompVis/taming-transformers) repo.
@@ -328,7 +328,7 @@ The same command can be used to launch the training locally.
 - [x] Finish and verify masking utils.
 - [ ] Add the masking arccos scheduling function from MUSE.
 - [x] Add EMA.
-- [x] Suport OmegaConf for training configuration.
+- [x] Support OmegaConf for training configuration.
 - [x] Add W&B logging utils.
 - [x] Add WebDataset support. Not really needed for imagenet experiment but can work on this parallelly. (LAION is already available in this format so will be easier to use it).
 - [x] Add a training script for class conditional generation using imagenet.
@@ -388,7 +388,7 @@ The same command can be used to launch the training locally.
 
 ## Acknowledgments
 
-This project is hevily based on the following open-source repos. Thanks to all the authors for their amazing work.
+This project is heavily based on the following open-source repos. Thanks to all the authors for their amazing work.
 - [muse-maskgit-pytorch](https://github.com/lucidrains/muse-maskgit-pytorch) .  A big thanks to @lucidrains for this amazing work ❤️
 - [maskgit](https://github.com/google-research/maskgit) 
 - [taming-transformers](https://github.com/CompVis/taming-transformers)
